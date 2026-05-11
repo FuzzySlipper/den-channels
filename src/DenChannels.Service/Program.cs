@@ -1,3 +1,4 @@
+using DenChannels.Service.Channels;
 using DenChannels.Service.Configuration;
 using DenChannels.Service.Data;
 using Microsoft.Extensions.Options;
@@ -14,6 +15,7 @@ builder.Services.AddOptions<DenChannelsOptions>()
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSingleton<ChannelsDatabaseInitializer>();
+builder.Services.AddSingleton<ChannelsRepository>();
 
 var app = builder.Build();
 
@@ -52,6 +54,8 @@ app.MapGet("/health/ready", (IOptions<DenChannelsOptions> options) =>
         Status: "ready",
         Checks: checks));
 });
+
+app.MapChannelRoutes();
 
 app.Run();
 

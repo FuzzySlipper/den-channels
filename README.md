@@ -12,8 +12,14 @@ This repo currently contains the service skeleton for Den task #1320:
 - `tests/DenChannels.Service.Tests` — smoke tests using `WebApplicationFactory`.
 - `/health/live` — process liveness check.
 - `/health/ready` — configuration readiness check.
+- `/api/channels` — create/list channels.
+- `/api/channels/{id}` — get a channel.
+- `/api/projects/{projectId}/default-channel` — idempotently ensure the safe-slug default project channel.
+- `/api/channels/{channelId}/messages` — post/list channel messages with source pointers and cursor params.
+- `/api/channels/{channelId}/memberships` — minimal membership upsert.
+- `/api/channel-messages/{messageId}/reactions` — idempotent reaction add.
 
-The next Den tasks will add repository code and the basic channel/message HTTP API on top of the owned SQLite schema/migrations.
+The next Den tasks will define the Den core integration contract and layer project sync/mirror ingestion on top of this owned schema/API.
 
 ## Configuration
 
