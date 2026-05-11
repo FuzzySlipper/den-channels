@@ -2,6 +2,7 @@ using DenChannels.Service.Channels;
 using DenChannels.Service.Configuration;
 using DenChannels.Service.Data;
 using DenChannels.Service.DenCore;
+using DenChannels.Service.Mirrors;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -19,6 +20,7 @@ builder.Services.AddSingleton<ChannelsDatabaseInitializer>();
 builder.Services.AddSingleton<ChannelsRepository>();
 builder.Services.AddHttpClient<IDenCoreProjectClient, DenCoreProjectClient>();
 builder.Services.AddSingleton<ProjectChannelSyncService>();
+builder.Services.AddSingleton<MirrorSummaryIngestionService>();
 
 var app = builder.Build();
 
@@ -60,6 +62,7 @@ app.MapGet("/health/ready", (IOptions<DenChannelsOptions> options) =>
 
 app.MapChannelRoutes();
 app.MapProjectChannelSyncRoutes();
+app.MapMirrorSummaryRoutes();
 
 app.Run();
 

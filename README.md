@@ -21,8 +21,9 @@ This repo currently contains the service skeleton for Den task #1320:
 
 - `/api/project-channel-sync/projects/{projectId}` — ensure one project default channel from Den core/stub metadata.
 - `/api/project-channel-sync` — backfill default channels from Den core/stub project list or explicit project payload.
+- `/api/mirror-summaries/ingest` — ingest explicit Den event payloads into idempotent channel mirror summaries.
 
-The next Den task will layer mirror ingestion on top of the owned schema/API once Den core event/outbox support lands.
+Den core outbox polling still depends on den-mcp task #1341; until then mirror ingestion accepts explicit event payloads and keeps source pointers/deep links instead of copying canonical Den records.
 
 ## Configuration
 

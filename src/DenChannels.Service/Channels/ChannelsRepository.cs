@@ -155,6 +155,25 @@ public sealed class ChannelsRepository
         return rows;
     }
 
+    public async Task<ChannelMessageDto?> GetMessageByDedupeKeyAsync(long channelId, string dedupeKey,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
+                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, dedupe_key, created_at, edited_at, deleted_at
+            FROM channel_messages
+            WHERE channel_id = $channelId
+              AND dedupe_key = $dedupeKey
+              AND deleted_at IS NULL;
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$dedupeKey", dedupeKey);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadMessage(reader) : null;
+    }
+
     public async Task<ChannelMembershipDto> UpsertMembershipAsync(long channelId, UpsertChannelMembershipRequest request,
         CancellationToken cancellationToken = default)
     {
