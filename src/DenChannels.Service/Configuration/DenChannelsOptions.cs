@@ -37,6 +37,18 @@ public sealed class DenCoreOptions
     /// Enables stubbed project metadata while the Den core contract task is pending.
     /// </summary>
     public bool UseStubProjectMetadata { get; init; } = true;
+
+    /// <summary>
+    /// Project metadata used by project-channel sync while Den core integration is stubbed.
+    /// </summary>
+    public List<DenCoreStubProjectOptions> StubProjects { get; init; } = [];
+}
+
+public sealed class DenCoreStubProjectOptions
+{
+    public string Id { get; init; } = string.Empty;
+
+    public string? Name { get; init; }
 }
 
 public sealed class ServiceAuthOptions

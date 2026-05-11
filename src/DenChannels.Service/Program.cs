@@ -1,6 +1,7 @@
 using DenChannels.Service.Channels;
 using DenChannels.Service.Configuration;
 using DenChannels.Service.Data;
+using DenChannels.Service.DenCore;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -16,6 +17,8 @@ builder.Services.AddOptions<DenChannelsOptions>()
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSingleton<ChannelsDatabaseInitializer>();
 builder.Services.AddSingleton<ChannelsRepository>();
+builder.Services.AddHttpClient<IDenCoreProjectClient, DenCoreProjectClient>();
+builder.Services.AddSingleton<ProjectChannelSyncService>();
 
 var app = builder.Build();
 
@@ -56,6 +59,7 @@ app.MapGet("/health/ready", (IOptions<DenChannelsOptions> options) =>
 });
 
 app.MapChannelRoutes();
+app.MapProjectChannelSyncRoutes();
 
 app.Run();
 

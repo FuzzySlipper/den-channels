@@ -19,7 +19,10 @@ This repo currently contains the service skeleton for Den task #1320:
 - `/api/channels/{channelId}/memberships` — minimal membership upsert.
 - `/api/channel-messages/{messageId}/reactions` — idempotent reaction add.
 
-The next Den tasks will define the Den core integration contract and layer project sync/mirror ingestion on top of this owned schema/API.
+- `/api/project-channel-sync/projects/{projectId}` — ensure one project default channel from Den core/stub metadata.
+- `/api/project-channel-sync` — backfill default channels from Den core/stub project list or explicit project payload.
+
+The next Den task will layer mirror ingestion on top of the owned schema/API once Den core event/outbox support lands.
 
 ## Configuration
 
@@ -34,7 +37,8 @@ Configuration lives under the `DenChannels` section.
     },
     "DenCore": {
       "BaseUrl": "http://127.0.0.1:5199",
-      "UseStubProjectMetadata": true
+      "UseStubProjectMetadata": true,
+      "StubProjects": []
     },
     "ServiceAuth": {
       "ServiceToken": null
