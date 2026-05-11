@@ -51,6 +51,8 @@ CodeCoverage/
 coverage/
 data/*.db
 data/*.db-*
+**/data/*.db
+**/data/*.db-*
 
 # MSBuild Binary and Structured Log
 *.binlog

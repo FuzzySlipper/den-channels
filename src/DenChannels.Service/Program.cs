@@ -1,4 +1,5 @@
 using DenChannels.Service.Configuration;
+using DenChannels.Service.Data;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -12,8 +13,15 @@ builder.Services.AddOptions<DenChannelsOptions>()
     .ValidateOnStart();
 
 builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSingleton<ChannelsDatabaseInitializer>();
 
 var app = builder.Build();
+
+var serviceOptions = app.Services.GetRequiredService<IOptions<DenChannelsOptions>>();
+if (serviceOptions.Value.Database.ApplyMigrationsOnStartup)
+{
+    await app.Services.GetRequiredService<ChannelsDatabaseInitializer>().InitializeAsync();
+}
 
 app.MapGet("/", () => Results.Ok(new
 {

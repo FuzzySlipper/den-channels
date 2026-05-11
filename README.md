@@ -13,7 +13,7 @@ This repo currently contains the service skeleton for Den task #1320:
 - `/health/live` — process liveness check.
 - `/health/ready` — configuration readiness check.
 
-The next Den tasks will add the owned SQLite schema/migrations and basic channel/message HTTP API.
+The next Den tasks will add repository code and the basic channel/message HTTP API on top of the owned SQLite schema/migrations.
 
 ## Configuration
 
@@ -23,7 +23,8 @@ Configuration lives under the `DenChannels` section.
 {
   "DenChannels": {
     "Database": {
-      "Path": "data/den-channels.db"
+      "Path": "data/den-channels.db",
+      "ApplyMigrationsOnStartup": true
     },
     "DenCore": {
       "BaseUrl": "http://127.0.0.1:5199",
@@ -40,6 +41,7 @@ Environment variable equivalents use double underscores, for example:
 
 ```bash
 DenChannels__Database__Path=/var/lib/den-channels/den-channels.db
+DenChannels__Database__ApplyMigrationsOnStartup=true
 DenChannels__DenCore__BaseUrl=http://127.0.0.1:5199
 DenChannels__DenCore__UseStubProjectMetadata=true
 DenChannels__ServiceAuth__ServiceToken=...

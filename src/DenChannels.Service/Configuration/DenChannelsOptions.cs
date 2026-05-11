@@ -18,6 +18,11 @@ public sealed class DatabaseOptions
     /// Future schema/migration work will own this database instead of writing channel rows into den-mcp.
     /// </summary>
     public string Path { get; init; } = "data/den-channels.db";
+
+    /// <summary>
+    /// Apply the owned schema migrations when the service starts.
+    /// </summary>
+    public bool ApplyMigrationsOnStartup { get; init; } = true;
 }
 
 public sealed class DenCoreOptions
