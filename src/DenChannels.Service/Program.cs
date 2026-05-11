@@ -1,0 +1,55 @@
+using DenChannels.Service.Configuration;
+using Microsoft.Extensions.Options;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddOptions<DenChannelsOptions>()
+    .Bind(builder.Configuration.GetSection(DenChannelsOptions.SectionName))
+    .Validate(options => !string.IsNullOrWhiteSpace(options.Database.Path),
+        "DenChannels:Database:Path must be configured.")
+    .Validate(options => Uri.TryCreate(options.DenCore.BaseUrl, UriKind.Absolute, out _),
+        "DenChannels:DenCore:BaseUrl must be an absolute URI.")
+    .ValidateOnStart();
+
+builder.Services.AddEndpointsApiExplorer();
+
+var app = builder.Build();
+
+app.MapGet("/", () => Results.Ok(new
+{
+    service = "den-channels",
+    description = "Standalone Den Channels service",
+    docs = "/health/live"
+}));
+
+app.MapGet("/health/live", () => Results.Ok(new HealthResponse(
+    Service: "den-channels",
+    Status: "ok",
+    Checks: new Dictionary<string, string>
+    {
+        ["process"] = "running"
+    })));
+
+app.MapGet("/health/ready", (IOptions<DenChannelsOptions> options) =>
+{
+    var checks = new Dictionary<string, string>
+    {
+        ["configuration"] = "ok",
+        ["databasePath"] = options.Value.Database.Path,
+        ["denCoreBaseUrl"] = options.Value.DenCore.BaseUrl
+    };
+
+    return Results.Ok(new HealthResponse(
+        Service: "den-channels",
+        Status: "ready",
+        Checks: checks));
+});
+
+app.Run();
+
+public partial class Program;
+
+internal sealed record HealthResponse(
+    string Service,
+    string Status,
+    IReadOnlyDictionary<string, string> Checks);

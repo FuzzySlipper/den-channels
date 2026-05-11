@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- Work around Arch/.NET 10 SDK installations that omit prune package data for Microsoft.AspNetCore.App. -->
+    <AllowMissingPrunePackageData>true</AllowMissingPrunePackageData>
+  </PropertyGroup>
+</Project>
