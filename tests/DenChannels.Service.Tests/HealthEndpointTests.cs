@@ -38,7 +38,7 @@ public sealed class HealthEndpointTests : IClassFixture<WebApplicationFactory<Pr
         Assert.NotNull(payload);
         Assert.Equal("ready", payload.Status);
         Assert.EndsWith(".db", payload.Checks["databasePath"]);
-        Assert.Equal("http://127.0.0.1:5199", payload.Checks["denCoreBaseUrl"]);
+        Assert.Equal("http://127.0.0.1:5299", payload.Checks["denCoreBaseUrl"]);
     }
 
     private sealed record HealthPayload(

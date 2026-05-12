@@ -31,7 +31,7 @@ public sealed class DenCoreOptions
     /// Base URL for the Den core/den-mcp HTTP API used for project/source metadata.
     /// This is an explicit service boundary; do not reference den-mcp internals from this repo.
     /// </summary>
-    public string BaseUrl { get; init; } = "http://127.0.0.1:5199";
+    public string BaseUrl { get; init; } = "http://127.0.0.1:5299";
 
     /// <summary>
     /// Enables stubbed project metadata while the Den core contract task is pending.

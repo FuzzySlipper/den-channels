@@ -53,6 +53,9 @@ data/*.db
 data/*.db-*
 **/data/*.db
 **/data/*.db-*
+**/node_modules/
+**/wwwroot/assets/
+**/wwwroot/index.html
 
 # MSBuild Binary and Structured Log
 *.binlog

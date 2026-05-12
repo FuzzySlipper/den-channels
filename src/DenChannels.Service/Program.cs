@@ -1,3 +1,4 @@
+using DenChannels.Service;
 using DenChannels.Service.Channels;
 using DenChannels.Service.Configuration;
 using DenChannels.Service.Data;
@@ -24,13 +25,19 @@ builder.Services.AddSingleton<MirrorSummaryIngestionService>();
 
 var app = builder.Build();
 
+// Den Web: static operator UI now lives with den-channels instead of the MCP adapter.
+// If wwwroot/index.html is present, / serves the SPA. In source-only test runs the
+// service metadata endpoint below still answers /.
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
 var serviceOptions = app.Services.GetRequiredService<IOptions<DenChannelsOptions>>();
 if (serviceOptions.Value.Database.ApplyMigrationsOnStartup)
 {
     await app.Services.GetRequiredService<ChannelsDatabaseInitializer>().InitializeAsync();
 }
 
-app.MapGet("/", () => Results.Ok(new
+app.MapGet("/api/service-info", () => Results.Ok(new
 {
     service = "den-channels",
     description = "Standalone Den Channels service",
@@ -63,6 +70,23 @@ app.MapGet("/health/ready", (IOptions<DenChannelsOptions> options) =>
 app.MapChannelRoutes();
 app.MapProjectChannelSyncRoutes();
 app.MapMirrorSummaryRoutes();
+app.MapDenCoreApiProxy();
+
+// Keep API misses machine-readable. The SPA fallback is only for browser routes.
+app.MapFallback((HttpContext context, IWebHostEnvironment environment) =>
+{
+    if (context.Request.Path.StartsWithSegments("/api") ||
+        context.Request.Path.StartsWithSegments("/health") ||
+        context.Request.Path.StartsWithSegments("/den-core-api"))
+    {
+        return Results.NotFound(new { error = "not_found", path = context.Request.Path.Value });
+    }
+
+    var index = environment.WebRootFileProvider.GetFileInfo("index.html");
+    return index.Exists
+        ? Results.File(index.CreateReadStream(), "text/html; charset=utf-8")
+        : Results.NotFound(new { error = "web_frontend_not_built" });
+});
 
 app.Run();
 
