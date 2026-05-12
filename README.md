@@ -68,6 +68,33 @@ dotnet build DenChannels.slnx
 dotnet test DenChannels.slnx
 ```
 
+## Deploy live on den-srv
+
+Use the deploy helper from this repo root:
+
+```bash
+scripts/deploy-live-server.sh --remote
+```
+
+The script publishes `DenChannels.Service` for `linux-x64`, builds the bundled Den Web Vite app via the project publish target, uploads to `den-srv`, swaps `/data/services/den-channels/app` atomically through `/data/services/den-channels/app.new`, restarts `den-channels.service`, and smoke-tests:
+
+- `/health/live`
+- `/health/ready`
+- `/`
+- `/den-core-api/api/projects`
+- `/api/not-a-route` as non-HTML 404
+
+Useful overrides/options:
+
+```bash
+SSH_TARGET=den-srv scripts/deploy-live-server.sh --remote
+scripts/deploy-live-server.sh --dry-run
+scripts/deploy-live-server.sh --skip-restart
+scripts/deploy-live-server.sh --skip-smoke
+```
+
+Live defaults are `/data/services/den-channels`, `den-channels.service`, and `http://192.168.1.10:18080`.
+
 ## Run locally
 
 ```bash
