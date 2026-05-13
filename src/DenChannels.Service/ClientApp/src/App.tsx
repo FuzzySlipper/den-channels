@@ -1,51 +1,34 @@
 import { useState, useCallback, useMemo } from 'react';
-import type { AgentStreamEntry, DispatchEntry, Document, DocumentSummary, Message, MessageIntent, Space, SubagentRunSummary } from './api/types';
+import type { AgentStreamEntry, DispatchEntry, Document, DocumentSummary, Message, Space, SubagentRunSummary } from './api/types';
 import {
   getDispatch,
   listProjects,
   listSpaces,
   listTasks,
   getMessage,
-  getMessageFeed,
   getThread,
   listAgentStream,
-  listSubagentRuns,
-  subagentRunEventsUrl,
-  getSubagentRun,
   listDocuments,
-  listActiveAgents,
 } from './api/client';
 import { usePolling } from './hooks/usePolling';
-import { useEventSourceRefresh } from './hooks/useEventSourceRefresh';
 import { ProjectSidebar } from './components/ProjectSidebar';
 import { TaskTree } from './components/TaskTree';
 import { TaskDetail } from './components/TaskDetail';
 import { FilterBar } from './components/FilterBar';
-import { MessageFeed } from './components/MessageFeed';
+import type { WorkspaceViewMode } from './components/FilterBar';
 import { MessageDetail } from './components/MessageDetail';
 import { AgentStreamFeed } from './components/AgentStreamFeed';
 import { AgentStreamDetail } from './components/AgentStreamDetail';
-import { ThoughtFeed } from './components/ThoughtFeed';
-import { SubagentRunPanel } from './components/SubagentRunPanel';
 import { SubagentRunDetail } from './components/SubagentRunDetail';
 import { DocumentList } from './components/DocumentList';
 import { DocumentDetail } from './components/DocumentDetail';
 import { LibrarianView } from './components/LibrarianView';
 import { GitView } from './components/GitView';
-import { AgentBar } from './components/AgentBar';
 import { DispatchDetail } from './components/DispatchDetail';
-import { MESSAGE_INTENT_OPTIONS, messageIntentLabel } from './messageIntents';
+import { ChannelChatPanel } from './components/ChannelChatPanel';
 import { agentStreamEntryVisibility } from './subagentRuns';
-import type { SubagentRunFilter } from './subagentRuns';
 import { documentSelectionAction } from './documentEditor';
 import type { GitFocus } from './git';
-import {
-  filterThoughtItems,
-  hasRawReasoningPreview,
-  sortThoughtItems,
-  thoughtItemFromStreamEntry,
-  thoughtItemsFromSubagentRunDetail,
-} from './thoughts';
 
 const GLOBAL_SPACE: Space = {
   id: '_global',
@@ -87,10 +70,8 @@ export default function App() {
   const [documentDetailDirty, setDocumentDetailDirty] = useState(false);
   const [pendingDocumentSwitch, setPendingDocumentSwitch] = useState<DocumentSummary | null>(null);
   const [gitFocus, setGitFocus] = useState<GitFocus | null>(null);
-  const [viewMode, setViewMode] = useState<'tasks' | 'documents' | 'librarian' | 'git'>('tasks');
-  const [feedMode, setFeedMode] = useState<'stream' | 'messages' | 'thoughts'>('stream');
+  const [viewMode, setViewMode] = useState<WorkspaceViewMode>('tasks');
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
-  const [messageIntentFilter, setMessageIntentFilter] = useState<MessageIntent | ''>('');
   const [streamKindFilter, setStreamKindFilter] = useState<'ops' | 'message'>('ops');
   const [streamEventFilter, setStreamEventFilter] = useState('');
   const [streamProjectFilter, setStreamProjectFilter] = useState('');
@@ -98,13 +79,6 @@ export default function App() {
   const [streamRecipientFilter, setStreamRecipientFilter] = useState('');
   const [streamTaskFilter, setStreamTaskFilter] = useState('');
   const [showRawSubagentWorkEvents, setShowRawSubagentWorkEvents] = useState(false);
-  const [thoughtProjectFilter, setThoughtProjectFilter] = useState('');
-  const [thoughtTaskFilter, setThoughtTaskFilter] = useState('');
-  const [thoughtAgentFilter, setThoughtAgentFilter] = useState('');
-  const [thoughtRoleFilter, setThoughtRoleFilter] = useState('');
-  const [thoughtRawMode, setThoughtRawMode] = useState(false);
-  const [subagentRunFilter, setSubagentRunFilter] = useState<SubagentRunFilter>('all');
-  const [subagentRunLimit, setSubagentRunLimit] = useState(8);
   const [sortMode, setSortMode] = useState('priority');
 
   const fetchProjects = useCallback(() => listProjects(), []);
@@ -127,26 +101,10 @@ export default function App() {
   );
   const { data: tasks } = usePolling(fetchTasks, 5000);
 
-  const fetchMessages = useCallback(
-    () => effectiveSpaceId
-      ? getMessageFeed(effectiveSpaceId, {
-        limit: 15,
-        intent: messageIntentFilter || undefined,
-      })
-      : Promise.resolve([]),
-    [effectiveSpaceId, messageIntentFilter],
-  );
-  const { data: messages } = usePolling(fetchMessages, 5000);
-
   const parsedStreamTaskId = useMemo(() => {
     const trimmed = streamTaskFilter.trim();
     return /^\d+$/.test(trimmed) ? Number(trimmed) : undefined;
   }, [streamTaskFilter]);
-
-  const parsedThoughtTaskId = useMemo(() => {
-    const trimmed = thoughtTaskFilter.trim();
-    return /^\d+$/.test(trimmed) ? Number(trimmed) : undefined;
-  }, [thoughtTaskFilter]);
 
   const fetchAgentStream = useCallback(
     () => effectiveSpaceId
@@ -156,7 +114,7 @@ export default function App() {
         streamKind: streamKindFilter,
         eventType: streamEventFilter || undefined,
         sender: streamSenderFilter.trim() || undefined,
-        limit: 60,
+        limit: 100,
       })
       : Promise.resolve([]),
     [
@@ -171,97 +129,6 @@ export default function App() {
   );
   const { data: agentStream } = usePolling(fetchAgentStream, 5000);
 
-  const fetchSubagentRuns = useCallback(
-    () => effectiveSpaceId
-      ? listSubagentRuns({
-        projectId: isGlobal ? (streamProjectFilter.trim() || undefined) : effectiveSpaceId,
-        taskId: parsedStreamTaskId,
-        state: subagentRunFilter === 'all' ? undefined : subagentRunFilter,
-        limit: subagentRunLimit,
-      })
-      : Promise.resolve([]),
-    [effectiveSpaceId, isGlobal, parsedStreamTaskId, streamProjectFilter, subagentRunFilter, subagentRunLimit],
-  );
-  const {
-    data: subagentRuns,
-    loading: subagentRunsLoading,
-    error: subagentRunsError,
-    refresh: refreshSubagentRuns,
-  } = usePolling(fetchSubagentRuns, 2000);
-  const subagentRunEvents = useMemo(
-    () => effectiveSpaceId
-      ? subagentRunEventsUrl({
-        projectId: isGlobal ? (streamProjectFilter.trim() || undefined) : effectiveSpaceId,
-        taskId: parsedStreamTaskId,
-      })
-      : null,
-    [effectiveSpaceId, isGlobal, parsedStreamTaskId, streamProjectFilter],
-  );
-  useEventSourceRefresh(subagentRunEvents, 'subagent_run_updated', refreshSubagentRuns);
-
-  const fetchThoughts = useCallback(async () => {
-    if (!effectiveSpaceId || feedMode !== 'thoughts') return [];
-
-    const projectFilter = isGlobal ? (thoughtProjectFilter.trim() || undefined) : effectiveSpaceId;
-    const [streamEntries, runs] = await Promise.all([
-      listAgentStream({
-        projectId: projectFilter,
-        taskId: parsedThoughtTaskId,
-        streamKind: 'ops',
-        sender: thoughtAgentFilter.trim() || undefined,
-        limit: 100,
-      }),
-      listSubagentRuns({
-        projectId: projectFilter,
-        taskId: parsedThoughtTaskId,
-        limit: 10,
-      }),
-    ]);
-
-    const runDetails = await Promise.allSettled(runs.slice(0, 8).map(run => getSubagentRun(run.run_id, {
-      projectId: run.project_id ?? projectFilter,
-      taskId: run.task_id ?? undefined,
-    })));
-
-    const streamThoughts = streamEntries
-      .map(thoughtItemFromStreamEntry)
-      .filter(item => item !== null);
-    const runThoughts = runDetails.flatMap(result => result.status === 'fulfilled'
-      ? thoughtItemsFromSubagentRunDetail(result.value)
-      : []);
-
-    return filterThoughtItems(sortThoughtItems([...streamThoughts, ...runThoughts]), {
-      project: isGlobal ? thoughtProjectFilter : undefined,
-      taskId: parsedThoughtTaskId,
-      agent: thoughtAgentFilter,
-      role: thoughtRoleFilter,
-    });
-  }, [
-    effectiveSpaceId,
-    feedMode,
-    isGlobal,
-    parsedThoughtTaskId,
-    thoughtAgentFilter,
-    thoughtProjectFilter,
-    thoughtRoleFilter,
-  ]);
-  const {
-    data: thoughts,
-    loading: thoughtsLoading,
-    error: thoughtsError,
-    refresh: refreshThoughts,
-  } = usePolling(fetchThoughts, 4000);
-  const thoughtSubagentRunEvents = useMemo(
-    () => effectiveSpaceId
-      ? subagentRunEventsUrl({
-        projectId: isGlobal ? (thoughtProjectFilter.trim() || undefined) : effectiveSpaceId,
-        taskId: parsedThoughtTaskId,
-      })
-      : null,
-    [effectiveSpaceId, isGlobal, parsedThoughtTaskId, thoughtProjectFilter],
-  );
-  useEventSourceRefresh(thoughtSubagentRunEvents, 'subagent_run_updated', refreshThoughts);
-
   const fetchDocs = useCallback(
     () => effectiveSpaceId
       ? listDocuments(isGlobal ? undefined : effectiveSpaceId)
@@ -269,12 +136,6 @@ export default function App() {
     [effectiveSpaceId, isGlobal],
   );
   const { data: documents, refresh: refreshDocs } = usePolling(fetchDocs, 5000);
-
-  const fetchAgents = useCallback(
-    () => listActiveAgents(isGlobal ? undefined : (effectiveSpaceId ?? undefined)),
-    [effectiveSpaceId, isGlobal],
-  );
-  const { data: agents } = usePolling(fetchAgents, 5000);
 
   const sortedDocs = useMemo(
     () => documents ? [...documents].sort((a, b) => b.updated_at.localeCompare(a.updated_at)) : [],
@@ -306,12 +167,26 @@ export default function App() {
     }
     return Array.from(options).sort((left, right) => left.localeCompare(right));
   }, [agentStream, streamEventFilter]);
-  const rawReasoningAvailable = useMemo(() => hasRawReasoningPreview(thoughts ?? []), [thoughts]);
 
   const taskCount = tasks?.length ?? 0;
   const filterLabel = statusFilter ? ` [${statusFilter}]` : '';
-  const messageFilterLabel = messageIntentFilter ? ` [${messageIntentFilter}]` : '';
-  const sortLabel = sortMode !== 'priority' ? ` \u2195${sortMode}` : '';
+  const sortLabel = sortMode !== 'priority' ? ` ↕${sortMode}` : '';
+  const mainTitle = viewMode === 'tasks'
+    ? 'Tasks'
+    : viewMode === 'documents'
+      ? 'Documents'
+      : viewMode === 'git'
+        ? 'Git'
+        : viewMode === 'agent-stream'
+          ? 'Agent Stream'
+          : 'Librarian';
+  const mainCount = viewMode === 'tasks'
+    ? `(${taskCount}${filterLabel}${sortLabel})`
+    : viewMode === 'documents'
+      ? `(${sortedDocs.length})`
+      : viewMode === 'agent-stream'
+        ? `(${filteredAgentStream.length})`
+        : null;
 
   const handleProjectSelect = useCallback((id: string) => {
     setSelectedSpaceId(id);
@@ -352,6 +227,7 @@ export default function App() {
     setSelectedSubagentRun(null);
     setSelectedDispatch(null);
     setSelectedDoc(null);
+    setViewMode('agent-stream');
   }, []);
 
   const handleSubagentRunSelect = useCallback((run: SubagentRunSummary) => {
@@ -386,6 +262,7 @@ export default function App() {
     setSelectedStreamEntry(null);
     setSelectedSubagentRun(null);
     setSelectedDispatch(null);
+    setViewMode('documents');
   }, [selectedSpaceId]);
 
   const handleDocumentSelect = useCallback((doc: DocumentSummary) => {
@@ -471,53 +348,30 @@ export default function App() {
     await handleThreadOpen(entry.project_id, entry.thread_id);
   }, [handleThreadOpen]);
 
-  const feedCount = feedMode === 'stream'
-    ? filteredAgentStream.length
-    : feedMode === 'thoughts'
-      ? (thoughts?.length ?? 0)
-      : (messages?.length ?? 0);
-  const feedTitle = feedMode === 'stream'
-    ? 'Agent Stream'
-    : feedMode === 'thoughts'
-      ? 'Thoughts'
-      : 'Messages';
-
   return (
     <div className="dashboard">
-      {/* Feed — top, full width */}
-      <div className="panel panel-messages">
-        <div className="panel-header">
-          {feedTitle}
-          {effectiveSpaceId && (
-            <span className="count">
-              ({feedCount}{feedMode === 'messages' ? messageFilterLabel : ''})
-            </span>
-          )}
-        </div>
-        <div className="feed-toolbar">
-          <div className="feed-toggle">
-            <button
-              className={feedMode === 'stream' ? 'active' : ''}
-              onClick={() => setFeedMode('stream')}
-            >
-              Stream
-            </button>
-            <button
-              className={feedMode === 'messages' ? 'active' : ''}
-              onClick={() => setFeedMode('messages')}
-            >
-              Messages
-            </button>
-            <button
-              className={feedMode === 'thoughts' ? 'active' : ''}
-              onClick={() => setFeedMode('thoughts')}
-            >
-              Thoughts
-            </button>
-          </div>
+      <div className="dashboard-workspace">
+        <ProjectSidebar
+          spaces={spaces}
+          selectedId={effectiveSpaceId}
+          onSelect={handleProjectSelect}
+        />
 
-          {feedMode === 'stream' ? (
-            <>
+        <div className="panel panel-main">
+          <div className="panel-header">
+            {mainTitle}
+            {effectiveSpaceId && mainCount && <span className="count">{mainCount}</span>}
+          </div>
+          <FilterBar
+            statusFilter={statusFilter}
+            onStatusFilterChange={setStatusFilter}
+            sortMode={sortMode}
+            onSortChange={setSortMode}
+            viewMode={viewMode}
+            onViewModeChange={setViewMode}
+          />
+          {viewMode === 'agent-stream' && (
+            <div className="feed-toolbar agent-stream-toolbar">
               <label className="panel-filter-label" htmlFor="stream-kind-filter">Kind</label>
               <select
                 id="stream-kind-filter"
@@ -583,200 +437,60 @@ export default function App() {
                 />
                 Raw sub-agent work
               </label>
-            </>
-          ) : feedMode === 'messages' ? (
-            <>
-              <label className="panel-filter-label" htmlFor="message-intent-filter">Intent</label>
-              <select
-                id="message-intent-filter"
-                className="panel-filter-select"
-                value={messageIntentFilter}
-                onChange={e => setMessageIntentFilter((e.target.value as MessageIntent) || '')}
-                title={messageIntentFilter ? `Filtering messages by ${messageIntentLabel(messageIntentFilter)}` : 'Show all message intents'}
-              >
-                <option value="">All</option>
-                {MESSAGE_INTENT_OPTIONS.map(option => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </>
-          ) : (
-            <>
-              {isGlobal && (
-                <input
-                  className="feed-text-filter"
-                  value={thoughtProjectFilter}
-                  onChange={e => setThoughtProjectFilter(e.target.value)}
-                  placeholder="Space"
-                />
-              )}
-
-              <input
-                className="feed-text-filter"
-                value={thoughtAgentFilter}
-                onChange={e => setThoughtAgentFilter(e.target.value)}
-                placeholder="Agent"
-              />
-
-              <input
-                className="feed-text-filter"
-                value={thoughtRoleFilter}
-                onChange={e => setThoughtRoleFilter(e.target.value)}
-                placeholder="Role"
-              />
-
-              <input
-                className="feed-text-filter feed-text-filter-short"
-                value={thoughtTaskFilter}
-                onChange={e => setThoughtTaskFilter(e.target.value)}
-                placeholder="Task #"
-              />
-
-              <label
-                className={`thought-raw-toggle${rawReasoningAvailable ? '' : ' thought-raw-toggle-disabled'}`}
-                title={rawReasoningAvailable ? 'Show bounded local raw reasoning previews' : 'No local raw reasoning previews in this feed'}
-              >
-                <input
-                  type="checkbox"
-                  checked={thoughtRawMode && rawReasoningAvailable}
-                  disabled={!rawReasoningAvailable}
-                  onChange={e => setThoughtRawMode(e.target.checked)}
-                />
-                Raw local
-              </label>
-            </>
+            </div>
           )}
-        </div>
-        <div className="panel-body">
-          {feedMode === 'stream' ? (
-            <AgentStreamFeed
-              entries={filteredAgentStream}
-              isGlobal={isGlobal}
-              onSelect={handleStreamSelect}
-              onOpenTask={handleTaskSelect}
-              onOpenThread={entry => void handleStreamThreadOpen(entry)}
-              onOpenDispatch={dispatchId => void handleDispatchSelect(dispatchId)}
-            />
-          ) : feedMode === 'messages' ? (
-            <MessageFeed
-              messages={messages ?? []}
-              isGlobal={isGlobal}
-              onSelect={handleMessageSelect}
-            />
-          ) : (
-            <ThoughtFeed
-              items={thoughts ?? []}
-              isGlobal={isGlobal}
-              loading={thoughtsLoading}
-              error={thoughtsError}
-              showRawReasoning={thoughtRawMode && rawReasoningAvailable}
-              rawReasoningAvailable={rawReasoningAvailable}
-              onOpenTask={handleTaskSelect}
-              onOpenRun={handleSubagentRunSelect}
-              onOpenStream={handleStreamSelect}
-            />
-          )}
-        </div>
-      </div>
-
-      {/* Middle row — agents plus active sub-agent work */}
-      <div className="panel-middle-grid">
-        <div className="panel panel-agents">
-          <div className="panel-header">
-            Agents <span className="count">({agents?.length ?? 0})</span>
-          </div>
-          <div className="panel-body panel-body-agents">
-            <AgentBar agents={agents ?? []} isGlobal={isGlobal} />
-          </div>
-        </div>
-
-        <div className="panel panel-subagents">
-          <div className="panel-header">
-            Sub-agent Runs <span className="count">({subagentRuns?.length ?? 0})</span>
-          </div>
           <div className="panel-body">
-            <SubagentRunPanel
-              runs={subagentRuns ?? []}
-              totalCount={subagentRuns?.length ?? 0}
-              isGlobal={isGlobal}
-              filter={subagentRunFilter}
-              limit={subagentRunLimit}
-              loading={subagentRunsLoading}
-              error={subagentRunsError}
-              onFilterChange={setSubagentRunFilter}
-              onLimitChange={setSubagentRunLimit}
-              onRefresh={refreshSubagentRuns}
-              onSelectRun={handleSubagentRunSelect}
-              onOpenTask={handleTaskSelect}
-            />
+            {viewMode === 'tasks' ? (
+              <TaskTree
+                tasks={tasks ?? []}
+                selectedTaskId={selectedTaskId}
+                onSelect={handleTaskSelect}
+                statusFilter={statusFilter}
+                sortMode={sortMode}
+              />
+            ) : viewMode === 'documents' ? (
+              <DocumentList
+                documents={sortedDocs}
+                projectId={effectiveSpaceId}
+                isGlobal={isGlobal}
+                onSelect={handleDocumentSelect}
+              />
+            ) : viewMode === 'git' ? (
+              <GitView
+                projectId={activeSpaceSupportsGit ? effectiveSpaceId : null}
+                projects={projects ?? []}
+                isGlobal={isGlobal}
+                scopeSupportsGit={activeSpaceSupportsGit}
+                focus={gitFocus}
+                onClearFocus={() => setGitFocus(null)}
+              />
+            ) : viewMode === 'agent-stream' ? (
+              <AgentStreamFeed
+                entries={filteredAgentStream}
+                isGlobal={isGlobal}
+                onSelect={handleStreamSelect}
+                onOpenTask={handleTaskSelect}
+                onOpenThread={entry => void handleStreamThreadOpen(entry)}
+                onOpenDispatch={dispatchId => void handleDispatchSelect(dispatchId)}
+              />
+            ) : (
+              <LibrarianView
+                projects={spaces}
+                currentProjectId={effectiveSpaceId}
+                onOpenTask={handleTaskSelect}
+                onOpenDocument={handleDocumentSelect}
+                onOpenMessage={(projectId, messageId) => void handleMessageOpen(projectId, messageId)}
+                onOpenThread={(projectId, threadId) => void handleThreadOpen(projectId, threadId)}
+              />
+            )}
           </div>
         </div>
       </div>
 
-      {/* Spaces sidebar — bottom left */}
-      <ProjectSidebar
-        spaces={spaces}
-        selectedId={effectiveSpaceId}
-        onSelect={handleProjectSelect}
+      <ChannelChatPanel
+        projectId={!isGlobal ? effectiveSpaceId : null}
+        spaceName={activeSpace?.name ?? effectiveSpaceId}
       />
-
-      {/* Main area — bottom right */}
-      <div className="panel panel-main">
-        <div className="panel-header">
-          {viewMode === 'tasks'
-            ? <>Tasks {effectiveSpaceId && <span className="count">({taskCount}{filterLabel}{sortLabel})</span>}</>
-            : viewMode === 'documents'
-              ? <>Documents {effectiveSpaceId && <span className="count">({sortedDocs.length})</span>}</>
-              : viewMode === 'git'
-                ? <>Git</>
-                : <>Librarian</>
-          }
-        </div>
-        <FilterBar
-          statusFilter={statusFilter}
-          onStatusFilterChange={setStatusFilter}
-          sortMode={sortMode}
-          onSortChange={setSortMode}
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
-        />
-        <div className="panel-body">
-          {viewMode === 'tasks' ? (
-            <TaskTree
-              tasks={tasks ?? []}
-              selectedTaskId={selectedTaskId}
-              onSelect={handleTaskSelect}
-              statusFilter={statusFilter}
-              sortMode={sortMode}
-            />
-          ) : viewMode === 'documents' ? (
-            <DocumentList
-              documents={sortedDocs}
-              projectId={effectiveSpaceId}
-              isGlobal={isGlobal}
-              onSelect={handleDocumentSelect}
-            />
-          ) : viewMode === 'git' ? (
-            <GitView
-              projectId={activeSpaceSupportsGit ? effectiveSpaceId : null}
-              projects={projects ?? []}
-              isGlobal={isGlobal}
-              scopeSupportsGit={activeSpaceSupportsGit}
-              focus={gitFocus}
-              onClearFocus={() => setGitFocus(null)}
-            />
-          ) : (
-            <LibrarianView
-              projects={spaces}
-              currentProjectId={effectiveSpaceId}
-              onOpenTask={handleTaskSelect}
-              onOpenDocument={handleDocumentSelect}
-              onOpenMessage={(projectId, messageId) => void handleMessageOpen(projectId, messageId)}
-              onOpenThread={(projectId, threadId) => void handleThreadOpen(projectId, threadId)}
-            />
-          )}
-        </div>
-      </div>
 
       {/* Detail overlays */}
       {selectedTaskId != null && effectiveSpaceId && (

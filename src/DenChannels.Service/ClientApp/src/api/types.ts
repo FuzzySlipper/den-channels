@@ -73,6 +73,42 @@ export interface Project {
   updated_at: string | null;
 }
 
+export interface Channel {
+  id: number;
+  slug: string;
+  displayName: string;
+  kind: string;
+  projectId: string | null;
+  spaceId: string | null;
+  createdBy: string;
+  visibility: string;
+  settingsJson: string | null;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+}
+
+export interface ChannelMessage {
+  id: number;
+  channelId: number;
+  senderType: string;
+  senderIdentity: string;
+  body: string;
+  messageKind: string;
+  sourceKind: string | null;
+  sourceId: string | null;
+  sourceProjectId: string | null;
+  summary: string | null;
+  deepLink: string | null;
+  threadRootMessageId: number | null;
+  replyToMessageId: number | null;
+  metadataJson: string | null;
+  dedupeKey: string | null;
+  createdAt: string;
+  editedAt: string | null;
+  deletedAt: string | null;
+}
+
 export interface ProjectWithStats {
   project: Project;
   task_counts_by_status: Record<string, number>;

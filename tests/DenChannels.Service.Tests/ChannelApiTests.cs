@@ -123,6 +123,38 @@ public sealed class ChannelApiTests : IDisposable
     }
 
     [Fact]
+    public async Task ListMessages_WithoutCursorReturnsLatestWindowInAscendingOrder()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+
+        for (var index = 1; index <= 85; index++)
+        {
+            await PostJsonAsync<MessagePayload>(client, $"/api/channels/{channel.Id}/messages", new
+            {
+                senderType = "user",
+                senderIdentity = "patch",
+                body = $"message {index:000}"
+            });
+        }
+
+        var messages = await client.GetFromJsonAsync<List<MessagePayload>>($"/api/channels/{channel.Id}/messages?limit=80");
+        Assert.NotNull(messages);
+        Assert.Equal(80, messages.Count);
+        Assert.Equal("message 006", messages[0].Body);
+        Assert.Equal("message 085", messages[^1].Body);
+        Assert.DoesNotContain(messages, message => message.Body == "message 001");
+
+        var afterCursor = await client.GetFromJsonAsync<List<MessagePayload>>($"/api/channels/{channel.Id}/messages?afterId={messages[^2].Id}&limit=10");
+        Assert.NotNull(afterCursor);
+        var cursorMessage = Assert.Single(afterCursor);
+        Assert.Equal("message 085", cursorMessage.Body);
+    }
+
+    [Fact]
     public async Task MembershipAndReactionEndpoints_Work()
     {
         using var client = _factory.CreateClient();

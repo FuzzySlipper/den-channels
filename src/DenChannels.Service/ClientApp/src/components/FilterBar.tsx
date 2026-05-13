@@ -1,10 +1,12 @@
+export type WorkspaceViewMode = 'tasks' | 'documents' | 'git' | 'librarian' | 'agent-stream';
+
 interface Props {
   statusFilter: string | null;
   onStatusFilterChange: (status: string | null) => void;
   sortMode: string;
   onSortChange: (sort: string) => void;
-  viewMode: 'tasks' | 'documents' | 'librarian' | 'git';
-  onViewModeChange: (mode: 'tasks' | 'documents' | 'librarian' | 'git') => void;
+  viewMode: WorkspaceViewMode;
+  onViewModeChange: (mode: WorkspaceViewMode) => void;
 }
 
 const STATUSES = ['planned', 'in_progress', 'review', 'blocked', 'done', 'cancelled'];
@@ -63,6 +65,12 @@ export function FilterBar({
           onClick={() => onViewModeChange('librarian')}
         >
           Librarian
+        </button>
+        <button
+          className={viewMode === 'agent-stream' ? 'active' : ''}
+          onClick={() => onViewModeChange('agent-stream')}
+        >
+          Agent Stream
         </button>
       </div>
     </div>

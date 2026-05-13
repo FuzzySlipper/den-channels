@@ -1,0 +1,72 @@
+namespace DenChannels.Service.Tests;
+
+public sealed class DenWebChannelFirstLayoutTests
+{
+    private static readonly string RepoRoot = LocateRepoRoot();
+    private static readonly string ClientSrc = Path.Combine(RepoRoot, "src", "DenChannels.Service", "ClientApp", "src");
+
+    [Fact]
+    public void AgentStream_IsTopLevelWorkspaceTab_NotAlwaysVisibleHeaderFeed()
+    {
+        var app = ReadClientSource("App.tsx");
+        var filterBar = ReadClientSource("components", "FilterBar.tsx");
+
+        Assert.Contains("'agent-stream'", filterBar);
+        Assert.Contains("onViewModeChange('agent-stream')", filterBar);
+        Assert.Contains("Agent Stream", filterBar);
+
+        Assert.Contains("viewMode === 'agent-stream'", app);
+        Assert.Contains("<AgentStreamFeed", app);
+        Assert.DoesNotContain("panel panel-messages", app);
+    }
+
+    [Fact]
+    public void Dashboard_ReservesBottomRowForAlwaysVisibleChannelChatPanel()
+    {
+        var app = ReadClientSource("App.tsx");
+        var css = ReadClientSource("styles", "index.css");
+
+        Assert.Contains("<ChannelChatPanel", app);
+        Assert.Contains("className=\"dashboard-workspace\"", app);
+        Assert.Contains(".channel-chat-panel", css);
+        Assert.Contains(".dashboard-workspace", css);
+        Assert.DoesNotContain(".panel-messages", css);
+    }
+
+    [Fact]
+    public void ChannelChatPanel_UsesDenChannelsApiSeam_NotLegacyDispatchOrAgentStreamTransport()
+    {
+        var client = ReadClientSource("api", "client.ts");
+        var component = ReadClientSource("components", "ChannelChatPanel.tsx");
+
+        Assert.Contains("denChannelsApiBase", client);
+        Assert.Contains("listChannels", client);
+        Assert.Contains("ensureProjectDefaultChannel", client);
+        Assert.Contains("listChannelMessages", client);
+        Assert.Contains("postChannelMessage", client);
+
+        Assert.Contains("ensureProjectDefaultChannel", component);
+        Assert.Contains("listChannelMessages", component);
+        Assert.Contains("postChannelMessage", component);
+        Assert.Contains("channel?.projectId === projectId ? channel : null", component);
+        Assert.DoesNotContain("listAgentStream", component);
+        Assert.DoesNotContain("dispatch", component, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ReadClientSource(params string[] relativeParts) =>
+        File.ReadAllText(Path.Combine(new[] { ClientSrc }.Concat(relativeParts).ToArray()));
+
+    private static string LocateRepoRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(directory.FullName, "src", "DenChannels.Service", "ClientApp", "src", "App.tsx");
+            if (File.Exists(candidate))
+                return directory.FullName;
+            directory = directory.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate den-channels repository root from test output directory.");
+    }
+}

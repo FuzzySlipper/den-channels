@@ -1,5 +1,7 @@
 import type {
   Project,
+  Channel,
+  ChannelMessage,
   ProjectWithStats,
   Space,
   TaskSummary,
@@ -34,19 +36,28 @@ import type {
   ListDesktopSessionEventsOptions,
 } from './types';
 
-const denCoreApiBase = normalizeApiBase(import.meta.env.VITE_DEN_CORE_API_BASE ?? '/den-core-api');
+const denCoreApiBase = normalizeApiBase(import.meta.env.VITE_DEN_CORE_API_BASE, '/den-core-api');
+const denChannelsApiBase = normalizeApiBase(import.meta.env.VITE_DEN_CHANNELS_API_BASE, '/api');
 
-function normalizeApiBase(value: string): string {
-  const trimmed = value.trim().replace(/\/+$/, '');
-  return trimmed.length > 0 ? trimmed : '/den-core-api';
+function normalizeApiBase(value: string | undefined, fallback: string): string {
+  const trimmed = (value ?? fallback).trim().replace(/\/+$/, '');
+  return trimmed.length > 0 ? trimmed : fallback;
 }
 
-function coreApiUrl(url: string): string {
+function apiUrl(base: string, url: string): string {
   if (/^https?:\/\//i.test(url)) {
     return url;
   }
 
-  return `${denCoreApiBase}${url.startsWith('/') ? url : `/${url}`}`;
+  return `${base}${url.startsWith('/') ? url : `/${url}`}`;
+}
+
+function coreApiUrl(url: string): string {
+  return apiUrl(denCoreApiBase, url);
+}
+
+function channelsApiUrl(url: string): string {
+  return apiUrl(denChannelsApiBase, url);
 }
 
 async function get<T>(url: string): Promise<T> {
@@ -69,6 +80,35 @@ async function put<T>(url: string, body: unknown): Promise<T> {
 
 async function post<T>(url: string, body: unknown): Promise<T> {
   const requestUrl = coreApiUrl(url);
+  const res = await fetch(requestUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`POST ${requestUrl}: ${res.status}`);
+  return res.json();
+}
+
+async function getChannels<T>(url: string): Promise<T> {
+  const requestUrl = channelsApiUrl(url);
+  const res = await fetch(requestUrl);
+  if (!res.ok) throw new Error(`GET ${requestUrl}: ${res.status}`);
+  return res.json();
+}
+
+async function putChannels<T>(url: string, body: unknown): Promise<T> {
+  const requestUrl = channelsApiUrl(url);
+  const res = await fetch(requestUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`PUT ${requestUrl}: ${res.status}`);
+  return res.json();
+}
+
+async function postChannels<T>(url: string, body: unknown): Promise<T> {
+  const requestUrl = channelsApiUrl(url);
   const res = await fetch(requestUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -113,6 +153,66 @@ export function listProjects(): Promise<Project[]> {
 export function getProject(id: string, agent?: string): Promise<ProjectWithStats> {
   const q = buildQuery({ agent });
   return get(`/api/projects/${esc(id)}${q}`);
+}
+
+// Den Channels local API
+
+export interface EnsureProjectDefaultChannelRequest {
+  displayName?: string;
+  createdBy?: string;
+  settingsJson?: string | null;
+}
+
+export interface ListChannelsOpts {
+  projectId?: string;
+  kind?: string;
+  limit?: number;
+}
+
+export interface ListChannelMessagesOpts {
+  afterId?: number;
+  limit?: number;
+}
+
+export interface PostChannelMessageRequest {
+  senderType: string;
+  senderIdentity: string;
+  body: string;
+  messageKind?: string;
+  sourceKind?: string | null;
+  sourceId?: string | null;
+  sourceProjectId?: string | null;
+  summary?: string | null;
+  deepLink?: string | null;
+  threadRootMessageId?: number | null;
+  replyToMessageId?: number | null;
+  metadataJson?: string | null;
+  dedupeKey?: string | null;
+}
+
+export function listChannels(opts: ListChannelsOpts = {}): Promise<Channel[]> {
+  const q = buildQuery({ projectId: opts.projectId, kind: opts.kind, limit: opts.limit });
+  return getChannels(`/channels${q}`);
+}
+
+export function ensureProjectDefaultChannel(
+  projectId: string,
+  request: EnsureProjectDefaultChannelRequest = {},
+): Promise<Channel> {
+  return putChannels(`/projects/${esc(projectId)}/default-channel`, {
+    displayName: request.displayName,
+    createdBy: request.createdBy ?? 'den-web',
+    settingsJson: request.settingsJson,
+  });
+}
+
+export function listChannelMessages(channelId: number, opts: ListChannelMessagesOpts = {}): Promise<ChannelMessage[]> {
+  const q = buildQuery({ afterId: opts.afterId, limit: opts.limit });
+  return getChannels(`/channels/${channelId}/messages${q}`);
+}
+
+export function postChannelMessage(channelId: number, request: PostChannelMessageRequest): Promise<ChannelMessage> {
+  return postChannels(`/channels/${channelId}/messages`, request);
 }
 
 // Tasks

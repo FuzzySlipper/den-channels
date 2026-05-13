@@ -135,18 +135,34 @@ public sealed class ChannelsRepository
         limit = Math.Clamp(limit, 1, 500);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
-                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, dedupe_key, created_at, edited_at, deleted_at
-            FROM channel_messages
-            WHERE channel_id = $channelId
-              AND ($afterId IS NULL OR id > $afterId)
-              AND deleted_at IS NULL
-            ORDER BY id ASC
-            LIMIT $limit;
-            """;
+        command.CommandText = afterId is null
+            ? """
+              SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
+                  summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, dedupe_key, created_at, edited_at, deleted_at
+              FROM (
+                  SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
+                      summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, dedupe_key, created_at, edited_at, deleted_at
+                  FROM channel_messages
+                  WHERE channel_id = $channelId
+                    AND deleted_at IS NULL
+                  ORDER BY id DESC
+                  LIMIT $limit
+              ) AS latest_messages
+              ORDER BY id ASC;
+              """
+            : """
+              SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
+                  summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, dedupe_key, created_at, edited_at, deleted_at
+              FROM channel_messages
+              WHERE channel_id = $channelId
+                AND id > $afterId
+                AND deleted_at IS NULL
+              ORDER BY id ASC
+              LIMIT $limit;
+              """;
         command.Parameters.AddWithValue("$channelId", channelId);
-        command.Parameters.AddWithValue("$afterId", (object?)afterId ?? DBNull.Value);
+        if (afterId is not null)
+            command.Parameters.AddWithValue("$afterId", afterId.Value);
         command.Parameters.AddWithValue("$limit", limit);
         var rows = new List<ChannelMessageDto>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
