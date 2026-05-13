@@ -171,6 +171,73 @@ public sealed class ChannelsRepository
         return rows;
     }
 
+    public async Task<ChannelMessageDto?> GetMessageAsync(long messageId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
+                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, dedupe_key, created_at, edited_at, deleted_at
+            FROM channel_messages
+            WHERE id = $messageId
+              AND deleted_at IS NULL;
+            """;
+        command.Parameters.AddWithValue("$messageId", messageId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadMessage(reader) : null;
+    }
+
+    public async Task<IReadOnlyList<ChannelMessageDto>> ListMessagesBySourceAsync(string sourceKind, string sourceId,
+        string? sourceProjectId = null, int limit = 50, CancellationToken cancellationToken = default)
+    {
+        limit = Math.Clamp(limit, 1, 200);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
+                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, dedupe_key, created_at, edited_at, deleted_at
+            FROM channel_messages
+            WHERE source_kind = $sourceKind
+              AND source_id = $sourceId
+              AND ($sourceProjectId IS NULL OR source_project_id = $sourceProjectId)
+              AND deleted_at IS NULL
+            ORDER BY id ASC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$sourceKind", sourceKind);
+        command.Parameters.AddWithValue("$sourceId", sourceId);
+        command.Parameters.AddWithValue("$sourceProjectId", (object?)sourceProjectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$limit", limit);
+        var rows = new List<ChannelMessageDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadMessage(reader));
+        return rows;
+    }
+
+    public async Task<IReadOnlyList<ChannelMembershipDto>> ListMembershipsAsync(long channelId, int limit = 200,
+        CancellationToken cancellationToken = default)
+    {
+        limit = Math.Clamp(limit, 1, 500);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, channel_id, member_type, member_identity, membership_status, wake_policy, can_send, can_react, can_invite,
+                cooldown_seconds, max_auto_replies_per_window, settings_json, created_at, updated_at
+            FROM channel_memberships
+            WHERE channel_id = $channelId
+            ORDER BY id ASC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$limit", limit);
+        var rows = new List<ChannelMembershipDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadMembership(reader));
+        return rows;
+    }
+
     public async Task<ChannelMessageDto?> GetMessageByDedupeKeyAsync(long channelId, string dedupeKey,
         CancellationToken cancellationToken = default)
     {

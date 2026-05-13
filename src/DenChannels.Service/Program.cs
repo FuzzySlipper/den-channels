@@ -3,6 +3,7 @@ using DenChannels.Service.Channels;
 using DenChannels.Service.Configuration;
 using DenChannels.Service.Data;
 using DenChannels.Service.DenCore;
+using DenChannels.Service.Gateway;
 using DenChannels.Service.Mirrors;
 using Microsoft.Extensions.Options;
 
@@ -71,6 +72,7 @@ app.MapChannelRoutes();
 app.MapProjectChannelSyncRoutes();
 app.MapMirrorSummaryRoutes();
 app.MapDenCoreApiProxy();
+app.MapGatewayRoutes();
 
 // Keep API misses machine-readable. The SPA fallback is only for browser routes.
 app.MapFallback((HttpContext context, IWebHostEnvironment environment) =>
