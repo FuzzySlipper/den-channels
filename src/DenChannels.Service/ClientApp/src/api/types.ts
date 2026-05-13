@@ -12,7 +12,6 @@ export type MessageIntent =
   | 'review_approval'
   | 'task_ready'
   | 'task_blocked';
-export type AgentSessionStatus = 'active' | 'inactive';
 export type AgentStreamKind = 'ops' | 'message';
 export type AgentStreamDeliveryMode = 'record_only' | 'notify' | 'wake';
 export type DispatchStatus = 'pending' | 'approved' | 'rejected' | 'completed' | 'expired';
@@ -545,13 +544,6 @@ export interface Message {
   created_at: string;
 }
 
-export interface MessageFeedItem {
-  root_message: Message;
-  latest_message: Message;
-  reply_count: number;
-  latest_activity_at: string;
-}
-
 export interface Thread {
   root: Message;
   replies: Message[];
@@ -603,16 +595,6 @@ export interface LibrarianResponse {
   relevant_items: RelevantItem[];
   recommendations: string[];
   confidence: LibrarianConfidence;
-}
-
-export interface AgentSession {
-  agent: string;
-  project_id: string;
-  session_id: string | null;
-  status: AgentSessionStatus;
-  checked_in_at: string;
-  last_heartbeat: string;
-  metadata: string | null;
 }
 
 export interface AgentStreamEntry {

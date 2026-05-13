@@ -8,14 +8,12 @@ import type {
   TaskDetail,
   ProjectTask,
   Message,
-  MessageFeedItem,
   Thread,
   DocumentSummary,
   Document,
   DocumentSearchResult,
   DocType,
   LibrarianResponse,
-  AgentSession,
   AgentStreamEntry,
   AttentionItem,
   SubagentRunSummary,
@@ -303,16 +301,6 @@ export function getMessages(projectId: string, opts: GetMessagesOpts = {}): Prom
   return get(`/api/projects/${esc(projectId)}/messages${q}`);
 }
 
-export interface GetMessageFeedOpts {
-  limit?: number;
-  intent?: string;
-}
-
-export function getMessageFeed(projectId: string, opts: GetMessageFeedOpts = {}): Promise<MessageFeedItem[]> {
-  const q = buildQuery({ limit: opts.limit, intent: opts.intent });
-  return get(`/api/projects/${esc(projectId)}/messages/feed${q}`);
-}
-
 export function getThread(projectId: string, threadId: number): Promise<Thread> {
   return get(`/api/projects/${esc(projectId)}/messages/thread/${threadId}`);
 }
@@ -369,13 +357,6 @@ export function queryLibrarian(projectId: string, request: QueryLibrarianRequest
     task_id: request.taskId,
     include_global: request.includeGlobal ?? true,
   });
-}
-
-// Agents
-
-export function listActiveAgents(projectId?: string): Promise<AgentSession[]> {
-  const q = buildQuery({ projectId });
-  return get(`/api/agents/active${q}`);
 }
 
 // Attention
@@ -459,14 +440,6 @@ export function listSubagentRuns(opts: ListSubagentRunsOpts = {}): Promise<Subag
     limit: opts.limit,
   });
   return get(`/api/subagent-runs${q}`);
-}
-
-export function subagentRunEventsUrl(opts: Omit<ListSubagentRunsOpts, 'state' | 'limit'> = {}): string {
-  const q = buildQuery({
-    projectId: opts.projectId,
-    taskId: opts.taskId,
-  });
-  return coreApiUrl(`/api/subagent-runs/events${q}`);
 }
 
 export function getSubagentRun(runId: string, opts: Omit<ListSubagentRunsOpts, 'limit'> = {}): Promise<SubagentRunDetail> {

@@ -53,8 +53,50 @@ public sealed class DenWebChannelFirstLayoutTests
         Assert.DoesNotContain("dispatch", component, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void ChannelChatPanel_UsesOperatorIdentitySeam_NotHardcodedWebUiSender()
+    {
+        var component = ReadClientSource("components", "ChannelChatPanel.tsx");
+
+        var legacySingleQuotedSender = "senderIdentity: '" + "web-ui'";
+        var legacyDoubleQuotedSender = "senderIdentity: \"" + "web-ui\"";
+
+        Assert.Contains("den-channel-sender-identity", component);
+        Assert.Contains("channel-chat-identity", component);
+        Assert.Contains("senderIdentity", component);
+        Assert.DoesNotContain(legacySingleQuotedSender, component);
+        Assert.DoesNotContain(legacyDoubleQuotedSender, component);
+    }
+
+    [Fact]
+    public void RetiredMiddleRowFeedCode_IsRemovedAfterChannelFirstRefactor()
+    {
+        Assert.False(ClientFileExists("components", "AgentBar.tsx"));
+        Assert.False(ClientFileExists("components", "SubagentRunPanel.tsx"));
+        Assert.False(ClientFileExists("components", "ThoughtFeed.tsx"));
+        Assert.False(ClientFileExists("components", "MessageFeed.tsx"));
+        Assert.False(ClientFileExists("thoughts.ts"));
+        Assert.False(ClientFileExists("hooks", "useEventSourceRefresh.ts"));
+
+        var client = ReadClientSource("api", "client.ts");
+        var types = ReadClientSource("api", "types.ts");
+
+        Assert.DoesNotContain("getMessageFeed", client);
+        Assert.DoesNotContain("listActiveAgents", client);
+        Assert.DoesNotContain("subagentRunEventsUrl", client);
+        Assert.DoesNotContain("MessageFeedItem", types);
+        Assert.DoesNotContain("AgentSession", types);
+
+        // TaskDetail/SubagentRunDetail still use these for drill-in overlays.
+        Assert.Contains("listSubagentRuns", client);
+        Assert.Contains("getSubagentRun", client);
+    }
+
     private static string ReadClientSource(params string[] relativeParts) =>
         File.ReadAllText(Path.Combine(new[] { ClientSrc }.Concat(relativeParts).ToArray()));
+
+    private static bool ClientFileExists(params string[] relativeParts) =>
+        File.Exists(Path.Combine(new[] { ClientSrc }.Concat(relativeParts).ToArray()));
 
     private static string LocateRepoRoot()
     {
