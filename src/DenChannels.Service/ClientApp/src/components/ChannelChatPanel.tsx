@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
-import type { Channel, ChannelMessage, GatewayMember, GatewayMemberships, GatewayTestWake } from '../api/types';
+import type { Channel, ChannelMessage, GatewayDirectAgentMessage, GatewayMember, GatewayMemberships, GatewayTestWake } from '../api/types';
 import {
   ensureProjectDefaultChannel,
   listChannelMessages,
   listChannels,
   listGatewayMemberships,
   postChannelMessage,
+  postGatewayDirectAgentMessage,
   postGatewayTestWake,
   upsertChannelMembership,
 } from '../api/client';
@@ -55,22 +56,34 @@ function persistSenderIdentity(identity: string): void {
   }
 }
 
-function parseSafeBindingLabel(settingsJsonPreview: string | null): string | null {
-  if (!settingsJsonPreview) return null;
+function memberStatus(member: GatewayMember): string {
+  return [member.membershipStatus, member.wakePolicy, member.settingsLabel]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function parseDirectMessageMetadata(message: ChannelMessage): Record<string, unknown> | null {
+  if (message.sourceKind !== 'wake_event' || !message.metadataJson) return null;
   try {
-    const parsed = JSON.parse(settingsJsonPreview) as Record<string, unknown>;
-    const candidate = parsed.profile ?? parsed.profileName ?? parsed.profile_id ?? parsed.binding ?? parsed.sessionId;
-    return typeof candidate === 'string' && candidate.trim().length > 0 ? candidate.trim() : null;
+    const parsed = JSON.parse(message.metadataJson) as Record<string, unknown>;
+    return parsed.deliveryMode === 'direct_agent_message' ? parsed : null;
   } catch {
     return null;
   }
 }
 
-function memberStatus(member: GatewayMember): string {
-  const binding = parseSafeBindingLabel(member.settingsJsonPreview);
-  return [member.membershipStatus, member.wakePolicy, binding ? `binding ${binding}` : null]
-    .filter(Boolean)
+function directMessageEvidence(message: ChannelMessage): { status: string; target: string | null; url: string } | null {
+  const metadata = parseDirectMessageMetadata(message);
+  if (!metadata) return null;
+  const status = [metadata.deliveryStatus, metadata.claimStatus, metadata.completionStatus, metadata.suppressionStatus]
+    .filter(value => typeof value === 'string' && value.length > 0)
     .join(' · ');
+  const target = typeof metadata.targetMemberIdentity === 'string' ? metadata.targetMemberIdentity : null;
+  return {
+    status: status || 'recorded_pending_claim',
+    target,
+    url: `/api/gateway/messages/${message.id}`,
+  };
 }
 
 function memberIsActiveAgent(member: GatewayMember): boolean {
@@ -89,6 +102,7 @@ export function ChannelChatPanel({ projectId, spaceName }: Props) {
   const [wakeSending, setWakeSending] = useState(false);
   const [sendError, setSendError] = useState<Error | null>(null);
   const [lastWakeResult, setLastWakeResult] = useState<GatewayTestWake | null>(null);
+  const [lastDirectResult, setLastDirectResult] = useState<GatewayDirectAgentMessage | null>(null);
   const normalizedSenderIdentity = senderIdentity.trim();
 
   const fetchChannels = useCallback(async () => {
@@ -202,20 +216,23 @@ export function ChannelChatPanel({ projectId, spaceName }: Props) {
     setSending(true);
     setSendError(null);
     try {
-      await postChannelMessage(activeChannel.id, {
-        senderType: 'user',
-        senderIdentity: normalizedSenderIdentity,
-        messageKind: 'human_text',
-        body,
-        sourceKind: selectedTarget ? 'wake_event' : null,
-        summary: selectedTarget ? `Direct message to ${selectedTarget.memberIdentity}` : null,
-        metadataJson: selectedTarget ? JSON.stringify({
-          targetMemberIdentity: selectedTarget.memberIdentity,
-          targetMemberType: selectedTarget.memberType,
-          wakePolicy: selectedTarget.wakePolicy,
-          deliveryMode: 'direct_agent_message',
-        }) : null,
-      });
+      if (selectedTarget) {
+        const result = await postGatewayDirectAgentMessage({
+          channelId: activeChannel.id,
+          memberIdentity: selectedTarget.memberIdentity,
+          senderIdentity: normalizedSenderIdentity,
+          body,
+        });
+        setLastDirectResult(result);
+      } else {
+        await postChannelMessage(activeChannel.id, {
+          senderType: 'user',
+          senderIdentity: normalizedSenderIdentity,
+          messageKind: 'human_text',
+          body,
+        });
+        setLastDirectResult(null);
+      }
       setDraft('');
       refreshMessages();
     } catch (error) {
@@ -334,13 +351,25 @@ export function ChannelChatPanel({ projectId, spaceName }: Props) {
           ) : sortedMessages.length === 0 ? (
             <div className="channel-chat-state channel-chat-state-muted">No channel messages yet. Start the scrollback below.</div>
           ) : (
-            sortedMessages.map(message => (
-              <div key={message.id} className="channel-chat-message">
-                <span className="message-time">{formatTimeAgo(message.createdAt)}</span>
-                <span className={`channel-chat-sender channel-chat-sender-${message.senderType}`}>{messageSender(message)}</span>
-                <span className="channel-chat-body">{message.body}</span>
-              </div>
-            ))
+            sortedMessages.map(message => {
+              const evidence = directMessageEvidence(message);
+              return (
+                <div key={message.id} className="channel-chat-message">
+                  <span className="message-time">{formatTimeAgo(message.createdAt)}</span>
+                  <span className={`channel-chat-sender channel-chat-sender-${message.senderType}`}>{messageSender(message)}</span>
+                  <span className="channel-chat-body">
+                    {message.body}
+                    {evidence && (
+                      <span className="channel-chat-delivery-status">
+                        <strong>{evidence.target ? `Direct to ${evidence.target}` : 'Direct agent request'}</strong>
+                        <span>{evidence.status}</span>
+                        <a href={evidence.url} target="_blank" rel="noreferrer">Gateway evidence</a>
+                      </span>
+                    )}
+                  </span>
+                </div>
+              );
+            })
           )}
         </div>
 
@@ -407,6 +436,17 @@ export function ChannelChatPanel({ projectId, spaceName }: Props) {
               <strong>{lastWakeResult.status}</strong>
               <span>{lastWakeResult.memberIdentity} · message {lastWakeResult.messageId}</span>
               <span>{lastWakeResult.evidenceSummary}</span>
+            </div>
+          )}
+          {lastDirectResult && (
+            <div className="channel-chat-wake-result">
+              <strong>{lastDirectResult.deliveryStatus}</strong>
+              <span>
+                {lastDirectResult.memberIdentity} · request {lastDirectResult.requestId} · claim {lastDirectResult.claimStatus} · completion {lastDirectResult.completionStatus} · suppression {lastDirectResult.suppressionStatus}
+              </span>
+              <a href={lastDirectResult.gatewayMessageUrl} target="_blank" rel="noreferrer">Gateway message evidence</a>
+              <a href={lastDirectResult.gatewayEventsUrl} target="_blank" rel="noreferrer">Gateway events evidence</a>
+              <span>{lastDirectResult.evidenceSummary}</span>
             </div>
           )}
         </aside>

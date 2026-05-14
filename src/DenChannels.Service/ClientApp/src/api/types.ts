@@ -125,7 +125,7 @@ export interface GatewayMember {
   canSend: boolean;
   cooldownSeconds: number;
   maxAutoRepliesPerWindow: number;
-  settingsJsonPreview: string | null;
+  settingsLabel: string | null;
 }
 
 export interface GatewayMemberships {
@@ -150,6 +150,30 @@ export interface GatewayTestWake {
   wakePolicy: string;
   messageId: number;
   channelId: number;
+  gatewayMessageUrl: string;
+  gatewayEventsUrl: string;
+  evidenceSummary: string;
+}
+
+export interface PostGatewayDirectAgentMessageRequest {
+  channelId?: number;
+  projectId?: string;
+  memberIdentity: string;
+  senderIdentity: string;
+  body: string;
+}
+
+export interface GatewayDirectAgentMessage {
+  status: string;
+  deliveryStatus: string;
+  claimStatus: string;
+  completionStatus: string;
+  suppressionStatus: string;
+  memberIdentity: string;
+  wakePolicy: string;
+  messageId: number;
+  channelId: number;
+  requestId: string;
   gatewayMessageUrl: string;
   gatewayEventsUrl: string;
   evidenceSummary: string;

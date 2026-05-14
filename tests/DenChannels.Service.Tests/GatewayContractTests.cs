@@ -110,28 +110,29 @@ public sealed class GatewayContractTests : IDisposable
     }
 
     [Fact]
-    public async Task GatewayMemberships_SettingsJson_IsBounded()
+    public async Task GatewayMemberships_SettingsJson_IsSanitizedAllowListLabel()
     {
-        // Settings JSON must be capped to a reasonable preview length
         var channel = await EnsureDefaultChannelAsync("gw-test-proj-settings");
-        var longSettings = "{\"key\":\"" + new string('x', 2000) + "\"}";
+        const string secret = "sk-secret-token-should-never-leak";
         await UpsertMembershipAsync(channel.Id, new
         {
             memberType = "agent",
             memberIdentity = "den-gateway",
             wakePolicy = "never",
-            settingsJson = longSettings
+            settingsJson = "{\"profile\":\"den-hermes-coder\",\"bindingName\":\"safe-binding\",\"apiKey\":\"" + secret + "\",\"transportPreview\":\"redacted-by-test\"}"
         });
 
-        var payload = await _client.GetFromJsonAsync<GatewayMembershipsPayload>(
-            $"/api/gateway/memberships?channelId={channel.Id}");
+        using var response = await _client.GetAsync($"/api/gateway/memberships?channelId={channel.Id}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var raw = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(secret, raw);
+        Assert.DoesNotContain("apiKey", raw);
+        Assert.DoesNotContain("transportPreview", raw);
 
+        var payload = await response.Content.ReadFromJsonAsync<GatewayMembershipsPayload>();
         Assert.NotNull(payload);
         var member = Assert.Single(payload.Members);
-        // Settings preview should be bounded (max ~500 chars)
-        Assert.NotNull(member.SettingsJsonPreview);
-        Assert.True(member.SettingsJsonPreview!.Length <= 512,
-            $"SettingsJsonPreview length {member.SettingsJsonPreview.Length} exceeds 512");
+        Assert.Equal("profile: den-hermes-coder · binding: safe-binding", member.SettingsLabel);
     }
 
     // -------------------------------------------------------------------------
@@ -533,6 +534,50 @@ public sealed class GatewayContractTests : IDisposable
         Assert.DoesNotContain("redacted-by-test", message.Body);
     }
 
+    [Fact]
+    public async Task GatewayDirectAgentMessages_Post_ReturnsEvidenceAndPendingStatuses()
+    {
+        var channel = await EnsureDefaultChannelAsync("gw-direct-agent-proj");
+        await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "hermes-reviewer",
+            wakePolicy = "direct_questions_only",
+            settingsJson = "{\"profile\":\"den-hermes-reviewer\",\"apiKey\":\"must-not-leak\"}"
+        });
+
+        using var response = await _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
+        {
+            channelId = channel.Id,
+            memberIdentity = "hermes-reviewer",
+            senderIdentity = "operator",
+            body = "Please review the fix."
+        });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
+        Assert.NotNull(payload);
+        Assert.Equal("recorded", payload.Status);
+        Assert.Equal("recorded_pending_claim", payload.DeliveryStatus);
+        Assert.Equal("unclaimed", payload.ClaimStatus);
+        Assert.Equal("pending", payload.CompletionStatus);
+        Assert.Equal("not_suppressed", payload.SuppressionStatus);
+        Assert.Equal("hermes-reviewer", payload.MemberIdentity);
+        Assert.Equal("direct_questions_only", payload.WakePolicy);
+        Assert.Equal(channel.Id, payload.ChannelId);
+        Assert.StartsWith($"direct-agent-message:{channel.Id}:", payload.RequestId);
+        Assert.Equal($"/api/gateway/messages/{payload.MessageId}", payload.GatewayMessageUrl);
+        Assert.Contains($"/api/gateway/events?channelId={channel.Id}", payload.GatewayEventsUrl);
+        Assert.Contains("claim/completion/suppression", payload.EvidenceSummary);
+
+        var message = await _client.GetFromJsonAsync<GatewayMessagePayload>(payload.GatewayMessageUrl);
+        Assert.NotNull(message);
+        Assert.Equal("wake_event", message.SourceKind);
+        Assert.Equal(payload.RequestId, message.SourceId);
+        Assert.Equal("Please review the fix.", message.Body);
+        Assert.Contains("recorded, pending claim/completion", message.Summary);
+    }
+
     // -------------------------------------------------------------------------
     // Existing APIs still work
     // -------------------------------------------------------------------------
@@ -613,7 +658,22 @@ public sealed class GatewayContractTests : IDisposable
         bool CanSend,
         int CooldownSeconds,
         int MaxAutoRepliesPerWindow,
-        string? SettingsJsonPreview);
+        string? SettingsLabel);
+
+    private sealed record GatewayDirectAgentMessagePayload(
+        string Status,
+        string DeliveryStatus,
+        string ClaimStatus,
+        string CompletionStatus,
+        string SuppressionStatus,
+        string MemberIdentity,
+        string WakePolicy,
+        long MessageId,
+        long ChannelId,
+        string RequestId,
+        string GatewayMessageUrl,
+        string GatewayEventsUrl,
+        string EvidenceSummary);
 
     private sealed record GatewayMessagePayload(
         long Id,

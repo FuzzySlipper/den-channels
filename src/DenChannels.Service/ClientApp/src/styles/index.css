@@ -1219,6 +1219,25 @@ button.list-item {
   overflow-wrap: anywhere;
 }
 
+.channel-chat-delivery-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: normal;
+}
+
+.channel-chat-delivery-status strong {
+  color: var(--yellow);
+}
+
+.channel-chat-delivery-status a,
+.channel-chat-wake-result a {
+  color: var(--accent);
+}
+
 .channel-chat-state,
 .channel-chat-error {
   color: var(--text-muted);

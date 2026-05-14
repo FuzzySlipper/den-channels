@@ -1,3 +1,4 @@
+using System.Text.Json;
 using DenChannels.Service.Channels;
 
 namespace DenChannels.Service.Gateway;
@@ -12,9 +13,6 @@ public static class GatewayRoutes
     [
         "human_text", "agent_text", "system_event", "mirror_summary", "command", "command_result"
     ];
-
-    /// <summary>Max length for raw settings JSON exposed in bounded Gateway responses.</summary>
-    private const int SettingsPreviewMaxLength = 512;
 
     public static RouteGroupBuilder MapGatewayRoutes(this IEndpointRouteBuilder endpoints)
     {
@@ -36,6 +34,7 @@ public static class GatewayRoutes
                 "GET /api/gateway/events?channelId={id}&afterId={id}&limit={n}",
                 "GET /api/gateway/events?projectId={projectId}&afterId={id}&limit={n}",
                 "POST /api/gateway/system-messages",
+                "POST /api/gateway/direct-agent-messages",
                 "POST /api/gateway/test-wakes"
             ])));
 
@@ -79,7 +78,7 @@ public static class GatewayRoutes
                 m.CanSend,
                 m.CooldownSeconds,
                 m.MaxAutoRepliesPerWindow,
-                BoundSettingsJson(m.SettingsJson))).ToList();
+                SafeSettingsLabel(m.SettingsJson))).ToList();
 
             return Results.Ok(new GatewayMembershipsDto(
                 channel.Id,
@@ -256,6 +255,94 @@ public static class GatewayRoutes
         });
 
         // -----------------------------------------------------------------------
+        // POST /api/gateway/direct-agent-messages
+        // -----------------------------------------------------------------------
+        gw.MapPost("/direct-agent-messages", async (
+            ChannelsRepository repository,
+            PostGatewayDirectAgentMessageRequest request,
+            CancellationToken cancellationToken) =>
+        {
+            if (request.ChannelId is null && string.IsNullOrWhiteSpace(request.ProjectId))
+                return Results.BadRequest(new GatewayErrorDto("missing_parameter",
+                    "Provide channelId or projectId."));
+
+            if (string.IsNullOrWhiteSpace(request.MemberIdentity))
+                return Results.BadRequest(new GatewayErrorDto("missing_member_identity",
+                    "Provide memberIdentity for the target agent binding."));
+
+            if (string.IsNullOrWhiteSpace(request.SenderIdentity))
+                return Results.BadRequest(new GatewayErrorDto("missing_sender_identity",
+                    "Provide senderIdentity for the direct message request."));
+
+            if (string.IsNullOrWhiteSpace(request.Body))
+                return Results.BadRequest(new GatewayErrorDto("missing_body",
+                    "Provide body for the direct message request."));
+
+            var channel = await ResolveChannelAsync(repository, request.ChannelId, request.ProjectId, cancellationToken);
+            if (channel is null)
+                return Results.NotFound(new GatewayErrorDto("channel_not_found",
+                    request.ChannelId is not null
+                        ? $"Channel {request.ChannelId} not found."
+                        : $"No default channel found for project '{request.ProjectId}'."));
+
+            var member = await FindActiveAgentMemberAsync(repository, channel.Id, request.MemberIdentity, cancellationToken);
+            if (member is null)
+                return Results.NotFound(new GatewayErrorDto("member_not_active_agent",
+                    $"Active agent member '{request.MemberIdentity}' is not joined to channel {channel.Id}."));
+
+            var requestId = $"direct-agent-message:{channel.Id}:{member.Id}:{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+            var gatewayEventsUrl = $"/api/gateway/events?channelId={channel.Id}&afterId=0&limit=50";
+            var metadataJson = JsonSerializer.Serialize(new
+            {
+                requestId,
+                targetMemberIdentity = member.MemberIdentity,
+                targetMemberType = member.MemberType,
+                wakePolicy = member.WakePolicy,
+                deliveryMode = "direct_agent_message",
+                deliveryStatus = "recorded_pending_claim",
+                claimStatus = "unclaimed",
+                completionStatus = "pending",
+                suppressionStatus = "not_suppressed",
+                evidence = new
+                {
+                    gatewayEventsUrl
+                }
+            });
+
+            var msg = await repository.PostMessageAsync(channel.Id, new PostChannelMessageRequest(
+                SenderType: "user",
+                SenderIdentity: request.SenderIdentity.Trim(),
+                Body: request.Body.Trim(),
+                MessageKind: "human_text",
+                SourceKind: "wake_event",
+                SourceId: requestId,
+                SourceProjectId: channel.ProjectId,
+                Summary: $"Direct agent request to {member.MemberIdentity}: recorded, pending claim/completion",
+                DeepLink: null,
+                ThreadRootMessageId: null,
+                ReplyToMessageId: null,
+                MetadataJson: metadataJson,
+                DedupeKey: null), cancellationToken);
+
+            var gatewayMessageUrl = $"/api/gateway/messages/{msg.Id}";
+            gatewayEventsUrl = $"/api/gateway/events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10";
+            return Results.Created(gatewayMessageUrl, new GatewayDirectAgentMessageDto(
+                Status: "recorded",
+                DeliveryStatus: "recorded_pending_claim",
+                ClaimStatus: "unclaimed",
+                CompletionStatus: "pending",
+                SuppressionStatus: "not_suppressed",
+                MemberIdentity: member.MemberIdentity,
+                WakePolicy: member.WakePolicy,
+                MessageId: msg.Id,
+                ChannelId: channel.Id,
+                RequestId: requestId,
+                GatewayMessageUrl: gatewayMessageUrl,
+                GatewayEventsUrl: gatewayEventsUrl,
+                EvidenceSummary: "Direct agent wake_event recorded; Gateway evidence URL exposes delivery request status and follow-up claim/completion/suppression events."));
+        });
+
+        // -----------------------------------------------------------------------
         // POST /api/gateway/test-wakes
         // -----------------------------------------------------------------------
         gw.MapPost("/test-wakes", async (
@@ -359,12 +446,55 @@ public static class GatewayRoutes
         m.Body,
         m.CreatedAt);
 
-    private static string? BoundSettingsJson(string? settingsJson)
+    private static async Task<ChannelDto?> ResolveChannelAsync(ChannelsRepository repository, long? channelId,
+        string? projectId, CancellationToken cancellationToken)
     {
-        if (settingsJson is null) return null;
-        return settingsJson.Length <= SettingsPreviewMaxLength
-            ? settingsJson
-            : settingsJson[..SettingsPreviewMaxLength];
+        if (channelId is not null)
+            return await repository.GetChannelAsync(channelId.Value, cancellationToken);
+
+        var channels = await repository.ListChannelsAsync(projectId, "project_default", 1, cancellationToken);
+        return channels.Count > 0 ? channels[0] : null;
+    }
+
+    private static async Task<ChannelMembershipDto?> FindActiveAgentMemberAsync(ChannelsRepository repository,
+        long channelId, string memberIdentity, CancellationToken cancellationToken)
+    {
+        var members = await repository.ListMembershipsAsync(channelId, 200, cancellationToken);
+        return members.FirstOrDefault(m =>
+            string.Equals(m.MemberIdentity, memberIdentity.Trim(), StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(m.MemberType, "agent", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(m.MembershipStatus, "active", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string? SafeSettingsLabel(string? settingsJson)
+    {
+        if (string.IsNullOrWhiteSpace(settingsJson)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(settingsJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Object) return null;
+
+            var parts = new List<string>();
+            AddAllowedSettingsPart(document.RootElement, parts, "profile", "profile");
+            AddAllowedSettingsPart(document.RootElement, parts, "profileName", "profile");
+            AddAllowedSettingsPart(document.RootElement, parts, "profile_id", "profile");
+            AddAllowedSettingsPart(document.RootElement, parts, "binding", "binding");
+            AddAllowedSettingsPart(document.RootElement, parts, "bindingName", "binding");
+            AddAllowedSettingsPart(document.RootElement, parts, "sessionId", "session");
+            return parts.Count == 0 ? null : string.Join(" · ", parts.Distinct());
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static void AddAllowedSettingsPart(JsonElement root, ICollection<string> parts, string propertyName, string label)
+    {
+        if (!root.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.String) return;
+        var text = value.GetString()?.Trim();
+        if (!string.IsNullOrWhiteSpace(text))
+            parts.Add($"{label}: {text}");
     }
 
     private sealed record GatewayErrorDto(string Code, string Detail);

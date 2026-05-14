@@ -86,9 +86,25 @@ public sealed class DenWebChannelFirstLayoutTests
         Assert.Contains("Join agent", component);
         Assert.Contains("Direct message", component);
         Assert.Contains("direct_agent_message", component);
+        Assert.Contains("Gateway message evidence", component);
+        Assert.Contains("Gateway events evidence", component);
+        Assert.Contains("claim {lastDirectResult.claimStatus}", component);
         Assert.Contains("Test wake selected", component);
         Assert.Contains("channel-chat-body-region", css);
         Assert.Contains("channel-chat-members-list", css);
+        Assert.Contains("channel-chat-delivery-status", css);
+    }
+
+    [Fact]
+    public void GatewayMembershipUiTypes_DoNotExposeRawSettingsJsonPreview()
+    {
+        var component = ReadClientSource("components", "ChannelChatPanel.tsx");
+        var types = ReadClientSource("api", "types.ts");
+
+        Assert.DoesNotContain("settingsJsonPreview", component);
+        Assert.DoesNotContain("settingsJsonPreview", types);
+        Assert.Contains("settingsLabel", component);
+        Assert.Contains("settingsLabel", types);
     }
 
     [Fact]

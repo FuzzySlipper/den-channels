@@ -33,8 +33,10 @@ import type {
   AppendDesktopSessionEventRequest,
   ListDesktopSessionEventsOptions,
   PostGatewayTestWakeRequest,
+  PostGatewayDirectAgentMessageRequest,
   GatewayMemberships,
   GatewayTestWake,
+  GatewayDirectAgentMessage,
 } from './types';
 
 const denCoreApiBase = normalizeApiBase(import.meta.env.VITE_DEN_CORE_API_BASE, '/den-core-api');
@@ -240,6 +242,10 @@ export function listGatewayMemberships(opts: { channelId?: number; projectId?: s
 
 export function postGatewayTestWake(request: PostGatewayTestWakeRequest): Promise<GatewayTestWake> {
   return postChannels('/gateway/test-wakes', request);
+}
+
+export function postGatewayDirectAgentMessage(request: PostGatewayDirectAgentMessageRequest): Promise<GatewayDirectAgentMessage> {
+  return postChannels('/gateway/direct-agent-messages', request);
 }
 
 // Tasks

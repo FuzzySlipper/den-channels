@@ -24,7 +24,7 @@ public sealed record GatewayMemberDto(
     bool CanSend,
     int CooldownSeconds,
     int MaxAutoRepliesPerWindow,
-    string? SettingsJsonPreview);
+    string? SettingsLabel);
 
 /// <summary>Controlled low-risk wake probe request recorded through Gateway-visible channel state.</summary>
 public sealed record PostGatewayTestWakeRequest(
@@ -41,6 +41,30 @@ public sealed record GatewayTestWakeDto(
     string WakePolicy,
     long MessageId,
     long ChannelId,
+    string GatewayMessageUrl,
+    string GatewayEventsUrl,
+    string EvidenceSummary);
+
+/// <summary>Request to record a direct targeted message as a Gateway-visible wake request.</summary>
+public sealed record PostGatewayDirectAgentMessageRequest(
+    long? ChannelId,
+    string? ProjectId,
+    string MemberIdentity,
+    string SenderIdentity,
+    string Body);
+
+/// <summary>Result of a direct targeted message request with delivery/evidence status links.</summary>
+public sealed record GatewayDirectAgentMessageDto(
+    string Status,
+    string DeliveryStatus,
+    string ClaimStatus,
+    string CompletionStatus,
+    string SuppressionStatus,
+    string MemberIdentity,
+    string WakePolicy,
+    long MessageId,
+    long ChannelId,
+    string RequestId,
     string GatewayMessageUrl,
     string GatewayEventsUrl,
     string EvidenceSummary);
