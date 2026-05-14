@@ -18,6 +18,10 @@ This repo currently contains the service skeleton for Den task #1320:
 - `/api/channels/{channelId}/messages` — post/list channel messages with source pointers and cursor params.
 - `/api/channels/{channelId}/memberships` — minimal membership upsert.
 - `/api/channel-messages/{messageId}/reactions` — idempotent reaction add.
+- `/api/gateway/memberships?channelId={id}|projectId={projectId}` — Gateway-facing participant/wake-policy snapshot for channel routing.
+- `/api/gateway/test-wakes` — controlled synthetic wake-event recorder for an active agent membership; it records Channels-owned evidence only and returns Gateway message/events URLs for downstream delivery/claim/complete/fail follow-up.
+
+The Den Web channel chat panel exposes the same boundary: it lists project/space channels, shows channel participants/active agent bindings, lets a tester join an agent membership with a bounded wake policy, posts direct agent-targeted channel messages, and records low-risk test wakes through the Gateway API. Channels stores the message/membership rows; Gateway/bridge consumers remain responsible for real transport, delivery state, claims, completions, failures, and suppression decisions. UI rendering intentionally avoids raw membership settings/secrets and only derives safe labels such as profile/binding names from settings previews.
 
 - `/api/project-channel-sync/projects/{projectId}` — ensure one project default channel from Den core/stub metadata.
 - `/api/project-channel-sync` — backfill default channels from Den core/stub project list or explicit project payload.

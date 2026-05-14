@@ -26,6 +26,25 @@ public sealed record GatewayMemberDto(
     int MaxAutoRepliesPerWindow,
     string? SettingsJsonPreview);
 
+/// <summary>Controlled low-risk wake probe request recorded through Gateway-visible channel state.</summary>
+public sealed record PostGatewayTestWakeRequest(
+    long? ChannelId,
+    string? ProjectId,
+    string MemberIdentity,
+    string? RequestedBy,
+    string? Note);
+
+/// <summary>Result of a controlled wake probe recording with Gateway/Core evidence links.</summary>
+public sealed record GatewayTestWakeDto(
+    string Status,
+    string MemberIdentity,
+    string WakePolicy,
+    long MessageId,
+    long ChannelId,
+    string GatewayMessageUrl,
+    string GatewayEventsUrl,
+    string EvidenceSummary);
+
 /// <summary>Single channel message suitable for Gateway routing/simulation decisions.</summary>
 public sealed record GatewayMessageDto(
     long Id,

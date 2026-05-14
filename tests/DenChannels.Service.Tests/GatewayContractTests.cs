@@ -498,6 +498,41 @@ public sealed class GatewayContractTests : IDisposable
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    [Fact]
+    public async Task GatewayTestWakes_Post_RecordsWakeEventForActiveAgentMembership()
+    {
+        var channel = await EnsureDefaultChannelAsync("gw-test-wake-proj");
+        await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "hermes-coder",
+            wakePolicy = "direct_questions_only",
+            settingsJson = "{\"profile\":\"den-hermes-coder\",\"transportPreview\":\"redacted-by-test\"}"
+        });
+
+        using var response = await _client.PostAsJsonAsync("/api/gateway/test-wakes", new
+        {
+            channelId = channel.Id,
+            memberIdentity = "hermes-coder",
+            requestedBy = "tester"
+        });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<GatewayTestWakePayload>();
+        Assert.NotNull(payload);
+        Assert.Equal("recorded", payload.Status);
+        Assert.Equal("hermes-coder", payload.MemberIdentity);
+        Assert.Equal("direct_questions_only", payload.WakePolicy);
+        Assert.Equal(channel.Id, payload.ChannelId);
+        Assert.Contains($"/api/gateway/messages/{payload.MessageId}", payload.GatewayMessageUrl);
+
+        var message = await _client.GetFromJsonAsync<GatewayMessagePayload>(payload.GatewayMessageUrl);
+        Assert.NotNull(message);
+        Assert.Equal("wake_event", message.SourceKind);
+        Assert.Contains("Controlled test wake", message.Body);
+        Assert.DoesNotContain("redacted-by-test", message.Body);
+    }
+
     // -------------------------------------------------------------------------
     // Existing APIs still work
     // -------------------------------------------------------------------------
@@ -594,6 +629,16 @@ public sealed class GatewayContractTests : IDisposable
         string? Summary,
         string Body,
         string CreatedAt);
+
+    private sealed record GatewayTestWakePayload(
+        string Status,
+        string MemberIdentity,
+        string WakePolicy,
+        long MessageId,
+        long ChannelId,
+        string GatewayMessageUrl,
+        string GatewayEventsUrl,
+        string EvidenceSummary);
 
     private sealed record GatewayEventsPayload(
         List<GatewayEventItemPayload> Items,

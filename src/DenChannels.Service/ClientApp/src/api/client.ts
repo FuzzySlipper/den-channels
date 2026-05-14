@@ -32,6 +32,9 @@ import type {
   DesktopSessionEvent,
   AppendDesktopSessionEventRequest,
   ListDesktopSessionEventsOptions,
+  PostGatewayTestWakeRequest,
+  GatewayMemberships,
+  GatewayTestWake,
 } from './types';
 
 const denCoreApiBase = normalizeApiBase(import.meta.env.VITE_DEN_CORE_API_BASE, '/den-core-api');
@@ -211,6 +214,32 @@ export function listChannelMessages(channelId: number, opts: ListChannelMessages
 
 export function postChannelMessage(channelId: number, request: PostChannelMessageRequest): Promise<ChannelMessage> {
   return postChannels(`/channels/${channelId}/messages`, request);
+}
+
+export interface UpsertChannelMembershipRequest {
+  memberType: string;
+  memberIdentity: string;
+  membershipStatus?: string;
+  wakePolicy?: string;
+  canSend?: boolean;
+  canReact?: boolean;
+  canInvite?: boolean;
+  cooldownSeconds?: number;
+  maxAutoRepliesPerWindow?: number;
+  settingsJson?: string | null;
+}
+
+export function upsertChannelMembership(channelId: number, request: UpsertChannelMembershipRequest): Promise<GatewayMemberships['members'][number]> {
+  return putChannels(`/channels/${channelId}/memberships`, request);
+}
+
+export function listGatewayMemberships(opts: { channelId?: number; projectId?: string }): Promise<GatewayMemberships> {
+  const q = buildQuery({ channelId: opts.channelId, projectId: opts.projectId });
+  return getChannels(`/gateway/memberships${q}`);
+}
+
+export function postGatewayTestWake(request: PostGatewayTestWakeRequest): Promise<GatewayTestWake> {
+  return postChannels('/gateway/test-wakes', request);
 }
 
 // Tasks

@@ -44,11 +44,17 @@ public sealed class DenWebChannelFirstLayoutTests
         Assert.Contains("ensureProjectDefaultChannel", client);
         Assert.Contains("listChannelMessages", client);
         Assert.Contains("postChannelMessage", client);
+        Assert.Contains("listGatewayMemberships", client);
+        Assert.Contains("upsertChannelMembership", client);
+        Assert.Contains("postGatewayTestWake", client);
 
         Assert.Contains("ensureProjectDefaultChannel", component);
         Assert.Contains("listChannelMessages", component);
         Assert.Contains("postChannelMessage", component);
-        Assert.Contains("channel?.projectId === projectId ? channel : null", component);
+        Assert.Contains("listGatewayMemberships", component);
+        Assert.Contains("upsertChannelMembership", component);
+        Assert.Contains("postGatewayTestWake", component);
+        Assert.Contains("availableChannels.find(candidate => candidate.id === selectedChannelId)", component);
         Assert.DoesNotContain("listAgentStream", component);
         Assert.DoesNotContain("dispatch", component, StringComparison.OrdinalIgnoreCase);
     }
@@ -66,6 +72,23 @@ public sealed class DenWebChannelFirstLayoutTests
         Assert.Contains("senderIdentity", component);
         Assert.DoesNotContain(legacySingleQuotedSender, component);
         Assert.DoesNotContain(legacyDoubleQuotedSender, component);
+    }
+
+    [Fact]
+    public void ChannelChatPanel_ExposesChannelPickerParticipantsAgentJoinDirectMessagesAndTestWake()
+    {
+        var component = ReadClientSource("components", "ChannelChatPanel.tsx");
+        var css = ReadClientSource("styles", "index.css");
+
+        Assert.Contains("channel-chat-selector", component);
+        Assert.Contains("setSelectedChannelId", component);
+        Assert.Contains("channel-chat-members", component);
+        Assert.Contains("Join agent", component);
+        Assert.Contains("Direct message", component);
+        Assert.Contains("direct_agent_message", component);
+        Assert.Contains("Test wake selected", component);
+        Assert.Contains("channel-chat-body-region", css);
+        Assert.Contains("channel-chat-members-list", css);
     }
 
     [Fact]

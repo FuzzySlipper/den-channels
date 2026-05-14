@@ -108,6 +108,53 @@ export interface ChannelMessage {
   deletedAt: string | null;
 }
 
+export type ChannelWakePolicy =
+  | 'never'
+  | 'mentions_only'
+  | 'direct_questions_only'
+  | 'substantive_digest'
+  | 'all_human_messages'
+  | 'all_messages_except_self';
+
+export interface GatewayMember {
+  id: number;
+  memberType: string;
+  memberIdentity: string;
+  membershipStatus: string;
+  wakePolicy: ChannelWakePolicy | string;
+  canSend: boolean;
+  cooldownSeconds: number;
+  maxAutoRepliesPerWindow: number;
+  settingsJsonPreview: string | null;
+}
+
+export interface GatewayMemberships {
+  channelId: number;
+  channelSlug: string;
+  channelKind: string;
+  projectId: string | null;
+  members: GatewayMember[];
+}
+
+export interface PostGatewayTestWakeRequest {
+  channelId?: number;
+  projectId?: string;
+  memberIdentity: string;
+  requestedBy?: string;
+  note?: string;
+}
+
+export interface GatewayTestWake {
+  status: string;
+  memberIdentity: string;
+  wakePolicy: string;
+  messageId: number;
+  channelId: number;
+  gatewayMessageUrl: string;
+  gatewayEventsUrl: string;
+  evidenceSummary: string;
+}
+
 export interface ProjectWithStats {
   project: Project;
   task_counts_by_status: Record<string, number>;

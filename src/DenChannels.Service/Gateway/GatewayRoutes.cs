@@ -35,7 +35,8 @@ public static class GatewayRoutes
                 "GET /api/gateway/sources/{sourceKind}/{sourceId}?sourceProjectId={projectId}",
                 "GET /api/gateway/events?channelId={id}&afterId={id}&limit={n}",
                 "GET /api/gateway/events?projectId={projectId}&afterId={id}&limit={n}",
-                "POST /api/gateway/system-messages"
+                "POST /api/gateway/system-messages",
+                "POST /api/gateway/test-wakes"
             ])));
 
         // -----------------------------------------------------------------------
@@ -252,6 +253,88 @@ public static class GatewayRoutes
 
             var msg = await repository.PostMessageAsync(resolvedChannelId, postRequest, cancellationToken);
             return Results.Created($"/api/gateway/messages/{msg.Id}", ToGatewayMessageDto(msg));
+        });
+
+        // -----------------------------------------------------------------------
+        // POST /api/gateway/test-wakes
+        // -----------------------------------------------------------------------
+        gw.MapPost("/test-wakes", async (
+            ChannelsRepository repository,
+            PostGatewayTestWakeRequest request,
+            CancellationToken cancellationToken) =>
+        {
+            if (request.ChannelId is null && string.IsNullOrWhiteSpace(request.ProjectId))
+                return Results.BadRequest(new GatewayErrorDto("missing_parameter",
+                    "Provide channelId or projectId."));
+
+            if (string.IsNullOrWhiteSpace(request.MemberIdentity))
+                return Results.BadRequest(new GatewayErrorDto("missing_member_identity",
+                    "Provide memberIdentity for the binding to probe."));
+
+            ChannelDto? channel;
+            if (request.ChannelId is not null)
+            {
+                channel = await repository.GetChannelAsync(request.ChannelId.Value, cancellationToken);
+                if (channel is null)
+                    return Results.NotFound(new GatewayErrorDto("channel_not_found",
+                        $"Channel {request.ChannelId} not found."));
+            }
+            else
+            {
+                var channels = await repository.ListChannelsAsync(request.ProjectId, "project_default", 1, cancellationToken);
+                channel = channels.Count > 0 ? channels[0] : null;
+                if (channel is null)
+                    return Results.NotFound(new GatewayErrorDto("channel_not_found",
+                        $"No default channel found for project '{request.ProjectId}'."));
+            }
+
+            var members = await repository.ListMembershipsAsync(channel.Id, 200, cancellationToken);
+            var member = members.FirstOrDefault(m =>
+                string.Equals(m.MemberIdentity, request.MemberIdentity.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (member is null)
+                return Results.NotFound(new GatewayErrorDto("member_not_found",
+                    $"Member '{request.MemberIdentity}' is not joined to channel {channel.Id}."));
+
+            if (!string.Equals(member.MemberType, "agent", StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(member.MembershipStatus, "active", StringComparison.OrdinalIgnoreCase))
+                return Results.BadRequest(new GatewayErrorDto("member_not_active_agent",
+                    "Only active agent memberships can receive a controlled test wake."));
+
+            var sourceId = $"test-wake:{channel.Id}:{member.Id}:{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+            var note = string.IsNullOrWhiteSpace(request.Note) ? null : request.Note.Trim();
+            var metadataJson = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                probe = "channel_agent_test_wake",
+                memberIdentity = member.MemberIdentity,
+                wakePolicy = member.WakePolicy,
+                requestedBy = string.IsNullOrWhiteSpace(request.RequestedBy) ? "den-web" : request.RequestedBy.Trim(),
+                note
+            });
+            var body = $"Controlled test wake recorded for {member.MemberIdentity} ({member.WakePolicy}). Gateway/bridge consumers may claim this wake_event if enabled.";
+            var msg = await repository.PostMessageAsync(channel.Id, new PostChannelMessageRequest(
+                SenderType: "system",
+                SenderIdentity: "den-gateway",
+                Body: body,
+                MessageKind: "system_event",
+                SourceKind: "wake_event",
+                SourceId: sourceId,
+                SourceProjectId: channel.ProjectId,
+                Summary: $"Test wake for {member.MemberIdentity}",
+                DeepLink: null,
+                ThreadRootMessageId: null,
+                ReplyToMessageId: null,
+                MetadataJson: metadataJson,
+                DedupeKey: null), cancellationToken);
+
+            return Results.Created($"/api/gateway/messages/{msg.Id}", new GatewayTestWakeDto(
+                Status: "recorded",
+                MemberIdentity: member.MemberIdentity,
+                WakePolicy: member.WakePolicy,
+                MessageId: msg.Id,
+                ChannelId: channel.Id,
+                GatewayMessageUrl: $"/api/gateway/messages/{msg.Id}",
+                GatewayEventsUrl: $"/api/gateway/events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10",
+                EvidenceSummary: "Synthetic wake_event recorded in Den Channels; Gateway/bridge delivery, claim, complete, or fail evidence appears as follow-up channel/gateway events."));
         });
 
         return gw;

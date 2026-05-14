@@ -1,16 +1,20 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
-import type { Channel, ChannelMessage } from '../api/types';
+import type { Channel, ChannelMessage, GatewayMember, GatewayMemberships, GatewayTestWake } from '../api/types';
 import {
   ensureProjectDefaultChannel,
   listChannelMessages,
   listChannels,
+  listGatewayMemberships,
   postChannelMessage,
+  postGatewayTestWake,
+  upsertChannelMembership,
 } from '../api/client';
 import { usePolling } from '../hooks/usePolling';
 import { formatTimeAgo } from '../utils';
 
 const SENDER_IDENTITY_STORAGE_KEY = 'den-channel-sender-identity';
+const DEFAULT_WAKE_POLICY = 'mentions_only';
 
 interface Props {
   projectId: string | null;
@@ -51,31 +55,80 @@ function persistSenderIdentity(identity: string): void {
   }
 }
 
+function parseSafeBindingLabel(settingsJsonPreview: string | null): string | null {
+  if (!settingsJsonPreview) return null;
+  try {
+    const parsed = JSON.parse(settingsJsonPreview) as Record<string, unknown>;
+    const candidate = parsed.profile ?? parsed.profileName ?? parsed.profile_id ?? parsed.binding ?? parsed.sessionId;
+    return typeof candidate === 'string' && candidate.trim().length > 0 ? candidate.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function memberStatus(member: GatewayMember): string {
+  const binding = parseSafeBindingLabel(member.settingsJsonPreview);
+  return [member.membershipStatus, member.wakePolicy, binding ? `binding ${binding}` : null]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+function memberIsActiveAgent(member: GatewayMember): boolean {
+  return member.memberType === 'agent' && member.membershipStatus === 'active';
+}
+
 export function ChannelChatPanel({ projectId, spaceName }: Props) {
   const [draft, setDraft] = useState('');
   const [senderIdentity, setSenderIdentity] = useState(readStoredSenderIdentity);
+  const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null);
+  const [targetMemberIdentity, setTargetMemberIdentity] = useState('');
+  const [inviteIdentity, setInviteIdentity] = useState('');
+  const [inviteWakePolicy, setInviteWakePolicy] = useState(DEFAULT_WAKE_POLICY);
   const [sending, setSending] = useState(false);
+  const [inviteSending, setInviteSending] = useState(false);
+  const [wakeSending, setWakeSending] = useState(false);
   const [sendError, setSendError] = useState<Error | null>(null);
+  const [lastWakeResult, setLastWakeResult] = useState<GatewayTestWake | null>(null);
   const normalizedSenderIdentity = senderIdentity.trim();
 
-  const fetchChannel = useCallback(async () => {
-    if (!projectId) return null;
-    const [existing] = await listChannels({ projectId, kind: 'project_default', limit: 1 });
-    if (existing) return existing;
-    return ensureProjectDefaultChannel(projectId, {
+  const fetchChannels = useCallback(async () => {
+    if (!projectId) return [];
+    const channels = await listChannels({ projectId, limit: 100 });
+    if (channels.length > 0) return channels;
+    const ensured = await ensureProjectDefaultChannel(projectId, {
       displayName: spaceName?.trim() || projectId,
       createdBy: normalizedSenderIdentity || 'den-web',
     });
+    return [ensured];
   }, [normalizedSenderIdentity, projectId, spaceName]);
 
   const {
-    data: channel,
+    data: channels,
     loading: channelLoading,
     error: channelError,
-    refresh: refreshChannel,
-  } = usePolling<Channel | null>(fetchChannel, 15000);
+    refresh: refreshChannels,
+  } = usePolling<Channel[]>(fetchChannels, 15000);
 
-  const activeChannel = channel?.projectId === projectId ? channel : null;
+  const availableChannels = useMemo(
+    () => (channels ?? []).filter(candidate => candidate.projectId === projectId),
+    [channels, projectId],
+  );
+
+  useEffect(() => {
+    if (availableChannels.length === 0) {
+      setSelectedChannelId(null);
+      return;
+    }
+    if (!selectedChannelId || !availableChannels.some(candidate => candidate.id === selectedChannelId)) {
+      const defaultChannel = availableChannels.find(candidate => candidate.kind === 'project_default') ?? availableChannels[0];
+      setSelectedChannelId(defaultChannel.id);
+    }
+  }, [availableChannels, selectedChannelId]);
+
+  const activeChannel = useMemo(
+    () => availableChannels.find(candidate => candidate.id === selectedChannelId) ?? null,
+    [availableChannels, selectedChannelId],
+  );
 
   const fetchMessages = useCallback(
     () => activeChannel ? listChannelMessages(activeChannel.id, { limit: 80 }) : Promise.resolve([]),
@@ -88,12 +141,37 @@ export function ChannelChatPanel({ projectId, spaceName }: Props) {
     refresh: refreshMessages,
   } = usePolling(fetchMessages, 4000);
 
+  const fetchMemberships = useCallback(
+    () => activeChannel ? listGatewayMemberships({ channelId: activeChannel.id }) : Promise.resolve(null),
+    [activeChannel],
+  );
+  const {
+    data: memberships,
+    loading: membershipsLoading,
+    error: membershipsError,
+    refresh: refreshMemberships,
+  } = usePolling<GatewayMemberships | null>(fetchMemberships, 5000);
+
   const sortedMessages = useMemo(() => {
     const visibleMessages = activeChannel
       ? (messages ?? []).filter(message => message.channelId === activeChannel.id)
       : [];
     return [...visibleMessages].sort((left, right) => left.id - right.id);
   }, [activeChannel, messages]);
+
+  const members = memberships?.members ?? [];
+  const activeAgentMembers = members.filter(memberIsActiveAgent);
+  const selectedTarget = activeAgentMembers.find(member => member.memberIdentity === targetMemberIdentity) ?? null;
+
+  useEffect(() => {
+    if (activeAgentMembers.length === 0) {
+      setTargetMemberIdentity('');
+      return;
+    }
+    if (!targetMemberIdentity || !activeAgentMembers.some(member => member.memberIdentity === targetMemberIdentity)) {
+      setTargetMemberIdentity(activeAgentMembers[0].memberIdentity);
+    }
+  }, [activeAgentMembers, targetMemberIdentity]);
 
   const disabledReason = !projectId
     ? 'Select a project space to join its default channel.'
@@ -103,11 +181,11 @@ export function ChannelChatPanel({ projectId, spaceName }: Props) {
   const identityRequired = Boolean(projectId) && normalizedSenderIdentity.length === 0;
   const isComposerDisabled = !activeChannel || sending || Boolean(disabledReason) || identityRequired;
   const channelStatus = channelLoading && !activeChannel
-    ? 'loading channel…'
+    ? 'loading channels…'
     : channelError
       ? channelError.message
       : activeChannel
-        ? `${activeChannel.displayName} · ${activeChannel.kind}`
+        ? `${activeChannel.displayName} · ${activeChannel.kind} · ${activeAgentMembers.length} active agent binding${activeAgentMembers.length === 1 ? '' : 's'}`
         : 'No project channel selected';
 
   const handleSenderIdentityChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
@@ -129,6 +207,14 @@ export function ChannelChatPanel({ projectId, spaceName }: Props) {
         senderIdentity: normalizedSenderIdentity,
         messageKind: 'human_text',
         body,
+        sourceKind: selectedTarget ? 'wake_event' : null,
+        summary: selectedTarget ? `Direct message to ${selectedTarget.memberIdentity}` : null,
+        metadataJson: selectedTarget ? JSON.stringify({
+          targetMemberIdentity: selectedTarget.memberIdentity,
+          targetMemberType: selectedTarget.memberType,
+          wakePolicy: selectedTarget.wakePolicy,
+          deliveryMode: 'direct_agent_message',
+        }) : null,
       });
       setDraft('');
       refreshMessages();
@@ -137,13 +223,59 @@ export function ChannelChatPanel({ projectId, spaceName }: Props) {
     } finally {
       setSending(false);
     }
-  }, [activeChannel, draft, isComposerDisabled, normalizedSenderIdentity, refreshMessages]);
+  }, [activeChannel, draft, isComposerDisabled, normalizedSenderIdentity, refreshMessages, selectedTarget]);
+
+  const handleInviteAgent = useCallback(async () => {
+    const identity = inviteIdentity.trim();
+    if (!activeChannel || !identity) return;
+    setInviteSending(true);
+    setSendError(null);
+    try {
+      await upsertChannelMembership(activeChannel.id, {
+        memberType: 'agent',
+        memberIdentity: identity,
+        membershipStatus: 'active',
+        wakePolicy: inviteWakePolicy,
+        canSend: true,
+        canReact: true,
+        canInvite: false,
+      });
+      setInviteIdentity('');
+      refreshMemberships();
+    } catch (error) {
+      setSendError(error instanceof Error ? error : new Error(String(error)));
+    } finally {
+      setInviteSending(false);
+    }
+  }, [activeChannel, inviteIdentity, inviteWakePolicy, refreshMemberships]);
+
+  const handleTestWake = useCallback(async () => {
+    if (!activeChannel || !selectedTarget || !normalizedSenderIdentity) return;
+    setWakeSending(true);
+    setSendError(null);
+    try {
+      const result = await postGatewayTestWake({
+        channelId: activeChannel.id,
+        memberIdentity: selectedTarget.memberIdentity,
+        requestedBy: normalizedSenderIdentity,
+        note: 'den-channels-ui-controlled-probe',
+      });
+      setLastWakeResult(result);
+      refreshMessages();
+    } catch (error) {
+      setSendError(error instanceof Error ? error : new Error(String(error)));
+    } finally {
+      setWakeSending(false);
+    }
+  }, [activeChannel, normalizedSenderIdentity, refreshMessages, selectedTarget]);
 
   const composerPlaceholder = !projectId
     ? 'Select a project to chat'
     : identityRequired
       ? 'Set Posting as before sending'
-      : `Message ${channelLabel(activeChannel, projectId)}`;
+      : selectedTarget
+        ? `Direct message ${selectedTarget.memberIdentity} in ${channelLabel(activeChannel, projectId)}`
+        : `Message ${channelLabel(activeChannel, projectId)}`;
 
   return (
     <section className="panel channel-chat-panel" aria-label="Project channel chat">
@@ -168,50 +300,137 @@ export function ChannelChatPanel({ projectId, spaceName }: Props) {
           id="channel-chat-selector"
           className="channel-chat-selector"
           value={activeChannel?.id ?? ''}
-          disabled
-          title="Channel selector placeholder; project default channel is selected automatically."
+          disabled={availableChannels.length === 0}
+          onChange={event => setSelectedChannelId(Number(event.target.value))}
+          title="Select a project/space channel."
         >
-          <option value={activeChannel?.id ?? ''}>{channelLabel(activeChannel, projectId)}</option>
+          {availableChannels.length === 0 ? (
+            <option value="">{channelLabel(activeChannel, projectId)}</option>
+          ) : availableChannels.map(candidate => (
+            <option key={candidate.id} value={candidate.id}>{channelLabel(candidate, projectId)}</option>
+          ))}
         </select>
         <button
           type="button"
           className="channel-chat-refresh"
           onClick={() => {
-            refreshChannel();
+            refreshChannels();
             refreshMessages();
+            refreshMemberships();
           }}
         >
           Refresh
         </button>
       </div>
 
-      <div className="channel-chat-scrollback" aria-live="polite">
-        {disabledReason ? (
-          <div className="channel-chat-state channel-chat-state-muted">{disabledReason}</div>
-        ) : messagesLoading && sortedMessages.length === 0 ? (
-          <div className="channel-chat-state">Loading channel messages…</div>
-        ) : messagesError ? (
-          <div className="channel-chat-state channel-chat-state-error">{messagesError.message}</div>
-        ) : sortedMessages.length === 0 ? (
-          <div className="channel-chat-state channel-chat-state-muted">No channel messages yet. Start the scrollback below.</div>
-        ) : (
-          sortedMessages.map(message => (
-            <div key={message.id} className="channel-chat-message">
-              <span className="message-time">{formatTimeAgo(message.createdAt)}</span>
-              <span className={`channel-chat-sender channel-chat-sender-${message.senderType}`}>{messageSender(message)}</span>
-              <span className="channel-chat-body">{message.body}</span>
+      <div className="channel-chat-body-region">
+        <div className="channel-chat-scrollback" aria-live="polite">
+          {disabledReason ? (
+            <div className="channel-chat-state channel-chat-state-muted">{disabledReason}</div>
+          ) : messagesLoading && sortedMessages.length === 0 ? (
+            <div className="channel-chat-state">Loading channel messages…</div>
+          ) : messagesError ? (
+            <div className="channel-chat-state channel-chat-state-error">{messagesError.message}</div>
+          ) : sortedMessages.length === 0 ? (
+            <div className="channel-chat-state channel-chat-state-muted">No channel messages yet. Start the scrollback below.</div>
+          ) : (
+            sortedMessages.map(message => (
+              <div key={message.id} className="channel-chat-message">
+                <span className="message-time">{formatTimeAgo(message.createdAt)}</span>
+                <span className={`channel-chat-sender channel-chat-sender-${message.senderType}`}>{messageSender(message)}</span>
+                <span className="channel-chat-body">{message.body}</span>
+              </div>
+            ))
+          )}
+        </div>
+
+        <aside className="channel-chat-members" aria-label="Channel participants and active Hermes profile bindings">
+          <div className="channel-chat-members-header">
+            <strong>Participants</strong>
+            <span>{membershipsLoading ? 'loading…' : `${members.length} total`}</span>
+          </div>
+          <div className="channel-chat-members-list">
+            {membershipsError ? (
+              <div className="channel-chat-state channel-chat-state-error">{membershipsError.message}</div>
+            ) : members.length === 0 ? (
+              <div className="channel-chat-state channel-chat-state-muted">No joined agents yet.</div>
+            ) : members.map(member => (
+              <button
+                key={member.id}
+                type="button"
+                className={`channel-chat-member ${member.memberIdentity === targetMemberIdentity ? 'selected' : ''}`}
+                onClick={() => memberIsActiveAgent(member) && setTargetMemberIdentity(member.memberIdentity)}
+                disabled={!memberIsActiveAgent(member)}
+                title={memberStatus(member)}
+              >
+                <span className={`channel-chat-member-type member-type-${member.memberType}`}>{member.memberType}</span>
+                <span className="channel-chat-member-identity">{member.memberIdentity}</span>
+                <span className="channel-chat-member-status">{memberStatus(member)}</span>
+              </button>
+            ))}
+          </div>
+          <div className="channel-chat-invite">
+            <input
+              value={inviteIdentity}
+              onChange={event => setInviteIdentity(event.target.value)}
+              placeholder="agent identity"
+              disabled={!activeChannel || inviteSending}
+              aria-label="Agent identity to join"
+            />
+            <select
+              value={inviteWakePolicy}
+              onChange={event => setInviteWakePolicy(event.target.value)}
+              disabled={!activeChannel || inviteSending}
+              aria-label="Wake policy"
+            >
+              <option value="never">never</option>
+              <option value="mentions_only">mentions only</option>
+              <option value="direct_questions_only">direct questions</option>
+              <option value="substantive_digest">substantive digest</option>
+              <option value="all_human_messages">all human</option>
+              <option value="all_messages_except_self">all except self</option>
+            </select>
+            <button type="button" onClick={handleInviteAgent} disabled={!activeChannel || inviteSending || inviteIdentity.trim().length === 0}>
+              {inviteSending ? 'Joining…' : 'Join agent'}
+            </button>
+          </div>
+          <button
+            type="button"
+            className="channel-chat-test-wake"
+            onClick={handleTestWake}
+            disabled={!activeChannel || !selectedTarget || wakeSending || identityRequired}
+          >
+            {wakeSending ? 'Recording wake…' : 'Test wake selected'}
+          </button>
+          {lastWakeResult && (
+            <div className="channel-chat-wake-result">
+              <strong>{lastWakeResult.status}</strong>
+              <span>{lastWakeResult.memberIdentity} · message {lastWakeResult.messageId}</span>
+              <span>{lastWakeResult.evidenceSummary}</span>
             </div>
-          ))
-        )}
+          )}
+        </aside>
       </div>
 
-      {(channelError || messagesError || sendError) && (
+      {(channelError || messagesError || membershipsError || sendError) && (
         <div className="channel-chat-error">
-          {(sendError ?? messagesError ?? channelError)?.message}
+          {(sendError ?? membershipsError ?? messagesError ?? channelError)?.message}
         </div>
       )}
 
       <form className="channel-chat-composer" onSubmit={handleSubmit}>
+        <select
+          value={targetMemberIdentity}
+          onChange={event => setTargetMemberIdentity(event.target.value)}
+          disabled={activeAgentMembers.length === 0 || isComposerDisabled}
+          aria-label="Direct agent target"
+        >
+          {activeAgentMembers.length === 0 ? (
+            <option value="">channel message</option>
+          ) : activeAgentMembers.map(member => (
+            <option key={member.id} value={member.memberIdentity}>@{member.memberIdentity}</option>
+          ))}
+        </select>
         <input
           value={draft}
           onChange={event => setDraft(event.target.value)}

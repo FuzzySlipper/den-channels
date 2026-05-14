@@ -984,6 +984,116 @@ button.list-item {
   flex-shrink: 0;
 }
 
+.channel-chat-body-region {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
+  background: linear-gradient(180deg, rgba(125, 207, 255, 0.05), transparent 90px);
+}
+
+.channel-chat-members {
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.channel-chat-members-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.channel-chat-members-header strong {
+  color: var(--text-bright);
+}
+
+.channel-chat-members-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  gap: 3px;
+}
+
+.channel-chat-member {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 5px 6px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+
+.channel-chat-member:hover:not(:disabled),
+.channel-chat-member.selected {
+  background: var(--bg-hover);
+  border-color: var(--accent-dim);
+}
+
+.channel-chat-member:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.channel-chat-member-type {
+  color: var(--purple);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.channel-chat-member-identity {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+}
+
+.channel-chat-member-status {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-chat-invite {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 5px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+}
+
+.channel-chat-wake-result {
+  display: grid;
+  gap: 2px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.channel-chat-wake-result strong {
+  color: var(--green);
+}
+
 .channel-chat-title {
   display: flex;
   align-items: baseline;
@@ -1015,7 +1125,10 @@ button.list-item {
 
 .channel-chat-identity,
 .channel-chat-selector,
-.channel-chat-composer input {
+.channel-chat-composer input,
+.channel-chat-composer select,
+.channel-chat-invite input,
+.channel-chat-invite select {
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);
@@ -1040,7 +1153,9 @@ button.list-item {
 }
 
 .channel-chat-refresh,
-.channel-chat-composer button {
+.channel-chat-composer button,
+.channel-chat-invite button,
+.channel-chat-test-wake {
   background: var(--bg);
   color: var(--accent);
   border: 1px solid var(--accent-dim);
@@ -1051,26 +1166,31 @@ button.list-item {
 }
 
 .channel-chat-refresh:hover,
-.channel-chat-composer button:hover:not(:disabled) {
+.channel-chat-composer button:hover:not(:disabled),
+.channel-chat-invite button:hover:not(:disabled),
+.channel-chat-test-wake:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text-bright);
 }
 
 .channel-chat-composer button:disabled,
-.channel-chat-composer input:disabled {
+.channel-chat-composer input:disabled,
+.channel-chat-composer select:disabled,
+.channel-chat-invite input:disabled,
+.channel-chat-invite select:disabled,
+.channel-chat-invite button:disabled,
+.channel-chat-test-wake:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
 .channel-chat-scrollback {
-  flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding: 6px 10px;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  background: linear-gradient(180deg, rgba(125, 207, 255, 0.05), transparent 90px);
 }
 
 .channel-chat-message {
@@ -1127,14 +1247,17 @@ button.list-item {
 
 .channel-chat-composer {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(120px, 190px) minmax(0, 1fr) auto;
   gap: 8px;
   padding: 6px 10px;
   border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
 
-.channel-chat-composer input {
+.channel-chat-composer input,
+.channel-chat-composer select,
+.channel-chat-invite input,
+.channel-chat-invite select {
   min-width: 0;
   padding: 5px 8px;
   font-size: 12px;
