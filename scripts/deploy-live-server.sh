@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_ROOT="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_FILE="${PROJECT_FILE:-$REPO_ROOT/src/DenChannels.Service/DenChannels.Service.csproj}"
 PUBLISH_DIR="${PUBLISH_DIR:-}"
+BUILD_ARTIFACTS_DIR="${BUILD_ARTIFACTS_DIR:-}"
 DEPLOY_MODE="${DEPLOY_MODE:-auto}"
 SSH_TARGET="${SSH_TARGET:-den-srv}"
 SERVICE_NAME="${SERVICE_NAME:-den-channels.service}"
@@ -17,6 +18,7 @@ SKIP_RESTART=0
 SKIP_SMOKE=0
 DRY_RUN=0
 TEMP_PUBLISH_DIR_CREATED=0
+TEMP_BUILD_ARTIFACTS_DIR_CREATED=0
 
 usage() {
   cat <<'EOF_USAGE'
@@ -47,6 +49,7 @@ Options:
 
 Environment overrides:
   DEPLOY_MODE, SSH_TARGET, SERVICE_NAME, PROJECT_FILE, PUBLISH_DIR,
+  BUILD_ARTIFACTS_DIR,
   REMOTE_SERVICE_ROOT, REMOTE_APP_DIR, REMOTE_STAGE_DIR,
   REMOTE_SERVICE_USER, REMOTE_SERVICE_GROUP, SMOKE_BASE_URL
 
@@ -123,6 +126,7 @@ print_config() {
 Resolved deploy configuration:
   REPO_ROOT=$REPO_ROOT
   PROJECT_FILE=$PROJECT_FILE
+  BUILD_ARTIFACTS_DIR=${BUILD_ARTIFACTS_DIR:-<temporary>}
   DEPLOY_MODE=$DEPLOY_MODE
   SSH_TARGET=$SSH_TARGET
   SERVICE_NAME=$SERVICE_NAME
@@ -206,9 +210,26 @@ initialize_publish_dir() {
   TEMP_PUBLISH_DIR_CREATED=1
 }
 
+initialize_build_artifacts_dir() {
+  # Keep MSBuild/Razor intermediates out of the checkout. Stale obj/bin files
+  # are a common deploy footgun when a previous build ran as root or another
+  # user; Razor publish targets can then fail while touching files under obj/.
+  if [[ -n "$BUILD_ARTIFACTS_DIR" ]]; then
+    rm -rf "$BUILD_ARTIFACTS_DIR"
+    mkdir -p "$BUILD_ARTIFACTS_DIR"
+    return
+  fi
+
+  BUILD_ARTIFACTS_DIR="$(mktemp -d /tmp/den-channels-live-artifacts.XXXXXX)"
+  TEMP_BUILD_ARTIFACTS_DIR_CREATED=1
+}
+
 cleanup() {
   if [[ "$TEMP_PUBLISH_DIR_CREATED" -eq 1 && -n "$PUBLISH_DIR" ]]; then
     rm -rf "$PUBLISH_DIR"
+  fi
+  if [[ "$TEMP_BUILD_ARTIFACTS_DIR_CREATED" -eq 1 && -n "$BUILD_ARTIFACTS_DIR" ]]; then
+    rm -rf "$BUILD_ARTIFACTS_DIR"
   fi
 }
 
@@ -222,6 +243,7 @@ publish_server() {
       -c Release \
       -r linux-x64 \
       --self-contained \
+      --artifacts-path "$BUILD_ARTIFACTS_DIR" \
       -p:PublishSingleFile=true \
       -p:IncludeNativeLibrariesForSelfExtract=true \
       -o "$PUBLISH_DIR/"
@@ -401,6 +423,7 @@ main() {
   preflight_privilege
   preflight_workspace
   initialize_publish_dir
+  initialize_build_artifacts_dir
   trap cleanup EXIT
   publish_server
   sync_server_tree
