@@ -988,7 +988,7 @@ button.list-item {
 
 .channel-chat-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto minmax(110px, 160px) auto minmax(180px, 260px) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto minmax(110px, 160px) auto minmax(180px, 260px) auto;
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
@@ -1030,6 +1030,7 @@ button.list-item {
   .channel-chat-identity,
   .channel-chat-selector-label,
   .channel-chat-selector,
+  .channel-chat-auto-scroll,
   .channel-chat-refresh {
     grid-column: span 1;
   }
@@ -1201,6 +1202,19 @@ button.list-item {
   letter-spacing: 0.05em;
 }
 
+.channel-chat-auto-scroll {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.channel-chat-auto-scroll input {
+  accent-color: var(--accent);
+}
+
 .channel-chat-identity,
 .channel-chat-selector,
 .channel-chat-composer input,
@@ -1307,6 +1321,33 @@ button.list-item {
   white-space: normal;
 }
 
+.channel-chat-wake-progress {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 3px;
+  margin-right: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: normal;
+}
+
+.channel-chat-wake-progress strong {
+  color: var(--yellow);
+}
+
+.channel-chat-wake-progress-preparing strong {
+  color: var(--accent);
+}
+
+.channel-chat-wake-progress-replied strong {
+  color: var(--green);
+}
+
+.channel-chat-scroll-anchor {
+  min-height: 1px;
+}
+
 .channel-chat-delivery-status strong {
   color: var(--yellow);
 }
@@ -1344,7 +1385,7 @@ button.list-item {
 
 .channel-chat-composer {
   display: grid;
-  grid-template-columns: minmax(120px, 190px) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(110px, 150px) minmax(120px, 190px) minmax(0, 1fr) auto;
   gap: 8px;
   padding: 6px 10px;
   border-top: 1px solid var(--border);

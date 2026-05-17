@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 import type { Channel, ChannelMessage, GatewayDirectAgentMessage, GatewayMember, GatewayMemberships, GatewayTestWake } from '../api/types';
 import {
@@ -25,6 +25,13 @@ interface Props {
 }
 
 export type ChannelChatPanelSize = 'small' | 'medium' | 'large';
+type ChannelSendMode = 'channel' | 'direct';
+
+interface WakeProgress {
+  label: string;
+  detail: string;
+  state: 'recorded' | 'preparing' | 'replied';
+}
 
 const PANEL_SIZE_OPTIONS: Array<{ value: ChannelChatPanelSize; label: string }> = [
   { value: 'small', label: 'Small' },
@@ -96,6 +103,49 @@ function directMessageEvidence(message: ChannelMessage): { status: string; targe
   };
 }
 
+function findAgentReplyForMessage(message: ChannelMessage, messages: ChannelMessage[]): ChannelMessage | null {
+  const directMetadata = parseDirectMessageMetadata(message);
+  if (!directMetadata) return null;
+  const target = typeof directMetadata.targetMemberIdentity === 'string' ? directMetadata.targetMemberIdentity : '';
+  const expectedDedupeKey = target ? `channel-message:${message.id}:agent:${target}` : null;
+  return messages.find(candidate => {
+    if (candidate.senderType !== 'agent') return false;
+    if (expectedDedupeKey && candidate.dedupeKey === expectedDedupeKey) return true;
+    if (candidate.sourceKind === 'external_adapter_message' && candidate.body.includes(`message/${message.id}`)) return true;
+    return false;
+  }) ?? null;
+}
+
+function deriveWakeProgress(message: ChannelMessage, messages: ChannelMessage[]): WakeProgress | null {
+  const evidence = directMessageEvidence(message);
+  if (!evidence) return null;
+  const reply = findAgentReplyForMessage(message, messages);
+  if (reply) {
+    return {
+      label: 'Reply posted',
+      detail: `Agent response #${reply.id} is visible in the channel.`,
+      state: 'replied',
+    };
+  }
+
+  const normalizedStatus = evidence.status.toLowerCase();
+  const statusParts = normalizedStatus.split(' · ').map(part => part.trim());
+  const hasClaimOrDeliveryEvidence = statusParts.some(part => part === 'claimed' || part === 'delivered' || part === 'delivering');
+  if (hasClaimOrDeliveryEvidence) {
+    return {
+      label: 'Agent is preparing a reply',
+      detail: evidence.status,
+      state: 'preparing',
+    };
+  }
+
+  return {
+    label: 'Agent wake recorded',
+    detail: evidence.status,
+    state: 'recorded',
+  };
+}
+
 function memberIsActiveAgent(member: GatewayMember): boolean {
   return member.memberType === 'agent' && member.membershipStatus === 'active';
 }
@@ -104,6 +154,9 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
   const [draft, setDraft] = useState('');
   const [senderIdentity, setSenderIdentity] = useState(readStoredSenderIdentity);
   const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null);
+  const [sendMode, setSendMode] = useState<ChannelSendMode>('channel');
+  const [autoScroll, setAutoScroll] = useState(true);
+  const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
   const [targetMemberIdentity, setTargetMemberIdentity] = useState('');
   const [inviteIdentity, setInviteIdentity] = useState('');
   const [inviteWakePolicy, setInviteWakePolicy] = useState(DEFAULT_WAKE_POLICY);
@@ -203,7 +256,8 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
       ? 'Channel unavailable. Check den-channels API health.'
       : null;
   const identityRequired = Boolean(projectId) && normalizedSenderIdentity.length === 0;
-  const isComposerDisabled = !activeChannel || sending || Boolean(disabledReason) || identityRequired;
+  const directModeRequiresTarget = sendMode === 'direct' && !selectedTarget;
+  const isComposerDisabled = !activeChannel || sending || Boolean(disabledReason) || identityRequired || directModeRequiresTarget;
   const channelStatus = channelLoading && !activeChannel
     ? 'loading channels…'
     : channelError
@@ -226,7 +280,7 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
     setSending(true);
     setSendError(null);
     try {
-      if (selectedTarget) {
+      if (sendMode === 'direct' && selectedTarget) {
         const result = await postGatewayDirectAgentMessage({
           channelId: activeChannel.id,
           memberIdentity: selectedTarget.memberIdentity,
@@ -234,7 +288,7 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
           body,
         });
         setLastDirectResult(result);
-      } else {
+      } else if (sendMode === 'channel') {
         await postChannelMessage(activeChannel.id, {
           senderType: 'user',
           senderIdentity: normalizedSenderIdentity,
@@ -250,7 +304,7 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
     } finally {
       setSending(false);
     }
-  }, [activeChannel, draft, isComposerDisabled, normalizedSenderIdentity, refreshMessages, selectedTarget]);
+  }, [activeChannel, draft, isComposerDisabled, normalizedSenderIdentity, refreshMessages, selectedTarget, sendMode]);
 
   const handleInviteAgent = useCallback(async () => {
     const identity = inviteIdentity.trim();
@@ -300,9 +354,16 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
     ? 'Select a project to chat'
     : identityRequired
       ? 'Set Posting as before sending'
-      : selectedTarget
+      : sendMode === 'direct' && selectedTarget
         ? `Direct message ${selectedTarget.memberIdentity} in ${channelLabel(activeChannel, projectId)}`
-        : `Message ${channelLabel(activeChannel, projectId)}`;
+        : sendMode === 'direct'
+          ? 'Join or select an agent before sending a direct message'
+          : `Message ${channelLabel(activeChannel, projectId)}`;
+
+  useEffect(() => {
+    if (!autoScroll) return;
+    scrollAnchorRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
+  }, [autoScroll, sortedMessages.length]);
 
   return (
     <section className={`panel channel-chat-panel channel-chat-panel-size-${panelSize}`} aria-label="Project channel chat">
@@ -326,6 +387,14 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
             </button>
           ))}
         </div>
+        <label className="channel-chat-auto-scroll">
+          <input
+            type="checkbox"
+            checked={autoScroll}
+            onChange={event => setAutoScroll(event.target.checked)}
+          />
+          <span>Auto-scroll</span>
+        </label>
         <label className="channel-chat-identity-label" htmlFor="channel-chat-sender-identity">Posting as</label>
         <input
           id="channel-chat-sender-identity"
@@ -377,12 +446,19 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
           ) : (
             sortedMessages.map(message => {
               const evidence = directMessageEvidence(message);
+              const wakeProgress = deriveWakeProgress(message, sortedMessages);
               return (
                 <div key={message.id} className="channel-chat-message">
                   <span className="message-time">{formatTimeAgo(message.createdAt)}</span>
                   <span className={`channel-chat-sender channel-chat-sender-${message.senderType}`}>{messageSender(message)}</span>
                   <span className="channel-chat-body">
                     {message.body}
+                    {wakeProgress && (
+                      <span className={`channel-chat-wake-progress channel-chat-wake-progress-${wakeProgress.state}`}>
+                        <strong>{wakeProgress.label}</strong>
+                        <span>{wakeProgress.detail}</span>
+                      </span>
+                    )}
                     {evidence && (
                       <span className="channel-chat-delivery-status">
                         <strong>{evidence.target ? `Direct to ${evidence.target}` : 'Direct agent request'}</strong>
@@ -395,6 +471,7 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
               );
             })
           )}
+          <div className="channel-chat-scroll-anchor" ref={scrollAnchorRef} aria-hidden="true" />
         </div>
 
         <aside className="channel-chat-members" aria-label="Channel participants and active Hermes profile bindings">
@@ -484,13 +561,24 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
 
       <form className="channel-chat-composer" onSubmit={handleSubmit}>
         <select
+          className="channel-chat-send-mode"
+          value={sendMode}
+          onChange={event => setSendMode(event.target.value as ChannelSendMode)}
+          disabled={!activeChannel || sending || Boolean(disabledReason) || identityRequired}
+          aria-label="Send mode"
+          title="Choose whether to post to the whole channel or directly wake one agent."
+        >
+          <option value="channel">Channel</option>
+          <option value="direct">Direct agent</option>
+        </select>
+        <select
           value={targetMemberIdentity}
           onChange={event => setTargetMemberIdentity(event.target.value)}
-          disabled={activeAgentMembers.length === 0 || isComposerDisabled}
+          disabled={sendMode === 'channel' || activeAgentMembers.length === 0 || !activeChannel || sending || Boolean(disabledReason) || identityRequired}
           aria-label="Direct agent target"
         >
           {activeAgentMembers.length === 0 ? (
-            <option value="">channel message</option>
+            <option value="">No active agents</option>
           ) : activeAgentMembers.map(member => (
             <option key={member.id} value={member.memberIdentity}>@{member.memberIdentity}</option>
           ))}

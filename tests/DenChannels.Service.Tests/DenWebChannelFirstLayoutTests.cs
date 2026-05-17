@@ -122,6 +122,40 @@ public sealed class DenWebChannelFirstLayoutTests
     }
 
     [Fact]
+    public void ChannelChatPanel_OffersExplicitChannelAndDirectAgentSendModes()
+    {
+        var component = ReadClientSource("components", "ChannelChatPanel.tsx");
+
+        Assert.Contains("sendMode", component);
+        Assert.Contains("channel-chat-send-mode", component);
+        Assert.Contains("aria-label=\"Send mode\"", component);
+        Assert.Contains("<option value=\"channel\">Channel</option>", component);
+        Assert.Contains("<option value=\"direct\">Direct agent</option>", component);
+        Assert.Contains("sendMode === 'direct' && selectedTarget", component);
+        Assert.Contains("sendMode === 'channel'", component);
+    }
+
+    [Fact]
+    public void ChannelChatPanel_ShowsWakeProgressAndAutoscrollControls()
+    {
+        var component = ReadClientSource("components", "ChannelChatPanel.tsx");
+        var css = ReadClientSource("styles", "index.css");
+
+        Assert.Contains("channel-chat-auto-scroll", component);
+        Assert.Contains("Auto-scroll", component);
+        Assert.Contains("scrollIntoView", component);
+        Assert.Contains("channel-chat-scroll-anchor", component);
+
+        Assert.Contains("deriveWakeProgress", component);
+        Assert.Contains("channel-chat-wake-progress", component);
+        Assert.Contains("Agent wake recorded", component);
+        Assert.Contains("Agent is preparing a reply", component);
+        Assert.Contains("Reply posted", component);
+        Assert.Contains(".channel-chat-wake-progress", css);
+        Assert.Contains(".channel-chat-auto-scroll", css);
+    }
+
+    [Fact]
     public void GatewayMembershipUiTypes_DoNotExposeRawSettingsJsonPreview()
     {
         var component = ReadClientSource("components", "ChannelChatPanel.tsx");
