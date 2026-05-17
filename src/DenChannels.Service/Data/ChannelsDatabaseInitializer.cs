@@ -45,7 +45,31 @@ public sealed class ChannelsDatabaseInitializer
         }
 
         await EnsureChannelMessageCompatibilityColumnsAsync(connection, cancellationToken);
+        await EnsureChannelMessagesSourceKindConstraintAsync(connection, cancellationToken);
         await ExecuteNonQueryAsync(connection, PostCreateIndexesSql, cancellationToken);
+    }
+
+    private static async Task EnsureChannelMessagesSourceKindConstraintAsync(SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "channel_messages", cancellationToken))
+            return;
+
+        var createSql = await GetTableCreateSqlAsync(connection, "channel_messages", cancellationToken);
+        if (createSql?.Contains("'gateway_delivery'", StringComparison.OrdinalIgnoreCase) == true)
+            return;
+
+        await ExecuteNonQueryAsync(connection, RebuildChannelMessagesWithGatewayDeliverySourceKindSql, cancellationToken);
+    }
+
+    private static async Task<string?> GetTableCreateSqlAsync(SqliteConnection connection, string tableName,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = $name;";
+        command.Parameters.AddWithValue("$name", tableName);
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        return value as string;
     }
 
     private static async Task EnsureChannelMessageCompatibilityColumnsAsync(SqliteConnection connection,
@@ -268,5 +292,62 @@ public sealed class ChannelsDatabaseInitializer
         CREATE UNIQUE INDEX IF NOT EXISTS ux_channel_messages_dedupe
             ON channel_messages(channel_id, dedupe_key)
             WHERE dedupe_key IS NOT NULL;
+        """;
+
+    private const string RebuildChannelMessagesWithGatewayDeliverySourceKindSql = """
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE channel_messages__new (
+            id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id             INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+            sender_type            TEXT NOT NULL
+                                   CHECK (sender_type IN ('user', 'agent', 'system', 'bridge')),
+            sender_identity        TEXT NOT NULL,
+            body                   TEXT NOT NULL,
+            message_kind           TEXT NOT NULL DEFAULT 'human_text'
+                                   CHECK (message_kind IN ('human_text', 'agent_text', 'system_event', 'mirror_summary', 'command', 'command_result')),
+            source_kind            TEXT
+                                   CHECK (source_kind IS NULL OR source_kind IN ('task_message', 'agent_stream_entry', 'notification', 'worker_run', 'review_round', 'review_finding', 'wake_event', 'gateway_delivery', 'external_adapter_message')),
+            source_id              TEXT,
+            source_project_id      TEXT,
+            summary                TEXT,
+            deep_link              TEXT,
+            thread_root_message_id INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
+            reply_to_message_id    INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
+            metadata_json          TEXT,
+            dedupe_key             TEXT,
+            created_at             TEXT NOT NULL DEFAULT (datetime('now')),
+            edited_at              TEXT,
+            deleted_at             TEXT
+        );
+
+        INSERT INTO channel_messages__new(
+            id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id,
+            source_project_id, summary, deep_link, thread_root_message_id, reply_to_message_id,
+            metadata_json, dedupe_key, created_at, edited_at, deleted_at)
+        SELECT
+            id,
+            channel_id,
+            sender_type,
+            sender_identity,
+            body,
+            COALESCE(message_kind, CASE WHEN sender_type = 'agent' THEN 'agent_text' ELSE 'human_text' END),
+            source_kind,
+            source_id,
+            source_project_id,
+            summary,
+            deep_link,
+            thread_root_message_id,
+            reply_to_message_id,
+            metadata_json,
+            dedupe_key,
+            COALESCE(created_at, datetime('now')),
+            edited_at,
+            deleted_at
+        FROM channel_messages
+        ORDER BY id;
+
+        DROP TABLE channel_messages;
+        ALTER TABLE channel_messages__new RENAME TO channel_messages;
+        PRAGMA foreign_keys = ON;
         """;
 }

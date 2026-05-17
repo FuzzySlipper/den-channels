@@ -181,6 +181,55 @@ public sealed class ChannelsDatabaseInitializerTests
         Assert.Contains("dedupe_key", messageColumns);
     }
 
+    [Fact]
+    public async Task ApplyMigrationsAsync_RebuildsLegacySourceKindConstraintForGatewayDelivery()
+    {
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ExecuteAsync(connection, """
+            CREATE TABLE channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                project_id TEXT
+            );
+            CREATE TABLE channel_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                sender_type TEXT NOT NULL CHECK (sender_type IN ('user', 'agent', 'system', 'bridge')),
+                sender_identity TEXT NOT NULL,
+                body TEXT NOT NULL,
+                message_kind TEXT NOT NULL DEFAULT 'human_text'
+                    CHECK (message_kind IN ('human_text', 'agent_text', 'system_event', 'mirror_summary', 'command', 'command_result')),
+                source_kind TEXT
+                    CHECK (source_kind IS NULL OR source_kind IN ('task_message', 'agent_stream_entry', 'notification', 'worker_run', 'review_round', 'review_finding', 'wake_event', 'external_adapter_message')),
+                source_id TEXT,
+                source_project_id TEXT,
+                summary TEXT,
+                deep_link TEXT,
+                thread_root_message_id INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
+                reply_to_message_id INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
+                metadata_json TEXT,
+                dedupe_key TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                edited_at TEXT,
+                deleted_at TEXT
+            );
+            INSERT INTO channels(slug, display_name, kind, project_id)
+            VALUES ('project-den-channels', 'Den Channels', 'project_default', 'den-channels');
+            INSERT INTO channel_messages(channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id, dedupe_key)
+            VALUES (1, 'system', 'den-router', 'Existing wake', 'system_event', 'wake_event', 'wake-1', 'den-channels', 'wake-1');
+            """);
+
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        await ExecuteAsync(connection, """
+            INSERT INTO channel_messages(channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id, dedupe_key)
+            VALUES (1, 'agent', 'den-channels-runner', 'Gateway delivery reply', 'agent_text', 'gateway_delivery', '44', 'den-channels', 'gateway-delivery:44');
+            """);
+        Assert.Equal(2, await CountRowsAsync(connection, "channel_messages"));
+    }
+
     private static async Task<SqliteConnection> OpenInMemoryDatabaseAsync()
     {
         var connection = new SqliteConnection("Data Source=:memory:");
