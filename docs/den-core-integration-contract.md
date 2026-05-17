@@ -116,8 +116,9 @@ Supported `source_kind` values should initially match the channel schema:
 - `worker_run`
 - `review_round`
 - `review_finding`
-- `wake_event` later
-- `external_adapter_message` only for gateway/adapter ingress later
+- `wake_event`
+- `gateway_delivery` for first-party Den Gateway / Hermes Gateway delivery replies
+- `external_adapter_message` only for true external adapter ingress or temporary gateway cutover compatibility
 
 Rules:
 
