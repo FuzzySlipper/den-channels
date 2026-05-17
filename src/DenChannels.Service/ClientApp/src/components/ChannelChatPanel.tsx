@@ -112,7 +112,11 @@ function findAgentReplyForMessage(message: ChannelMessage, messages: ChannelMess
     if (candidate.senderType !== 'agent') return false;
     if (candidate.id <= message.id) return false;
     if (candidate.dedupeKey === expectedDedupeKey) return true;
-    if (candidate.sourceKind === 'external_adapter_message' && candidate.senderIdentity === target && candidate.body.includes(`message/${message.id}`)) return true;
+    if (
+      (candidate.sourceKind === 'gateway_delivery' || candidate.sourceKind === 'external_adapter_message')
+      && candidate.senderIdentity === target
+      && candidate.body.includes(`message/${message.id}`)
+    ) return true;
     return false;
   }) ?? null;
 }

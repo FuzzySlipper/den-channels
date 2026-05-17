@@ -181,7 +181,7 @@ public sealed class ChannelsDatabaseInitializer
             message_kind           TEXT NOT NULL DEFAULT 'human_text'
                                    CHECK (message_kind IN ('human_text', 'agent_text', 'system_event', 'mirror_summary', 'command', 'command_result')),
             source_kind            TEXT
-                                   CHECK (source_kind IS NULL OR source_kind IN ('task_message', 'agent_stream_entry', 'notification', 'worker_run', 'review_round', 'review_finding', 'wake_event', 'external_adapter_message')),
+                                   CHECK (source_kind IS NULL OR source_kind IN ('task_message', 'agent_stream_entry', 'notification', 'worker_run', 'review_round', 'review_finding', 'wake_event', 'gateway_delivery', 'external_adapter_message')),
             source_id              TEXT,
             source_project_id      TEXT,
             summary                TEXT,

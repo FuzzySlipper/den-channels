@@ -172,6 +172,15 @@ public sealed class DenWebChannelFirstLayoutTests
     }
 
     [Fact]
+    public void ChannelChatPanel_TreatsGatewayDeliveryAsAgentReplyEvidenceDuringCutover()
+    {
+        var component = ReadClientSource("components", "ChannelChatPanel.tsx");
+
+        Assert.Contains("candidate.sourceKind === 'gateway_delivery'", component);
+        Assert.Contains("candidate.sourceKind === 'external_adapter_message'", component);
+    }
+
+    [Fact]
     public void GatewayMembershipUiTypes_DoNotExposeRawSettingsJsonPreview()
     {
         var component = ReadClientSource("components", "ChannelChatPanel.tsx");

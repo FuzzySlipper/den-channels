@@ -33,6 +33,7 @@ public sealed class MirrorSummaryIngestionService
         "review_round",
         "review_finding",
         "wake_event",
+        "gateway_delivery",
         "external_adapter_message"
     };
 

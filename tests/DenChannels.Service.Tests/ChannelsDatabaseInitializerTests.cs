@@ -119,6 +119,48 @@ public sealed class ChannelsDatabaseInitializerTests
     }
 
     [Fact]
+    public async Task ChannelMessageSchema_AcceptsGatewayDeliverySourceKind()
+    {
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        await ExecuteAsync(connection, """
+            INSERT INTO channels(slug, display_name, kind, project_id)
+            VALUES ('project-den-channels', 'Den Channels', 'project_default', 'den-channels');
+            INSERT INTO channel_messages(
+                channel_id,
+                sender_type,
+                sender_identity,
+                body,
+                message_kind,
+                source_kind,
+                source_id,
+                source_project_id,
+                dedupe_key)
+            VALUES (
+                1,
+                'agent',
+                'den-channels-runner',
+                'Gateway delivery reply',
+                'agent_text',
+                'gateway_delivery',
+                '44',
+                'den-channels',
+                'gateway-delivery:44');
+            """);
+
+        var row = await QuerySingleAsync(connection, """
+            SELECT source_kind, source_id, source_project_id
+            FROM channel_messages
+            WHERE dedupe_key = 'gateway-delivery:44';
+            """);
+
+        Assert.Equal("gateway_delivery", row["source_kind"]);
+        Assert.Equal("44", row["source_id"]);
+        Assert.Equal("den-channels", row["source_project_id"]);
+    }
+
+    [Fact]
     public async Task ApplyMigrationsAsync_AddsSourceProjectIdToLegacyChannelMessagesTable()
     {
         await using var connection = await OpenInMemoryDatabaseAsync();

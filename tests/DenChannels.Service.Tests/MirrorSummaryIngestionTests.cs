@@ -66,6 +66,38 @@ public sealed class MirrorSummaryIngestionTests : IDisposable
     }
 
     [Fact]
+    public async Task Ingest_AcceptsGatewayDeliverySourceKindForVisibleReplies()
+    {
+        using var client = _factory.CreateClient();
+
+        var result = await PostIngestAsync(client, new
+        {
+            events = new[]
+            {
+                new
+                {
+                    eventType = "gateway_delivery_completed",
+                    projectId = "den-channels",
+                    sourceKind = "gateway_delivery",
+                    sourceId = "44",
+                    summaryHint = "den-channels-runner replied to channel message #12.",
+                    deepLink = "den://channel/2/message/13",
+                    actor = "den-channels-runner",
+                    severity = "normal",
+                    dedupeKey = "gateway-delivery:44"
+                }
+            }
+        });
+
+        Assert.Equal(1, result.Created);
+        var message = Assert.Single(result.Messages);
+        Assert.Equal("gateway_delivery", message.SourceKind);
+        Assert.Equal("44", message.SourceId);
+        Assert.Equal("den://channel/2/message/13", message.DeepLink);
+        Assert.Equal("gateway-delivery:44", message.DedupeKey);
+    }
+
+    [Fact]
     public async Task Ingest_DedupesRetries()
     {
         using var client = _factory.CreateClient();
