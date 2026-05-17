@@ -96,6 +96,32 @@ public sealed class DenWebChannelFirstLayoutTests
     }
 
     [Fact]
+    public void ChannelChatPanel_OffersSmallMediumLargeSizeModesForReadableParticipants()
+    {
+        var app = ReadClientSource("App.tsx");
+        var component = ReadClientSource("components", "ChannelChatPanel.tsx");
+        var css = ReadClientSource("styles", "index.css");
+
+        Assert.Contains("channelPanelSize", app);
+        Assert.Contains("dashboard-channel-size-", app);
+        Assert.Contains("panelSize={channelPanelSize}", app);
+        Assert.Contains("onPanelSizeChange={setChannelPanelSize}", app);
+
+        Assert.Contains("aria-label=\"Channel panel size\"", component);
+        Assert.Contains("channel-chat-size-controls", component);
+        Assert.Contains("channel-chat-size-button", component);
+        Assert.Contains("Small", component);
+        Assert.Contains("Medium", component);
+        Assert.Contains("Large", component);
+
+        Assert.Contains(".dashboard-channel-size-small", css);
+        Assert.Contains(".dashboard-channel-size-medium", css);
+        Assert.Contains(".dashboard-channel-size-large", css);
+        Assert.Contains(".channel-chat-panel-size-small .channel-chat-body-region", css);
+        Assert.Contains(".channel-chat-panel-size-large .channel-chat-body-region", css);
+    }
+
+    [Fact]
     public void GatewayMembershipUiTypes_DoNotExposeRawSettingsJsonPreview()
     {
         var component = ReadClientSource("components", "ChannelChatPanel.tsx");

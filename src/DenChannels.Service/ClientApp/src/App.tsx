@@ -26,6 +26,7 @@ import { LibrarianView } from './components/LibrarianView';
 import { GitView } from './components/GitView';
 import { DispatchDetail } from './components/DispatchDetail';
 import { ChannelChatPanel } from './components/ChannelChatPanel';
+import type { ChannelChatPanelSize } from './components/ChannelChatPanel';
 import { agentStreamEntryVisibility } from './subagentRuns';
 import { documentSelectionAction } from './documentEditor';
 import type { GitFocus } from './git';
@@ -80,6 +81,7 @@ export default function App() {
   const [streamTaskFilter, setStreamTaskFilter] = useState('');
   const [showRawSubagentWorkEvents, setShowRawSubagentWorkEvents] = useState(false);
   const [sortMode, setSortMode] = useState('priority');
+  const [channelPanelSize, setChannelPanelSize] = useState<ChannelChatPanelSize>('medium');
 
   const fetchProjects = useCallback(() => listProjects(), []);
   const { data: projects } = usePolling(fetchProjects, 5000);
@@ -349,7 +351,7 @@ export default function App() {
   }, [handleThreadOpen]);
 
   return (
-    <div className="dashboard">
+    <div className={`dashboard dashboard-channel-size-${channelPanelSize}`}>
       <div className="dashboard-workspace">
         <ProjectSidebar
           spaces={spaces}
@@ -490,6 +492,8 @@ export default function App() {
       <ChannelChatPanel
         projectId={!isGlobal ? effectiveSpaceId : null}
         spaceName={activeSpace?.name ?? effectiveSpaceId}
+        panelSize={channelPanelSize}
+        onPanelSizeChange={setChannelPanelSize}
       />
 
       {/* Detail overlays */}

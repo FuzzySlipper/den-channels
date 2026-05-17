@@ -20,7 +20,17 @@ const DEFAULT_WAKE_POLICY = 'mentions_only';
 interface Props {
   projectId: string | null;
   spaceName?: string | null;
+  panelSize: ChannelChatPanelSize;
+  onPanelSizeChange: (size: ChannelChatPanelSize) => void;
 }
+
+export type ChannelChatPanelSize = 'small' | 'medium' | 'large';
+
+const PANEL_SIZE_OPTIONS: Array<{ value: ChannelChatPanelSize; label: string }> = [
+  { value: 'small', label: 'Small' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'large', label: 'Large' },
+];
 
 function channelLabel(channel: Channel | null, projectId: string | null): string {
   if (channel) return `#${channel.slug}`;
@@ -90,7 +100,7 @@ function memberIsActiveAgent(member: GatewayMember): boolean {
   return member.memberType === 'agent' && member.membershipStatus === 'active';
 }
 
-export function ChannelChatPanel({ projectId, spaceName }: Props) {
+export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeChange }: Props) {
   const [draft, setDraft] = useState('');
   const [senderIdentity, setSenderIdentity] = useState(readStoredSenderIdentity);
   const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null);
@@ -295,12 +305,26 @@ export function ChannelChatPanel({ projectId, spaceName }: Props) {
         : `Message ${channelLabel(activeChannel, projectId)}`;
 
   return (
-    <section className="panel channel-chat-panel" aria-label="Project channel chat">
+    <section className={`panel channel-chat-panel channel-chat-panel-size-${panelSize}`} aria-label="Project channel chat">
       <div className="channel-chat-header">
         <div className="channel-chat-title">
           <span className="channel-chat-kicker">Channel</span>
           <strong>{channelLabel(activeChannel, projectId)}</strong>
           <span>{channelStatus}</span>
+        </div>
+        <div className="channel-chat-size-controls" role="group" aria-label="Channel panel size">
+          {PANEL_SIZE_OPTIONS.map(option => (
+            <button
+              key={option.value}
+              type="button"
+              className={`channel-chat-size-button ${panelSize === option.value ? 'active' : ''}`}
+              aria-pressed={panelSize === option.value}
+              onClick={() => onPanelSizeChange(option.value)}
+              title={`Set channel panel size to ${option.label.toLowerCase()}`}
+            >
+              {option.label}
+            </button>
+          ))}
         </div>
         <label className="channel-chat-identity-label" htmlFor="channel-chat-sender-identity">Posting as</label>
         <input
