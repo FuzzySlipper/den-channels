@@ -181,6 +181,67 @@ public sealed class DenWebChannelFirstLayoutTests
     }
 
     [Fact]
+    public void SessionsView_IsTopLevelWorkspaceTab_AndKeepsCompactChannelChatPanel()
+    {
+        var app = ReadClientSource("App.tsx");
+        var filterBar = ReadClientSource("components", "FilterBar.tsx");
+
+        Assert.Contains("'sessions'", filterBar);
+        Assert.Contains("onViewModeChange('sessions')", filterBar);
+        Assert.Contains("Sessions", filterBar);
+
+        Assert.Contains("FocusedSessionView", app);
+        Assert.Contains("viewMode === 'sessions'", app);
+        Assert.Contains("<FocusedSessionView", app);
+        Assert.Contains("<ChannelChatPanel", app);
+    }
+
+    [Fact]
+    public void FocusedSessionView_UsesDurableChannelSessionApiSeamAndAffordances()
+    {
+        Assert.True(ClientFileExists("components", "FocusedSessionView.tsx"));
+        var component = ReadClientSource("components", "FocusedSessionView.tsx");
+
+        Assert.Contains("listChannels", component);
+        Assert.Contains("ensureProjectDefaultChannel", component);
+        Assert.Contains("listChannelMessages", component);
+        Assert.Contains("postChannelMessage", component);
+        Assert.Contains("listGatewayMemberships", component);
+        Assert.Contains("listDesktopSessionSnapshots", component);
+        Assert.Contains("listDesktopSessionEvents", component);
+
+        Assert.Contains("focused-session-view", component);
+        Assert.Contains("focused-session-selector", component);
+        Assert.Contains("Live sessions", component);
+        Assert.Contains("Recent sessions", component);
+        Assert.Contains("Connected transcript", component);
+        Assert.Contains("Conversation", component);
+        Assert.Contains("Workflow evidence", component);
+        Assert.Contains("Command/result", component);
+        Assert.Contains("Status evidence", component);
+        Assert.Contains("Tool evidence", component);
+        Assert.Contains("Den context", component);
+        Assert.Contains("Posting as", component);
+        Assert.Contains("Slash commands", component);
+        Assert.Contains("Direct agent target", component);
+        Assert.Contains("/new", component);
+        Assert.Contains("senderIdentity", component);
+        Assert.Contains("messageKind: body.startsWith('/') ? 'command' : 'human_text'", component);
+        Assert.Contains("<option value=\"\">Channel lane</option>", component);
+        Assert.Contains("targetMemberIdentity && !activeAgentMembers.some", component);
+        Assert.Contains("selectedChannelLane", component);
+        Assert.Contains("listChannelMessages(activeChannel.id", component);
+        Assert.Contains("listGatewayMemberships({ channelId: activeChannel.id })", component);
+        Assert.Contains("safeEvidenceLink", component);
+        Assert.Contains("/api/gateway/messages/${message.id}", component);
+        Assert.DoesNotContain("/api/channels/messages/${message.id}", component);
+        Assert.DoesNotContain("messageKind: body.startsWith('/') ? 'slash_command'", component);
+        Assert.DoesNotContain("sourceKind: 'focused_session_view'", component);
+        Assert.DoesNotContain("postGatewayDirectAgentMessage", component);
+        Assert.DoesNotContain("attach", component, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void GatewayMembershipUiTypes_DoNotExposeRawSettingsJsonPreview()
     {
         var component = ReadClientSource("components", "ChannelChatPanel.tsx");

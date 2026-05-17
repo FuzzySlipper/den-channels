@@ -1427,6 +1427,383 @@ button.list-item {
   border-color: var(--accent-dim);
 }
 
+/* Focused durable session workspace */
+.focused-session-view {
+  min-height: 100%;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  background: var(--bg-surface);
+}
+
+.focused-session-toolbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.35fr) auto minmax(280px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.focused-session-title {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.focused-session-title span:first-child,
+.focused-session-selector-label,
+.focused-session-composer label {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.focused-session-title strong {
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.focused-session-selector,
+.focused-session-refresh,
+.focused-session-composer input,
+.focused-session-composer select,
+.focused-session-composer button {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+
+.focused-session-selector {
+  min-width: 0;
+  padding: 4px 8px;
+}
+
+.focused-session-refresh,
+.focused-session-composer button {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.focused-session-refresh:hover,
+.focused-session-composer button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-bright);
+}
+
+.focused-session-error {
+  padding: 6px 10px;
+  border-bottom: 1px solid #6a2a3c;
+  background: #31151e;
+  color: var(--red);
+  font-size: 12px;
+}
+
+.focused-session-grid {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+}
+
+.focused-session-transcript,
+.focused-session-sidebar {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.focused-session-transcript {
+  padding: 10px;
+}
+
+.focused-session-sidebar {
+  border-left: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.12);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.focused-session-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.focused-session-section-header h3,
+.focused-session-card h3,
+.focused-session-conversation h4,
+.focused-session-workflow h4 {
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.focused-session-section-header span,
+.focused-session-subtitle,
+.focused-session-empty {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.focused-session-conversation,
+.focused-session-workflow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.focused-session-message,
+.focused-session-card,
+.focused-session-event,
+.focused-session-member {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 5px;
+}
+
+.focused-session-message {
+  padding: 8px;
+  border-left: 3px solid var(--text-muted);
+}
+
+.focused-session-message-agent { border-left-color: var(--purple); }
+.focused-session-message-user { border-left-color: var(--accent); }
+.focused-session-command-result { border-left-color: var(--cyan); }
+
+.focused-session-message-meta {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  margin-bottom: 4px;
+}
+
+.focused-session-message-meta strong {
+  color: var(--text-bright);
+}
+
+.focused-session-message p,
+.focused-session-card p,
+.focused-session-event p {
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+
+.focused-session-message a {
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.focused-session-evidence-inline {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.focused-session-evidence-inline strong {
+  color: var(--yellow);
+}
+
+.focused-session-card {
+  padding: 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.focused-session-context-list {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 9px;
+  font-size: 11px;
+}
+
+.focused-session-context-list dt {
+  color: var(--text-muted);
+}
+
+.focused-session-context-list dd {
+  color: var(--text);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+}
+
+.focused-session-state,
+.focused-session-status-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.focused-session-state-active,
+.focused-session-state-replied {
+  background: #1a2e1a;
+  color: var(--green);
+}
+
+.focused-session-state-working,
+.focused-session-state-queued {
+  background: #3b2a14;
+  color: var(--yellow);
+}
+
+.focused-session-state-failed {
+  background: #3a1a24;
+  color: var(--red);
+}
+
+.focused-session-state-stale {
+  background: #2a2b3d;
+  color: var(--orange);
+}
+
+.focused-session-warning-list,
+.focused-session-warning {
+  color: var(--yellow);
+  font-size: 11px;
+}
+
+.focused-session-warning-list {
+  padding-left: 18px;
+}
+
+.focused-session-warning {
+  border: 1px solid #5b3b17;
+  background: #3b2a14;
+  border-radius: 4px;
+  padding: 5px 7px;
+}
+
+.focused-session-event-list,
+.focused-session-member-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.focused-session-event {
+  padding: 6px 7px;
+}
+
+.focused-session-event span {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.focused-session-event strong {
+  display: block;
+  color: var(--cyan);
+  font-size: 11px;
+  margin: 2px 0;
+}
+
+.focused-session-member {
+  appearance: none;
+  text-align: left;
+  color: var(--text);
+  padding: 6px 7px;
+  display: grid;
+  gap: 2px;
+  cursor: pointer;
+}
+
+.focused-session-member:hover:not(:disabled),
+.focused-session-member.selected {
+  background: var(--bg-hover);
+  border-color: var(--accent-dim);
+}
+
+.focused-session-member:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.focused-session-member strong {
+  color: var(--text-bright);
+  font-family: var(--font-mono);
+}
+
+.focused-session-member span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.focused-session-composer {
+  display: grid;
+  grid-template-columns: auto minmax(120px, 180px) auto minmax(130px, 190px) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.focused-session-composer input,
+.focused-session-composer select {
+  min-width: 0;
+  padding: 5px 8px;
+}
+
+.focused-session-draft {
+  font-family: var(--font-sans);
+}
+
+.focused-session-composer button:disabled,
+.focused-session-composer input:disabled,
+.focused-session-composer select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.focused-session-composer-help {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+@media (max-width: 1000px) {
+  .focused-session-toolbar,
+  .focused-session-grid,
+  .focused-session-composer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .focused-session-sidebar {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+}
+
 /* Dispatch items */
 .dispatch-list {
   display: flex;
