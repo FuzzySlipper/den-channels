@@ -1,6 +1,6 @@
 # Durable Den Channels Gateway Sessions and Focused Session UI Spec
 
-Status: implementation-ready spec for Den task #1494, coordinated with #1480.
+Status: implemented and live. Tasks #1495/#1498/#1499 cut over Den Channels to the durable Hermes Gateway `den_channels` adapter; task #1496 archived the legacy one-shot wake/heartbeat systemd path.
 
 Related Den records:
 
@@ -308,23 +308,29 @@ Required follow-up code changes for #1495:
 - update UI reply detection to recognize both during cutover, then prefer `gateway_delivery`;
 - update docs and tests so `external_adapter_message` is only for true external adapter ingress or temporary compatibility.
 
-## 8. Heartbeat / one-shot wake cleanup plan
+## 8. Heartbeat / one-shot wake cleanup result
 
-The current heartbeat and one-shot wake path are test scaffolding, not protected legacy.
+The previous heartbeat and one-shot wake path was test scaffolding, not protected legacy, and is no longer the Den Channels production path.
 
-Known pieces to audit/remove or relabel after cutover:
+Current green path:
 
-- `hermes-den-channels-heartbeat@.service` style profile heartbeat units;
-- `den-gateway-hermes-consumer.service` / `GatewayDeliveryConsumer` one-shot wake claimer;
-- `SpawnedHermesProfileWakeTransport` and `/tmp/den-hermes-wakes` envelope flow;
-- UI labels/buttons that imply “test wake” is the current production path;
-- docs that present `hermes chat -q` wake runs as the green path.
+- `hermes-gateway@den-channels-runner.service` is the durable user service for Den Channels agent delivery.
+- The Hermes Gateway `den_channels` platform adapter heartbeats its Gateway binding, claims delivery requests, runs the lane through `GatewayRunner` / `SessionStore`, and posts visible replies with `sourceKind=gateway_delivery` and final dedupe keys shaped `gateway-delivery:{delivery_request_id}:final`.
+- `external_adapter_message` remains only for true external adapter ingress or temporary compatibility, not for first-party Den Gateway / Hermes Gateway delivery replies.
+
+Archived legacy pieces after live cutover:
+
+- `den-gateway-hermes-consumer.service` — old one-shot `den_hermes.gateway_consumer` delivery claimer.
+- `hermes-den-channels-heartbeat@.service` and `hermes-den-channels-heartbeat@.timer` — synthetic profile binding heartbeat units.
+- `/home/agents/bin/den_hermes_profile_binding_heartbeat.py` — helper used by the heartbeat timer.
+
+The installed copies were moved to `/home/agents/runtime/legacy-den-channels-cleanup-1496/20260517T075837Z/` with an archive README. Restore them only for historical debugging; do not enable them as a current Den Channels path.
+
+Code that still exists in sibling repositories for historical tests, such as `den_hermes.channels_bridge.SpawnedHermesProfileWakeTransport` and `/tmp/den-hermes-wakes` envelope handling, is legacy bridge/test infrastructure. It should not be presented as the current Den Channels green path.
 
 Cutover rule:
 
-- Before #1495 lands, any retained one-shot path must be labeled test-only.
-- After the native durable Gateway path is live and smoked, remove or disable the one-shot consumer by default.
-- Do not leave two plausible “current” paths without an explicit deprecation/cleanup note.
+- Do not leave two plausible “current” paths. If any old one-shot wake or synthetic heartbeat artifact is temporarily restored for debugging, label it legacy/test-only and disable it again before closing the maintenance window.
 
 ## 9. Implementation slices for #1495
 
