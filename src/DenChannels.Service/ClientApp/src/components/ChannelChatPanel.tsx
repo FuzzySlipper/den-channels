@@ -103,15 +103,16 @@ function directMessageEvidence(message: ChannelMessage): { status: string; targe
   };
 }
 
-function findAgentReplyForMessage(message: ChannelMessage, messages: ChannelMessage[]): ChannelMessage | null {
+function findAgentReplyForMessage(message: ChannelMessage, messages: ChannelMessage[], agentIdentity?: string): ChannelMessage | null {
   const directMetadata = parseDirectMessageMetadata(message);
-  if (!directMetadata) return null;
-  const target = typeof directMetadata.targetMemberIdentity === 'string' ? directMetadata.targetMemberIdentity : '';
-  const expectedDedupeKey = target ? `channel-message:${message.id}:agent:${target}` : null;
+  const target = agentIdentity ?? (typeof directMetadata?.targetMemberIdentity === 'string' ? directMetadata.targetMemberIdentity : '');
+  if (!target) return null;
+  const expectedDedupeKey = `channel-message:${message.id}:agent:${target}`;
   return messages.find(candidate => {
     if (candidate.senderType !== 'agent') return false;
-    if (expectedDedupeKey && candidate.dedupeKey === expectedDedupeKey) return true;
-    if (candidate.sourceKind === 'external_adapter_message' && candidate.body.includes(`message/${message.id}`)) return true;
+    if (candidate.id <= message.id) return false;
+    if (candidate.dedupeKey === expectedDedupeKey) return true;
+    if (candidate.sourceKind === 'external_adapter_message' && candidate.senderIdentity === target && candidate.body.includes(`message/${message.id}`)) return true;
     return false;
   }) ?? null;
 }
@@ -144,6 +145,41 @@ function deriveWakeProgress(message: ChannelMessage, messages: ChannelMessage[])
     detail: evidence.status,
     state: 'recorded',
   };
+}
+
+function participantShouldWakeForMessage(member: GatewayMember, message: ChannelMessage): boolean {
+  if (message.senderType !== 'user' || message.messageKind !== 'human_text') return false;
+  const directMetadata = parseDirectMessageMetadata(message);
+  if (directMetadata) {
+    return directMetadata.targetMemberIdentity === member.memberIdentity;
+  }
+
+  const body = message.body.toLowerCase();
+  const mention = `@${member.memberIdentity.toLowerCase()}`;
+  switch (member.wakePolicy) {
+    case 'all_human_messages':
+      return true;
+    case 'all_messages_except_self':
+      return message.senderIdentity !== member.memberIdentity;
+    case 'mentions_only':
+      return body.includes(mention);
+    case 'direct_questions_only':
+      return body.includes(mention) && body.includes('?');
+    default:
+      return false;
+  }
+}
+
+function deriveParticipantActivity(member: GatewayMember, messages: ChannelMessage[]): 'active' | 'working' {
+  if (!memberIsActiveAgent(member)) return 'active';
+  for (const message of [...messages].reverse()) {
+    if (message.senderType === 'agent' && message.senderIdentity === member.memberIdentity) {
+      return 'active';
+    }
+    if (!participantShouldWakeForMessage(member, message)) continue;
+    return findAgentReplyForMessage(message, messages, member.memberIdentity) ? 'active' : 'working';
+  }
+  return 'active';
 }
 
 function memberIsActiveAgent(member: GatewayMember): boolean {
@@ -236,7 +272,11 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
     return [...visibleMessages].sort((left, right) => left.id - right.id);
   }, [activeChannel, messages]);
 
-  const members = memberships?.members ?? [];
+  const members = useMemo(() => memberships?.members ?? [], [memberships]);
+  const memberActivityByIdentity = useMemo(() => {
+    const entries = members.map(member => [member.memberIdentity, deriveParticipantActivity(member, sortedMessages)] as const);
+    return new Map(entries);
+  }, [members, sortedMessages]);
   const activeAgentMembers = members.filter(memberIsActiveAgent);
   const selectedTarget = activeAgentMembers.find(member => member.memberIdentity === targetMemberIdentity) ?? null;
 
@@ -484,20 +524,27 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
               <div className="channel-chat-state channel-chat-state-error">{membershipsError.message}</div>
             ) : members.length === 0 ? (
               <div className="channel-chat-state channel-chat-state-muted">No joined agents yet.</div>
-            ) : members.map(member => (
-              <button
-                key={member.id}
-                type="button"
-                className={`channel-chat-member ${member.memberIdentity === targetMemberIdentity ? 'selected' : ''}`}
-                onClick={() => memberIsActiveAgent(member) && setTargetMemberIdentity(member.memberIdentity)}
-                disabled={!memberIsActiveAgent(member)}
-                title={memberStatus(member)}
-              >
-                <span className={`channel-chat-member-type member-type-${member.memberType}`}>{member.memberType}</span>
-                <span className="channel-chat-member-identity">{member.memberIdentity}</span>
-                <span className="channel-chat-member-status">{memberStatus(member)}</span>
-              </button>
-            ))}
+            ) : members.map(member => {
+              const activity = memberActivityByIdentity.get(member.memberIdentity) ?? 'active';
+              const activityClass = activity === 'working' ? 'channel-chat-member-working' : 'channel-chat-member-active';
+              const status = memberStatus(member);
+              const visibleStatus = activity === 'working' ? status.replace(/^active/, 'working') : status;
+              return (
+                <button
+                  key={member.id}
+                  type="button"
+                  className={`channel-chat-member ${activityClass} ${member.memberIdentity === targetMemberIdentity ? 'selected' : ''}`}
+                  onClick={() => memberIsActiveAgent(member) && setTargetMemberIdentity(member.memberIdentity)}
+                  disabled={!memberIsActiveAgent(member)}
+                  title={visibleStatus}
+                >
+                  <span className={`channel-chat-member-type member-type-${member.memberType}`}>{member.memberType}</span>
+                  <span className="channel-chat-member-identity">{member.memberIdentity}</span>
+                  <span className={`member-activity member-activity-${activity}`}>{activity}</span>
+                  <span className="channel-chat-member-status">{visibleStatus}</span>
+                </button>
+              );
+            })}
           </div>
           <div className="channel-chat-invite">
             <input

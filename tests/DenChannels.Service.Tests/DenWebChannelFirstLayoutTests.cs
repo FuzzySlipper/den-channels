@@ -156,6 +156,22 @@ public sealed class DenWebChannelFirstLayoutTests
     }
 
     [Fact]
+    public void ChannelChatPanel_ShowsParticipantWorkingStateWhileReplyPending()
+    {
+        var component = ReadClientSource("components", "ChannelChatPanel.tsx");
+        var css = ReadClientSource("styles", "index.css");
+
+        Assert.Contains("deriveParticipantActivity", component);
+        Assert.Contains("memberActivityByIdentity", component);
+        Assert.Contains("channel-chat-member-working", component);
+        Assert.Contains("working", component);
+        Assert.Contains("all_human_messages", component);
+        Assert.Contains("all_messages_except_self", component);
+        Assert.Contains(".channel-chat-member-working", css);
+        Assert.Contains(".member-activity-working", css);
+    }
+
+    [Fact]
     public void GatewayMembershipUiTypes_DoNotExposeRawSettingsJsonPreview()
     {
         var component = ReadClientSource("components", "ChannelChatPanel.tsx");
