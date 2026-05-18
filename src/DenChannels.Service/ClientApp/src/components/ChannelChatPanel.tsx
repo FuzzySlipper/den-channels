@@ -17,6 +17,22 @@ import { formatTimeAgo } from '../utils';
 const SENDER_IDENTITY_STORAGE_KEY = 'den-channel-sender-identity';
 const DEFAULT_WAKE_POLICY = 'mentions_only';
 
+const WAKE_POLICY_OPTIONS = [
+  { value: 'never', label: 'never' },
+  { value: 'mentions_only', label: 'mentions only' },
+  { value: 'direct_questions_only', label: 'direct questions' },
+  { value: 'substantive_digest', label: 'substantive digest' },
+  { value: 'all_human_messages', label: 'all human' },
+  { value: 'all_messages_except_self', label: 'all except self' },
+];
+
+const MEMBERSHIP_STATUS_OPTIONS = [
+  { value: 'active', label: 'active' },
+  { value: 'muted', label: 'muted' },
+  { value: 'left', label: 'left' },
+  { value: 'banned', label: 'banned' },
+];
+
 interface Props {
   projectId: string | null;
   spaceName?: string | null;
@@ -200,8 +216,12 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
   const [targetMemberIdentity, setTargetMemberIdentity] = useState('');
   const [inviteIdentity, setInviteIdentity] = useState('');
   const [inviteWakePolicy, setInviteWakePolicy] = useState(DEFAULT_WAKE_POLICY);
+  const [editingMemberIdentity, setEditingMemberIdentity] = useState<string | null>(null);
+  const [editingWakePolicy, setEditingWakePolicy] = useState(DEFAULT_WAKE_POLICY);
+  const [editingMembershipStatus, setEditingMembershipStatus] = useState('active');
   const [sending, setSending] = useState(false);
   const [inviteSending, setInviteSending] = useState(false);
+  const [memberSaving, setMemberSaving] = useState(false);
   const [wakeSending, setWakeSending] = useState(false);
   const [sendError, setSendError] = useState<Error | null>(null);
   const [lastWakeResult, setLastWakeResult] = useState<GatewayTestWake | null>(null);
@@ -283,6 +303,8 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
   }, [members, sortedMessages]);
   const activeAgentMembers = members.filter(memberIsActiveAgent);
   const selectedTarget = activeAgentMembers.find(member => member.memberIdentity === targetMemberIdentity) ?? null;
+  const editingMember = members.find(member => member.memberIdentity === editingMemberIdentity && member.memberType === 'agent') ?? null;
+  const inviteExistingMember = members.find(member => member.memberType === 'agent' && member.memberIdentity === inviteIdentity.trim()) ?? null;
 
   useEffect(() => {
     if (activeAgentMembers.length === 0) {
@@ -359,11 +381,13 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
       await upsertChannelMembership(activeChannel.id, {
         memberType: 'agent',
         memberIdentity: identity,
-        membershipStatus: 'active',
+        membershipStatus: inviteExistingMember?.membershipStatus ?? 'active',
         wakePolicy: inviteWakePolicy,
-        canSend: true,
-        canReact: true,
-        canInvite: false,
+        canSend: inviteExistingMember?.canSend ?? true,
+        canReact: inviteExistingMember?.canReact ?? true,
+        canInvite: inviteExistingMember?.canInvite ?? false,
+        cooldownSeconds: inviteExistingMember?.cooldownSeconds,
+        maxAutoRepliesPerWindow: inviteExistingMember?.maxAutoRepliesPerWindow,
       });
       setInviteIdentity('');
       refreshMemberships();
@@ -372,7 +396,38 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
     } finally {
       setInviteSending(false);
     }
-  }, [activeChannel, inviteIdentity, inviteWakePolicy, refreshMemberships]);
+  }, [activeChannel, inviteExistingMember, inviteIdentity, inviteWakePolicy, refreshMemberships]);
+
+  const handleEditMember = useCallback((member: GatewayMember) => {
+    setEditingMemberIdentity(member.memberIdentity);
+    setEditingWakePolicy(member.wakePolicy || DEFAULT_WAKE_POLICY);
+    setEditingMembershipStatus(member.membershipStatus || 'active');
+  }, []);
+
+  const handleSaveMemberSettings = useCallback(async () => {
+    if (!activeChannel || !editingMember) return;
+    setMemberSaving(true);
+    setSendError(null);
+    try {
+      await upsertChannelMembership(activeChannel.id, {
+        memberType: editingMember.memberType,
+        memberIdentity: editingMember.memberIdentity,
+        membershipStatus: editingMembershipStatus,
+        wakePolicy: editingWakePolicy,
+        canSend: editingMember.canSend,
+        canReact: editingMember.canReact,
+        canInvite: editingMember.canInvite,
+        cooldownSeconds: editingMember.cooldownSeconds,
+        maxAutoRepliesPerWindow: editingMember.maxAutoRepliesPerWindow,
+      });
+      setEditingMemberIdentity(null);
+      refreshMemberships();
+    } catch (error) {
+      setSendError(error instanceof Error ? error : new Error(String(error)));
+    } finally {
+      setMemberSaving(false);
+    }
+  }, [activeChannel, editingMember, editingMembershipStatus, editingWakePolicy, refreshMemberships]);
 
   const handleTestWake = useCallback(async () => {
     if (!activeChannel || !selectedTarget || !normalizedSenderIdentity) return;
@@ -534,22 +589,77 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
               const status = memberStatus(member);
               const visibleStatus = activity === 'working' ? status.replace(/^active/, 'working') : status;
               return (
-                <button
+                <div
                   key={member.id}
-                  type="button"
-                  className={`channel-chat-member ${activityClass} ${member.memberIdentity === targetMemberIdentity ? 'selected' : ''}`}
-                  onClick={() => memberIsActiveAgent(member) && setTargetMemberIdentity(member.memberIdentity)}
-                  disabled={!memberIsActiveAgent(member)}
-                  title={visibleStatus}
+                  className={`channel-chat-member-row ${member.memberIdentity === targetMemberIdentity ? 'selected' : ''}`}
                 >
-                  <span className={`channel-chat-member-type member-type-${member.memberType}`}>{member.memberType}</span>
-                  <span className="channel-chat-member-identity">{member.memberIdentity}</span>
-                  <span className={`member-activity member-activity-${activity}`}>{activity}</span>
-                  <span className="channel-chat-member-status">{visibleStatus}</span>
-                </button>
+                  <button
+                    type="button"
+                    className={`channel-chat-member ${activityClass}`}
+                    onClick={() => memberIsActiveAgent(member) && setTargetMemberIdentity(member.memberIdentity)}
+                    disabled={!memberIsActiveAgent(member)}
+                    title={visibleStatus}
+                  >
+                    <span className={`channel-chat-member-type member-type-${member.memberType}`}>{member.memberType}</span>
+                    <span className="channel-chat-member-identity">{member.memberIdentity}</span>
+                    <span className={`member-activity member-activity-${activity}`}>{activity}</span>
+                    <span className="channel-chat-member-status">{visibleStatus}</span>
+                  </button>
+                  {member.memberType === 'agent' && (
+                    <button
+                      type="button"
+                      className="channel-chat-member-edit"
+                      onClick={() => handleEditMember(member)}
+                      disabled={!activeChannel || memberSaving}
+                      aria-label={`Edit wake policy for ${member.memberIdentity}`}
+                    >
+                      Edit
+                    </button>
+                  )}
+                </div>
               );
             })}
           </div>
+          {editingMember && (
+            <div className="channel-chat-member-editor" aria-label={`Edit ${editingMember.memberIdentity} membership settings`}>
+              <div className="channel-chat-member-editor-title">
+                <strong>Editing {editingMember.memberIdentity}</strong>
+                <span>Changes affect future wake routing only.</span>
+              </div>
+              <label>
+                <span>Wake policy</span>
+                <select
+                  value={editingWakePolicy}
+                  onChange={event => setEditingWakePolicy(event.target.value)}
+                  disabled={memberSaving}
+                >
+                  {WAKE_POLICY_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Status</span>
+                <select
+                  value={editingMembershipStatus}
+                  onChange={event => setEditingMembershipStatus(event.target.value)}
+                  disabled={memberSaving}
+                >
+                  {MEMBERSHIP_STATUS_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <div className="channel-chat-member-editor-actions">
+                <button type="button" onClick={handleSaveMemberSettings} disabled={memberSaving}>
+                  {memberSaving ? 'Saving…' : 'Save settings'}
+                </button>
+                <button type="button" onClick={() => setEditingMemberIdentity(null)} disabled={memberSaving}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
           <div className="channel-chat-invite">
             <input
               value={inviteIdentity}
@@ -564,16 +674,14 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
               disabled={!activeChannel || inviteSending}
               aria-label="Wake policy"
             >
-              <option value="never">never</option>
-              <option value="mentions_only">mentions only</option>
-              <option value="direct_questions_only">direct questions</option>
-              <option value="substantive_digest">substantive digest</option>
-              <option value="all_human_messages">all human</option>
-              <option value="all_messages_except_self">all except self</option>
+              {WAKE_POLICY_OPTIONS.map(option => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
             </select>
             <button type="button" onClick={handleInviteAgent} disabled={!activeChannel || inviteSending || inviteIdentity.trim().length === 0}>
-              {inviteSending ? 'Joining…' : 'Join agent'}
+              {inviteSending ? (inviteExistingMember ? 'Updating…' : 'Joining…') : (inviteExistingMember ? 'Update agent' : 'Join agent')}
             </button>
+            <span className="channel-chat-routing-note">Wake policy changes apply to future deliveries only.</span>
           </div>
           <button
             type="button"

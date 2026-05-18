@@ -76,6 +76,8 @@ public static class GatewayRoutes
                 m.MembershipStatus,
                 m.WakePolicy,
                 m.CanSend,
+                m.CanReact,
+                m.CanInvite,
                 m.CooldownSeconds,
                 m.MaxAutoRepliesPerWindow,
                 SafeSettingsLabel(m.SettingsJson))).ToList();

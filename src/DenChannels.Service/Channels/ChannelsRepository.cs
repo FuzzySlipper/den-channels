@@ -277,7 +277,7 @@ public sealed class ChannelsRepository
                 can_invite = excluded.can_invite,
                 cooldown_seconds = excluded.cooldown_seconds,
                 max_auto_replies_per_window = excluded.max_auto_replies_per_window,
-                settings_json = excluded.settings_json,
+                settings_json = COALESCE(excluded.settings_json, channel_memberships.settings_json),
                 updated_at = datetime('now')
             RETURNING id, channel_id, member_type, member_identity, membership_status, wake_policy, can_send, can_react, can_invite,
                 cooldown_seconds, max_auto_replies_per_window, settings_json, created_at, updated_at;

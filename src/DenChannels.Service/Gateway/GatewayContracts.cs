@@ -22,6 +22,8 @@ public sealed record GatewayMemberDto(
     string MembershipStatus,
     string WakePolicy,
     bool CanSend,
+    bool CanReact,
+    bool CanInvite,
     int CooldownSeconds,
     int MaxAutoRepliesPerWindow,
     string? SettingsLabel);

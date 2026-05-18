@@ -113,7 +113,7 @@ public sealed class GatewayContractTests : IDisposable
     public async Task GatewayMemberships_SettingsJson_IsSanitizedAllowListLabel()
     {
         var channel = await EnsureDefaultChannelAsync("gw-test-proj-settings");
-        const string secret = "sk-secret-token-should-never-leak";
+        const string secret = "sk-sec...leak";
         await UpsertMembershipAsync(channel.Id, new
         {
             memberType = "agent",
@@ -132,6 +132,49 @@ public sealed class GatewayContractTests : IDisposable
         var payload = await response.Content.ReadFromJsonAsync<GatewayMembershipsPayload>();
         Assert.NotNull(payload);
         var member = Assert.Single(payload.Members);
+        Assert.Equal("profile: den-hermes-coder · binding: safe-binding", member.SettingsLabel);
+        Assert.True(member.CanReact);
+        Assert.False(member.CanInvite);
+    }
+
+    [Fact]
+    public async Task UpsertMembership_NullSettingsPreservesExistingSettingsJsonOnUpdate()
+    {
+        var channel = await EnsureDefaultChannelAsync("gw-test-proj-settings-preserve");
+        await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "den-gateway",
+            wakePolicy = "mentions_only",
+            canReact = false,
+            canInvite = true,
+            settingsJson = "{\"profile\":\"den-hermes-coder\",\"bindingName\":\"safe-binding\"}"
+        });
+
+        await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "den-gateway",
+            membershipStatus = "muted",
+            wakePolicy = "all_human_messages",
+            canSend = true,
+            canReact = false,
+            canInvite = true,
+            cooldownSeconds = 30,
+            maxAutoRepliesPerWindow = 2
+        });
+
+        var payload = await _client.GetFromJsonAsync<GatewayMembershipsPayload>(
+            $"/api/gateway/memberships?channelId={channel.Id}");
+
+        Assert.NotNull(payload);
+        var member = Assert.Single(payload.Members);
+        Assert.Equal("muted", member.MembershipStatus);
+        Assert.Equal("all_human_messages", member.WakePolicy);
+        Assert.False(member.CanReact);
+        Assert.True(member.CanInvite);
+        Assert.Equal(30, member.CooldownSeconds);
+        Assert.Equal(2, member.MaxAutoRepliesPerWindow);
         Assert.Equal("profile: den-hermes-coder · binding: safe-binding", member.SettingsLabel);
     }
 
@@ -656,6 +699,8 @@ public sealed class GatewayContractTests : IDisposable
         string MembershipStatus,
         string WakePolicy,
         bool CanSend,
+        bool CanReact,
+        bool CanInvite,
         int CooldownSeconds,
         int MaxAutoRepliesPerWindow,
         string? SettingsLabel);

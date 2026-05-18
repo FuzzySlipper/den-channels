@@ -123,6 +123,8 @@ export interface GatewayMember {
   membershipStatus: string;
   wakePolicy: ChannelWakePolicy | string;
   canSend: boolean;
+  canReact: boolean;
+  canInvite: boolean;
   cooldownSeconds: number;
   maxAutoRepliesPerWindow: number;
   settingsLabel: string | null;
