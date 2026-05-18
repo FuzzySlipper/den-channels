@@ -108,6 +108,13 @@ export interface ChannelMessage {
   deletedAt: string | null;
 }
 
+export interface ChannelReactionSummary {
+  channelMessageId: number;
+  reactionKey: string;
+  count: number;
+  reactors: string[];
+}
+
 export type ChannelWakePolicy =
   | 'never'
   | 'mentions_only'

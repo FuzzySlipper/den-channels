@@ -2,6 +2,7 @@ import type {
   Project,
   Channel,
   ChannelMessage,
+  ChannelReactionSummary,
   ProjectWithStats,
   Space,
   TaskSummary,
@@ -193,6 +194,12 @@ export interface PostChannelMessageRequest {
   dedupeKey?: string | null;
 }
 
+export interface AddChannelReactionRequest {
+  reactorType: string;
+  reactorIdentity: string;
+  reactionKey: string;
+}
+
 export function listChannels(opts: ListChannelsOpts = {}): Promise<Channel[]> {
   const q = buildQuery({ projectId: opts.projectId, kind: opts.kind, limit: opts.limit });
   return getChannels(`/channels${q}`);
@@ -216,6 +223,14 @@ export function listChannelMessages(channelId: number, opts: ListChannelMessages
 
 export function postChannelMessage(channelId: number, request: PostChannelMessageRequest): Promise<ChannelMessage> {
   return postChannels(`/channels/${channelId}/messages`, request);
+}
+
+export function listChannelReactions(channelId: number): Promise<ChannelReactionSummary[]> {
+  return getChannels(`/channels/${channelId}/reactions`);
+}
+
+export function addChannelReaction(messageId: number, request: AddChannelReactionRequest): Promise<unknown> {
+  return postChannels(`/channel-messages/${messageId}/reactions`, request);
 }
 
 export interface UpsertChannelMembershipRequest {

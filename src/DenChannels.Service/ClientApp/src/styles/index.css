@@ -1416,6 +1416,61 @@ button.list-item {
   white-space: normal;
 }
 
+.channel-chat-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+  white-space: normal;
+}
+
+.channel-chat-reaction-pill,
+.channel-chat-reaction-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 20px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 6px;
+}
+
+.channel-chat-reaction-pill {
+  color: var(--text);
+}
+
+.channel-chat-reaction-actions {
+  display: inline-flex;
+  gap: 2px;
+  opacity: 0.65;
+}
+
+.channel-chat-message:hover .channel-chat-reaction-actions,
+.channel-chat-reaction-actions:focus-within {
+  opacity: 1;
+}
+
+.channel-chat-reaction-actions button {
+  cursor: pointer;
+  padding: 2px 5px;
+}
+
+.channel-chat-reaction-actions button:hover:not(:disabled) {
+  border-color: var(--accent-dim);
+  color: var(--text-bright);
+  background: var(--bg-hover);
+}
+
+.channel-chat-reaction-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .channel-chat-wake-progress {
   display: inline-flex;
   flex-wrap: wrap;

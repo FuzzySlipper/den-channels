@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
-import type { Channel, ChannelMessage, GatewayDirectAgentMessage, GatewayMember, GatewayMemberships, GatewayTestWake } from '../api/types';
+import type { Channel, ChannelMessage, ChannelReactionSummary, GatewayDirectAgentMessage, GatewayMember, GatewayMemberships, GatewayTestWake } from '../api/types';
 import {
   ensureProjectDefaultChannel,
   listChannelMessages,
+  listChannelReactions,
   listChannels,
   listGatewayMemberships,
   postChannelMessage,
+  addChannelReaction,
   postGatewayDirectAgentMessage,
   postGatewayTestWake,
   upsertChannelMembership,
@@ -32,6 +34,8 @@ const MEMBERSHIP_STATUS_OPTIONS = [
   { value: 'left', label: 'left' },
   { value: 'banned', label: 'banned' },
 ];
+
+const QUICK_REACTIONS = ['✅', '👀', '👍', '🫡', '❓'];
 
 interface Props {
   projectId: string | null;
@@ -278,6 +282,15 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
     refresh: refreshMessages,
   } = usePolling(fetchMessages, 4000);
 
+  const fetchReactions = useCallback(
+    () => activeChannel ? listChannelReactions(activeChannel.id) : Promise.resolve([]),
+    [activeChannel],
+  );
+  const {
+    data: reactions,
+    refresh: refreshReactions,
+  } = usePolling<ChannelReactionSummary[]>(fetchReactions, 5000);
+
   const fetchMemberships = useCallback(
     () => activeChannel ? listGatewayMemberships({ channelId: activeChannel.id }) : Promise.resolve(null),
     [activeChannel],
@@ -295,6 +308,16 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
       : [];
     return [...visibleMessages].sort((left, right) => left.id - right.id);
   }, [activeChannel, messages]);
+
+  const reactionsByMessageId = useMemo(() => {
+    const grouped = new Map<number, ChannelReactionSummary[]>();
+    for (const reaction of reactions ?? []) {
+      const current = grouped.get(reaction.channelMessageId) ?? [];
+      current.push(reaction);
+      grouped.set(reaction.channelMessageId, current);
+    }
+    return grouped;
+  }, [reactions]);
 
   const members = useMemo(() => memberships?.members ?? [], [memberships]);
   const memberActivityByIdentity = useMemo(() => {
@@ -365,12 +388,32 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
       }
       setDraft('');
       refreshMessages();
+      refreshReactions();
     } catch (error) {
       setSendError(error instanceof Error ? error : new Error(String(error)));
     } finally {
       setSending(false);
     }
-  }, [activeChannel, draft, isComposerDisabled, normalizedSenderIdentity, refreshMessages, selectedTarget, sendMode]);
+  }, [activeChannel, draft, isComposerDisabled, normalizedSenderIdentity, refreshMessages, refreshReactions, selectedTarget, sendMode]);
+
+  const handleReactToMessage = useCallback(async (message: ChannelMessage, reactionKey: string) => {
+    const reactorIdentity = normalizedSenderIdentity || targetMemberIdentity;
+    if (!reactorIdentity) {
+      setSendError(new Error('Set Posting as before reacting.'));
+      return;
+    }
+    setSendError(null);
+    try {
+      await addChannelReaction(message.id, {
+        reactorType: 'user',
+        reactorIdentity,
+        reactionKey,
+      });
+      refreshReactions();
+    } catch (error) {
+      setSendError(error instanceof Error ? error : new Error(String(error)));
+    }
+  }, [normalizedSenderIdentity, refreshReactions, targetMemberIdentity]);
 
   const handleInviteAgent = useCallback(async () => {
     const identity = inviteIdentity.trim();
@@ -525,6 +568,7 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
           onClick={() => {
             refreshChannels();
             refreshMessages();
+            refreshReactions();
             refreshMemberships();
           }}
         >
@@ -546,6 +590,7 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
             sortedMessages.map(message => {
               const evidence = directMessageEvidence(message);
               const wakeProgress = deriveWakeProgress(message, sortedMessages);
+              const messageReactions = reactionsByMessageId.get(message.id) ?? [];
               return (
                 <div key={message.id} className="channel-chat-message">
                   <span className="message-time">{formatTimeAgo(message.createdAt)}</span>
@@ -565,6 +610,27 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
                         <a href={evidence.url} target="_blank" rel="noreferrer">Gateway evidence</a>
                       </span>
                     )}
+                    <span className="channel-chat-reactions" aria-label={`Reactions for message ${message.id}`}>
+                      {messageReactions.map(reaction => (
+                        <span key={`${reaction.channelMessageId}:${reaction.reactionKey}`} className="channel-chat-reaction-pill" title={reaction.reactors.join(', ')}>
+                          <span>{reaction.reactionKey}</span>
+                          <span>{reaction.count}</span>
+                        </span>
+                      ))}
+                      <span className="channel-chat-reaction-actions" aria-label="Quick reactions">
+                        {QUICK_REACTIONS.map(reactionKey => (
+                          <button
+                            key={reactionKey}
+                            type="button"
+                            onClick={() => handleReactToMessage(message, reactionKey)}
+                            disabled={identityRequired}
+                            title={`React ${reactionKey} without creating a wake pulse`}
+                          >
+                            {reactionKey}
+                          </button>
+                        ))}
+                      </span>
+                    </span>
                   </span>
                 </div>
               );

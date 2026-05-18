@@ -100,6 +100,12 @@ public sealed record ChannelReactionDto(
     string ReactionKey,
     string CreatedAt);
 
+public sealed record ChannelReactionSummaryDto(
+    long ChannelMessageId,
+    string ReactionKey,
+    int Count,
+    IReadOnlyList<string> Reactors);
+
 public sealed record AddChannelReactionRequest(
     string ReactorType,
     string ReactorIdentity,

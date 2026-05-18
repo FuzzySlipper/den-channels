@@ -298,6 +298,40 @@ public sealed class ChannelsRepository
         return ReadMembership(reader);
     }
 
+    public async Task<IReadOnlyList<ChannelReactionSummaryDto>> ListReactionSummariesAsync(long channelId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT r.channel_message_id, r.reaction_key, r.reactor_type, r.reactor_identity
+            FROM channel_reactions r
+            JOIN channel_messages m ON m.id = r.channel_message_id
+            WHERE m.channel_id = $channelId
+            ORDER BY r.channel_message_id, r.reaction_key, r.created_at, r.id;
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var grouped = new Dictionary<(long MessageId, string ReactionKey), List<string>>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var key = (reader.GetInt64(0), reader.GetString(1));
+            if (!grouped.TryGetValue(key, out var reactors))
+            {
+                reactors = [];
+                grouped[key] = reactors;
+            }
+            reactors.Add($"{reader.GetString(2)}:{reader.GetString(3)}");
+        }
+        return grouped
+            .Select(item => new ChannelReactionSummaryDto(
+                item.Key.MessageId,
+                item.Key.ReactionKey,
+                item.Value.Count,
+                item.Value))
+            .ToList();
+    }
+
     public async Task<ChannelReactionDto> AddReactionAsync(long messageId, AddChannelReactionRequest request,
         CancellationToken cancellationToken = default)
     {

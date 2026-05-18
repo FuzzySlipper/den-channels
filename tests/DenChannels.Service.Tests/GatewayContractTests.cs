@@ -363,6 +363,48 @@ public sealed class GatewayContractTests : IDisposable
     }
 
     [Fact]
+    public async Task GatewayEvents_ReactionsDoNotCreateWakePulseEvents()
+    {
+        var channel = await EnsureDefaultChannelAsync("gw-events-reactions-no-pulse");
+        await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "agent-a",
+            wakePolicy = "all_messages_except_self"
+        });
+        await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "agent-b",
+            wakePolicy = "all_messages_except_self"
+        });
+        var message = await PostMessageAsync(channel.Id, new
+        {
+            senderType = "user",
+            senderIdentity = "patch",
+            body = "please acknowledge without adding noise",
+            messageKind = "human_text"
+        });
+
+        using var reactionResponse = await _client.PostAsJsonAsync($"/api/channel-messages/{message.Id}/reactions", new
+        {
+            reactorType = "agent",
+            reactorIdentity = "agent-a",
+            reactionKey = "✅"
+        });
+        reactionResponse.EnsureSuccessStatusCode();
+
+        var response = await _client.GetFromJsonAsync<GatewayEventsPayload>(
+            $"/api/gateway/events?channelId={channel.Id}&limit=10");
+
+        Assert.NotNull(response);
+        var item = Assert.Single(response.Items);
+        Assert.Equal(message.Id, item.Id);
+        Assert.Equal("human_text", item.MessageKind);
+        Assert.Equal("user", item.SenderType);
+    }
+
+    [Fact]
     public async Task GatewayEvents_ByProjectId_ResolvesDefaultChannel()
     {
         var channel = await EnsureDefaultChannelAsync("gw-events-proj-3");

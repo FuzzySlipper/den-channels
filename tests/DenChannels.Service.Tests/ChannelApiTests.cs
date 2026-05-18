@@ -182,10 +182,32 @@ public sealed class ChannelApiTests : IDisposable
         {
             reactorType = "agent",
             reactorIdentity = "den-channels-runner",
-            reactionKey = "acknowledged"
+            reactionKey = "✅"
+        });
+        var duplicate = await PostJsonAsync<ReactionPayload>(client, $"/api/channel-messages/{message.Id}/reactions", new
+        {
+            reactorType = "agent",
+            reactorIdentity = "den-channels-runner",
+            reactionKey = "✅"
+        });
+        await PostJsonAsync<ReactionPayload>(client, $"/api/channel-messages/{message.Id}/reactions", new
+        {
+            reactorType = "user",
+            reactorIdentity = "patch",
+            reactionKey = "✅"
         });
         Assert.Equal(message.Id, reaction.ChannelMessageId);
-        Assert.Equal("acknowledged", reaction.ReactionKey);
+        Assert.Equal("✅", reaction.ReactionKey);
+        Assert.Equal(reaction.Id, duplicate.Id);
+
+        var summaries = await client.GetFromJsonAsync<List<ReactionSummaryPayload>>($"/api/channels/{channel.Id}/reactions");
+        Assert.NotNull(summaries);
+        var summary = Assert.Single(summaries);
+        Assert.Equal(message.Id, summary.ChannelMessageId);
+        Assert.Equal("✅", summary.ReactionKey);
+        Assert.Equal(2, summary.Count);
+        Assert.Contains("agent:den-channels-runner", summary.Reactors);
+        Assert.Contains("user:patch", summary.Reactors);
     }
 
     public void Dispose()
@@ -222,4 +244,7 @@ public sealed class ChannelApiTests : IDisposable
         string WakePolicy);
 
     private sealed record ReactionPayload(long Id, long ChannelMessageId, string ReactionKey);
+
+    private sealed record ReactionSummaryPayload(long ChannelMessageId, string ReactionKey, int Count,
+        string[] Reactors);
 }

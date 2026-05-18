@@ -58,6 +58,10 @@ public static class ChannelRoutes
             long? afterId, int? limit, CancellationToken cancellationToken) => Results.Ok(
                 await repository.ListMessagesAsync(channelId, afterId, limit ?? 100, cancellationToken)));
 
+        api.MapGet("/channels/{channelId:long}/reactions", async (ChannelsRepository repository, long channelId,
+            CancellationToken cancellationToken) => Results.Ok(
+                await repository.ListReactionSummariesAsync(channelId, cancellationToken)));
+
         api.MapPut("/channels/{channelId:long}/memberships", async (ChannelsRepository repository, long channelId,
             UpsertChannelMembershipRequest request, CancellationToken cancellationToken) =>
         {
