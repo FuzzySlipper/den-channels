@@ -34,6 +34,27 @@ public sealed class DenWebChannelFirstLayoutTests
     }
 
     [Fact]
+    public void WorkspaceNavigation_DistinguishesAllAggregateFromConcreteGlobalScope()
+    {
+        var app = ReadClientSource("App.tsx");
+        var sidebar = ReadClientSource("components", "ProjectSidebar.tsx");
+        var component = ReadClientSource("components", "ChannelChatPanel.tsx");
+
+        Assert.Contains("ALL_SPACES_ID = '_all'", app);
+        Assert.Contains("name: 'All spaces'", app);
+        Assert.Contains("description: 'Aggregate views across accessible spaces'", app);
+        Assert.Contains("GLOBAL_SPACE_ID = '_global'", app);
+        Assert.Contains("listDocuments(isAllSpaces ? undefined : effectiveSpaceId)", app);
+        Assert.Contains("projectId={!isAggregateSpace && !isGlobal ? effectiveSpaceId : null}", app);
+
+        Assert.Contains("if (space.id === '_all') return 'aggregate view';", sidebar);
+        Assert.Contains("if (space.id === '_global') return 'global scope';", sidebar);
+        Assert.DoesNotContain("if (space.id === '_global') return 'all spaces';", sidebar);
+
+        Assert.Contains("if (!projectId) return [agentCommons];", component);
+    }
+
+    [Fact]
     public void ChannelChatPanel_UsesDenChannelsApiSeam_NotLegacyDispatchOrAgentStreamTransport()
     {
         var client = ReadClientSource("api", "client.ts");

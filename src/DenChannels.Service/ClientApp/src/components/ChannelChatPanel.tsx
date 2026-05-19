@@ -280,11 +280,9 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
   const normalizedSenderIdentity = senderIdentity.trim();
 
   const fetchChannels = useCallback(async () => {
-    if (!projectId) return [];
-    const [projectChannels, agentCommons] = await Promise.all([
-      listChannels({ projectId, limit: 100 }),
-      ensureAgentCommonsChannel(),
-    ]);
+    const agentCommons = await ensureAgentCommonsChannel();
+    if (!projectId) return [agentCommons];
+    const projectChannels = await listChannels({ projectId, limit: 100 });
     if (projectChannels.length > 0) return [...projectChannels, agentCommons];
     const ensured = await ensureProjectDefaultChannel(projectId, {
       displayName: spaceName?.trim() || projectId,

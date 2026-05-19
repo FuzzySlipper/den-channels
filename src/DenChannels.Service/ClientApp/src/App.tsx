@@ -32,32 +32,35 @@ import { agentStreamEntryVisibility } from './subagentRuns';
 import { documentSelectionAction } from './documentEditor';
 import type { GitFocus } from './git';
 
-const GLOBAL_SPACE: Space = {
-  id: '_global',
-  name: 'Global',
+const ALL_SPACES_ID = '_all';
+const GLOBAL_SPACE_ID = '_global';
+
+const ALL_SPACES: Space = {
+  id: ALL_SPACES_ID,
+  name: 'All spaces',
   kind: 'system',
-  visibility: 'normal',
+  visibility: 'hidden',
   owner: null,
   root_path: null,
-  description: 'Cross-space documents and feeds',
+  description: 'Aggregate views across accessible spaces',
   created_at: null,
   updated_at: null,
 };
 
-function withGlobalSpace(spaces: Space[] | null | undefined): Space[] {
+function withAllSpacesAggregate(spaces: Space[] | null | undefined): Space[] {
   const list = spaces ?? [];
-  return list.some(space => space.id === GLOBAL_SPACE.id) ? list : [GLOBAL_SPACE, ...list];
+  return list.some(space => space.id === ALL_SPACES.id) ? list : [ALL_SPACES, ...list];
 }
 
 function defaultSpaceId(spaces: Space[]): string | null {
   return spaces.find(space => space.kind === 'project' && space.visibility === 'normal')?.id
-    ?? spaces.find(space => space.id !== GLOBAL_SPACE.id)?.id
+    ?? spaces.find(space => space.id !== ALL_SPACES.id)?.id
     ?? spaces[0]?.id
     ?? null;
 }
 
-function spaceSupportsGit(space: Space | null | undefined, isGlobal: boolean): boolean {
-  return isGlobal || space?.kind === 'project' || Boolean(space?.root_path?.trim());
+function spaceSupportsGit(space: Space | null | undefined, isAllSpaces: boolean): boolean {
+  return isAllSpaces || space?.kind === 'project' || Boolean(space?.root_path?.trim());
 }
 
 export default function App() {
@@ -88,13 +91,15 @@ export default function App() {
   const { data: projects } = usePolling(fetchProjects, 5000);
   const fetchSpaces = useCallback(() => listSpaces({ includeHidden: true, includeArchived: true }), []);
   const { data: fetchedSpaces } = usePolling(fetchSpaces, 5000);
-  const spaces = useMemo(() => withGlobalSpace(fetchedSpaces), [fetchedSpaces]);
+  const spaces = useMemo(() => withAllSpacesAggregate(fetchedSpaces), [fetchedSpaces]);
 
   // Auto-select a normal project-kind space when possible to preserve existing project-centric startup.
   const effectiveSpaceId = selectedSpaceId ?? defaultSpaceId(spaces);
   const activeSpace = spaces.find(space => space.id === effectiveSpaceId) ?? null;
-  const isGlobal = effectiveSpaceId === '_global';
-  const activeSpaceSupportsGit = spaceSupportsGit(activeSpace, isGlobal);
+  const isAllSpaces = effectiveSpaceId === ALL_SPACES_ID;
+  const isGlobal = effectiveSpaceId === GLOBAL_SPACE_ID;
+  const isAggregateSpace = isAllSpaces;
+  const activeSpaceSupportsGit = spaceSupportsGit(activeSpace, isAllSpaces);
 
   const fetchTasks = useCallback(
     () => effectiveSpaceId
@@ -112,7 +117,7 @@ export default function App() {
   const fetchAgentStream = useCallback(
     () => effectiveSpaceId
       ? listAgentStream({
-        projectId: isGlobal ? (streamProjectFilter.trim() || undefined) : effectiveSpaceId,
+        projectId: isAggregateSpace ? (streamProjectFilter.trim() || undefined) : effectiveSpaceId,
         taskId: parsedStreamTaskId,
         streamKind: streamKindFilter,
         eventType: streamEventFilter || undefined,
@@ -122,7 +127,7 @@ export default function App() {
       : Promise.resolve([]),
     [
       effectiveSpaceId,
-      isGlobal,
+      isAggregateSpace,
       parsedStreamTaskId,
       streamEventFilter,
       streamKindFilter,
@@ -134,9 +139,9 @@ export default function App() {
 
   const fetchDocs = useCallback(
     () => effectiveSpaceId
-      ? listDocuments(isGlobal ? undefined : effectiveSpaceId)
+      ? listDocuments(isAllSpaces ? undefined : effectiveSpaceId)
       : Promise.resolve([]),
-    [effectiveSpaceId, isGlobal],
+    [effectiveSpaceId, isAllSpaces],
   );
   const { data: documents, refresh: refreshDocs } = usePolling(fetchDocs, 5000);
 
@@ -401,7 +406,7 @@ export default function App() {
                 ))}
               </select>
 
-              {isGlobal && (
+              {isAggregateSpace && (
                 <input
                   className="feed-text-filter"
                   value={streamProjectFilter}
@@ -457,14 +462,14 @@ export default function App() {
               <DocumentList
                 documents={sortedDocs}
                 projectId={effectiveSpaceId}
-                isGlobal={isGlobal}
+                isGlobal={isAggregateSpace}
                 onSelect={handleDocumentSelect}
               />
             ) : viewMode === 'git' ? (
               <GitView
                 projectId={activeSpaceSupportsGit ? effectiveSpaceId : null}
                 projects={projects ?? []}
-                isGlobal={isGlobal}
+                isGlobal={isAggregateSpace}
                 scopeSupportsGit={activeSpaceSupportsGit}
                 focus={gitFocus}
                 onClearFocus={() => setGitFocus(null)}
@@ -472,7 +477,7 @@ export default function App() {
             ) : viewMode === 'agent-stream' ? (
               <AgentStreamFeed
                 entries={filteredAgentStream}
-                isGlobal={isGlobal}
+                isGlobal={isAggregateSpace}
                 onSelect={handleStreamSelect}
                 onOpenTask={handleTaskSelect}
                 onOpenThread={entry => void handleStreamThreadOpen(entry)}
@@ -480,7 +485,7 @@ export default function App() {
               />
             ) : viewMode === 'sessions' ? (
               <FocusedSessionView
-                projectId={!isGlobal ? effectiveSpaceId : null}
+                projectId={!isAggregateSpace && !isGlobal ? effectiveSpaceId : null}
                 spaceName={activeSpace?.name ?? effectiveSpaceId}
               />
             ) : (
@@ -498,7 +503,7 @@ export default function App() {
       </div>
 
       <ChannelChatPanel
-        projectId={!isGlobal ? effectiveSpaceId : null}
+        projectId={!isAggregateSpace && !isGlobal ? effectiveSpaceId : null}
         spaceName={activeSpace?.name ?? effectiveSpaceId}
         panelSize={channelPanelSize}
         onPanelSizeChange={setChannelPanelSize}

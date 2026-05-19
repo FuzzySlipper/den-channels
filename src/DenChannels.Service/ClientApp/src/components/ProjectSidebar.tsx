@@ -11,7 +11,8 @@ function hasRootCapability(space: Space): boolean {
 }
 
 function spaceCapabilityLabel(space: Space): string {
-  if (space.id === '_global') return 'all spaces';
+  if (space.id === '_all') return 'aggregate view';
+  if (space.id === '_global') return 'global scope';
   if (space.kind === 'project') return hasRootCapability(space) ? 'repo-backed' : 'project';
   return hasRootCapability(space) ? 'root-backed' : 'no repo';
 }
