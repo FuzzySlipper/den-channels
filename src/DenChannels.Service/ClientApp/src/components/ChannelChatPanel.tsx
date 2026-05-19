@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, FormEvent } from 'react';
+import type { ChangeEvent, FormEvent, KeyboardEvent } from 'react';
 import type { Channel, ChannelActivityEvent, ChannelMessage, ChannelReactionSummary, GatewayDirectAgentMessage, GatewayMember, GatewayMemberships, GatewayTestWake } from '../api/types';
 import {
+  ensureAgentCommonsChannel,
   ensureProjectDefaultChannel,
   listChannelActivityEvents,
   listChannelMessages,
@@ -16,7 +17,7 @@ import {
 } from '../api/client';
 import { usePolling } from '../hooks/usePolling';
 import { formatTimeAgo } from '../utils';
-import { parseMessageBodySegments, sortActivityEvents, toActivityDisplayModel } from './channelChatRenderModel';
+import { findActiveMentionQuery, getMentionSuggestions, insertMentionToken, parseMessageBodySegments, sortActivityEvents, toActivityDisplayModel } from './channelChatRenderModel';
 
 const SENDER_IDENTITY_STORAGE_KEY = 'den-channel-sender-identity';
 const DEFAULT_WAKE_POLICY = 'mentions_only';
@@ -62,6 +63,7 @@ const PANEL_SIZE_OPTIONS: Array<{ value: ChannelChatPanelSize; label: string }> 
 ];
 
 function channelLabel(channel: Channel | null, projectId: string | null): string {
+  if (channel?.slug === 'agent-commons') return '#agent-commons';
   if (channel) return `#${channel.slug}`;
   if (projectId) return `#project-${projectId}`;
   return '#select-project';
@@ -256,6 +258,7 @@ function ActivityTimeline({ events, compact = false }: { events: ChannelActivity
 
 export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeChange }: Props) {
   const [draft, setDraft] = useState('');
+  const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
   const [senderIdentity, setSenderIdentity] = useState(readStoredSenderIdentity);
   const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null);
   const [sendMode, setSendMode] = useState<ChannelSendMode>('channel');
@@ -278,13 +281,16 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
 
   const fetchChannels = useCallback(async () => {
     if (!projectId) return [];
-    const channels = await listChannels({ projectId, limit: 100 });
-    if (channels.length > 0) return channels;
+    const [projectChannels, agentCommons] = await Promise.all([
+      listChannels({ projectId, limit: 100 }),
+      ensureAgentCommonsChannel(),
+    ]);
+    if (projectChannels.length > 0) return [...projectChannels, agentCommons];
     const ensured = await ensureProjectDefaultChannel(projectId, {
       displayName: spaceName?.trim() || projectId,
       createdBy: normalizedSenderIdentity || 'den-web',
     });
-    return [ensured];
+    return [agentCommons, ensured];
   }, [normalizedSenderIdentity, projectId, spaceName]);
 
   const {
@@ -295,7 +301,7 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
   } = usePolling<Channel[]>(fetchChannels, 15000);
 
   const availableChannels = useMemo(
-    () => (channels ?? []).filter(candidate => candidate.projectId === projectId),
+    () => (channels ?? []).filter(candidate => candidate.projectId === projectId || candidate.slug === 'agent-commons'),
     [channels, projectId],
   );
 
@@ -399,6 +405,15 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
   const selectedTarget = activeAgentMembers.find(member => member.memberIdentity === targetMemberIdentity) ?? null;
   const editingMember = members.find(member => member.memberIdentity === editingMemberIdentity && member.memberType === 'agent') ?? null;
   const inviteExistingMember = members.find(member => member.memberType === 'agent' && member.memberIdentity === inviteIdentity.trim()) ?? null;
+  const mentionQuery = useMemo(() => findActiveMentionQuery(draft), [draft]);
+  const mentionSuggestions = useMemo(
+    () => mentionQuery ? getMentionSuggestions(members, mentionQuery.query) : [],
+    [members, mentionQuery],
+  );
+
+  useEffect(() => {
+    setMentionActiveIndex(0);
+  }, [mentionQuery?.query, mentionSuggestions.length]);
 
   useEffect(() => {
     if (activeAgentMembers.length === 0) {
@@ -431,6 +446,30 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
     setSenderIdentity(value);
     persistSenderIdentity(value);
   }, []);
+
+  const insertMention = useCallback((identity: string) => {
+    if (!mentionQuery) return;
+    setDraft(current => insertMentionToken(current, mentionQuery, identity));
+    setMentionActiveIndex(0);
+  }, [mentionQuery]);
+
+  const handleComposerKeyDown = useCallback((event: KeyboardEvent<HTMLInputElement>) => {
+    if (!mentionQuery || mentionSuggestions.length === 0) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setMentionActiveIndex(index => (index + 1) % mentionSuggestions.length);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setMentionActiveIndex(index => (index - 1 + mentionSuggestions.length) % mentionSuggestions.length);
+    } else if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault();
+      insertMention(mentionSuggestions[mentionActiveIndex]?.identity ?? mentionSuggestions[0].identity);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      setMentionActiveIndex(0);
+      setDraft(current => current);
+    }
+  }, [insertMention, mentionActiveIndex, mentionQuery, mentionSuggestions]);
 
   const handleSubmit = useCallback(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -889,10 +928,30 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
         <input
           value={draft}
           onChange={event => setDraft(event.target.value)}
+          onKeyDown={handleComposerKeyDown}
           placeholder={composerPlaceholder}
           disabled={isComposerDisabled}
           aria-label="Channel message"
         />
+        {mentionQuery && (
+          <div className="channel-chat-mention-menu" role="listbox" aria-label="Mention suggestions">
+            {mentionSuggestions.length === 0 ? (
+              <div className="channel-chat-mention-empty">No active channel members match @{mentionQuery.query}</div>
+            ) : mentionSuggestions.map((suggestion, index) => (
+              <button
+                key={suggestion.identity}
+                type="button"
+                className={`channel-chat-mention-option ${index === mentionActiveIndex ? 'active' : ''}`}
+                onMouseDown={event => event.preventDefault()}
+                onClick={() => insertMention(suggestion.identity)}
+                role="option"
+                aria-selected={index === mentionActiveIndex}
+              >
+                <span>{suggestion.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <button type="submit" disabled={isComposerDisabled || draft.trim().length === 0}>
           {sending ? 'Sending…' : 'Send'}
         </button>

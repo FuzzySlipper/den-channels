@@ -36,6 +36,7 @@ public sealed class ChannelsDatabaseInitializer
         await EnsureSchemaMigrationsTableAsync(connection, cancellationToken);
 
         var currentVersion = await GetCurrentSchemaVersionAsync(connection, cancellationToken);
+        await EnsureChannelsCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureChannelMessageCompatibilityColumnsAsync(connection, cancellationToken);
         if (currentVersion < 1)
         {
@@ -44,9 +45,11 @@ public sealed class ChannelsDatabaseInitializer
             await SetSchemaVersionAsync(connection, 1, "initial_channel_schema", cancellationToken);
         }
 
+        await EnsureChannelsCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureChannelMessageCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureChannelMessagesSourceKindConstraintAsync(connection, cancellationToken);
         await EnsureChannelActivityEventsSchemaAsync(connection, cancellationToken);
+        await EnsureAgentCommonsSeedAsync(connection, cancellationToken);
         await ExecuteNonQueryAsync(connection, PostCreateIndexesSql, cancellationToken);
     }
 
@@ -69,6 +72,18 @@ public sealed class ChannelsDatabaseInitializer
         await ExecuteNonQueryAsync(connection, ChannelActivityEventsSchemaSql, cancellationToken);
     }
 
+    private static async Task EnsureAgentCommonsSeedAsync(SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "channels", cancellationToken) ||
+            !await TableExistsAsync(connection, "channel_memberships", cancellationToken))
+        {
+            return;
+        }
+
+        await ExecuteNonQueryAsync(connection, AgentCommonsSeedSql, cancellationToken);
+    }
+
     private static async Task<string?> GetTableCreateSqlAsync(SqliteConnection connection, string tableName,
         CancellationToken cancellationToken)
     {
@@ -77,6 +92,18 @@ public sealed class ChannelsDatabaseInitializer
         command.Parameters.AddWithValue("$name", tableName);
         var value = await command.ExecuteScalarAsync(cancellationToken);
         return value as string;
+    }
+
+    private static async Task EnsureChannelsCompatibilityColumnsAsync(SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await EnsureColumnAsync(connection, "channels", "space_id", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channels", "created_by", "TEXT NOT NULL DEFAULT 'system'", cancellationToken);
+        await EnsureColumnAsync(connection, "channels", "visibility", "TEXT NOT NULL DEFAULT 'normal'", cancellationToken);
+        await EnsureColumnAsync(connection, "channels", "settings_json", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channels", "created_at", "TEXT NOT NULL DEFAULT ''", cancellationToken);
+        await EnsureColumnAsync(connection, "channels", "updated_at", "TEXT NOT NULL DEFAULT ''", cancellationToken);
+        await EnsureColumnAsync(connection, "channels", "archived_at", "TEXT", cancellationToken);
     }
 
     private static async Task EnsureChannelMessageCompatibilityColumnsAsync(SqliteConnection connection,
@@ -359,6 +386,43 @@ public sealed class ChannelsDatabaseInitializer
         CREATE UNIQUE INDEX IF NOT EXISTS ux_channel_activity_events_dedupe
             ON channel_activity_events(channel_id, dedupe_key)
             WHERE dedupe_key IS NOT NULL;
+        """;
+
+    private const string AgentCommonsSeedSql = """
+        INSERT INTO channels(slug, display_name, kind, created_by, visibility, settings_json)
+        VALUES ('agent-commons', 'Agent Commons', 'system', 'system', 'normal', '{"systemManaged":true,"channelRole":"agent_commons","defaultWakePolicy":"mentions_only"}')
+        ON CONFLICT(slug) DO UPDATE SET
+            display_name = 'Agent Commons',
+            kind = 'system',
+            visibility = 'normal',
+            settings_json = COALESCE(channels.settings_json, excluded.settings_json),
+            updated_at = datetime('now');
+
+        INSERT INTO channel_memberships(
+            channel_id, member_type, member_identity, membership_status, wake_policy, can_send, can_react, can_invite,
+            cooldown_seconds, max_auto_replies_per_window, settings_json)
+        SELECT commons.id, 'agent', agents.member_identity, 'active', 'mentions_only', 1, 1, 0, 60, 1,
+            '{"systemManaged":true,"source":"agent-commons-backfill"}'
+        FROM channels commons
+        JOIN (
+            SELECT DISTINCT member_identity
+            FROM channel_memberships
+            WHERE member_type = 'agent'
+              AND membership_status = 'active'
+              AND member_identity IS NOT NULL
+              AND trim(member_identity) <> ''
+        ) agents
+        WHERE commons.slug = 'agent-commons'
+        ON CONFLICT(channel_id, member_type, member_identity) DO UPDATE SET
+            membership_status = CASE
+                WHEN channel_memberships.settings_json LIKE '%"systemManaged":true%' THEN 'active'
+                ELSE channel_memberships.membership_status
+            END,
+            wake_policy = CASE
+                WHEN channel_memberships.settings_json LIKE '%"systemManaged":true%' THEN 'mentions_only'
+                ELSE channel_memberships.wake_policy
+            END,
+            updated_at = datetime('now');
         """;
 
     private const string PostCreateIndexesSql = """

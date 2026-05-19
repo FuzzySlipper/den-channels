@@ -40,6 +40,19 @@ public static class ChannelRoutes
             return Results.Ok(channel);
         });
 
+        api.MapPut("/agent-commons", async (ChannelsRepository repository, CancellationToken cancellationToken) =>
+        {
+            var channel = await repository.EnsureAgentCommonsChannelAsync(cancellationToken);
+            return Results.Ok(channel);
+        });
+
+        api.MapPut("/agent-commons/memberships/{agentIdentity}", async (ChannelsRepository repository, string agentIdentity,
+            CancellationToken cancellationToken) =>
+        {
+            var membership = await repository.EnsureAgentCommonsMembershipAsync(agentIdentity, null, cancellationToken);
+            return Results.Ok(membership);
+        });
+
         api.MapPost("/channels/{channelId:long}/messages", async (ChannelsRepository repository, long channelId,
             PostChannelMessageRequest request, CancellationToken cancellationToken) =>
         {

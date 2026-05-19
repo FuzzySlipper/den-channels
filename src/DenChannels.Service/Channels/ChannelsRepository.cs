@@ -58,6 +58,28 @@ public sealed partial class ChannelsRepository
         return ReadChannel(reader);
     }
 
+    public async Task<ChannelDto> EnsureAgentCommonsChannelAsync(CancellationToken cancellationToken = default)
+    {
+        const string settingsJson = "{\"systemManaged\":true,\"channelRole\":\"agent_commons\",\"defaultWakePolicy\":\"mentions_only\"}";
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO channels(slug, display_name, kind, created_by, visibility, settings_json)
+            VALUES ('agent-commons', 'Agent Commons', 'system', 'system', 'normal', $settingsJson)
+            ON CONFLICT(slug) DO UPDATE SET
+                display_name = 'Agent Commons',
+                kind = 'system',
+                visibility = 'normal',
+                settings_json = COALESCE(channels.settings_json, excluded.settings_json),
+                updated_at = datetime('now')
+            RETURNING id, slug, display_name, kind, project_id, space_id, created_by, visibility, settings_json, created_at, updated_at, archived_at;
+            """;
+        command.Parameters.AddWithValue("$settingsJson", settingsJson);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        return ReadChannel(reader);
+    }
+
     public async Task<IReadOnlyList<ChannelDto>> ListChannelsAsync(string? projectId = null, string? kind = null,
         int limit = 100, CancellationToken cancellationToken = default)
     {
@@ -294,6 +316,55 @@ public sealed partial class ChannelsRepository
         command.Parameters.AddWithValue("$cooldownSeconds", request.CooldownSeconds ?? 60);
         command.Parameters.AddWithValue("$maxAutoRepliesPerWindow", request.MaxAutoRepliesPerWindow ?? 1);
         command.Parameters.AddWithValue("$settingsJson", (object?)request.SettingsJson ?? DBNull.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        var membership = ReadMembership(reader);
+        await reader.DisposeAsync();
+        if (ShouldAutoEnsureAgentCommonsMembership(channelId, request, membership))
+        {
+            await EnsureAgentCommonsMembershipAsync(membership.MemberIdentity, null, cancellationToken);
+        }
+        return membership;
+    }
+
+    private static bool ShouldAutoEnsureAgentCommonsMembership(long sourceChannelId, UpsertChannelMembershipRequest request, ChannelMembershipDto membership)
+    {
+        if (!string.Equals(request.MemberType, "agent", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!string.Equals(membership.MembershipStatus, "active", StringComparison.OrdinalIgnoreCase)) return false;
+        return sourceChannelId != membership.ChannelId || !string.Equals(membership.MemberIdentity, "", StringComparison.Ordinal);
+    }
+
+    public async Task<ChannelMembershipDto> EnsureAgentCommonsMembershipAsync(string agentIdentity, string? sourceSettingsJson = null,
+        CancellationToken cancellationToken = default)
+    {
+        var commons = await EnsureAgentCommonsChannelAsync(cancellationToken);
+        const string defaultSettingsJson = "{\"systemManaged\":true,\"source\":\"agent-commons-auto-membership\"}";
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO channel_memberships(
+                channel_id, member_type, member_identity, membership_status, wake_policy, can_send, can_react, can_invite,
+                cooldown_seconds, max_auto_replies_per_window, settings_json)
+            VALUES ($channelId, 'agent', $agentIdentity, 'active', 'mentions_only', 1, 1, 0, 60, 1, $settingsJson)
+            ON CONFLICT(channel_id, member_type, member_identity)
+            DO UPDATE SET
+                membership_status = CASE
+                    WHEN channel_memberships.settings_json LIKE '%"systemManaged":true%' THEN 'active'
+                    ELSE channel_memberships.membership_status
+                END,
+                wake_policy = CASE
+                    WHEN channel_memberships.settings_json LIKE '%"systemManaged":true%' THEN 'mentions_only'
+                    ELSE channel_memberships.wake_policy
+                END,
+                can_send = 1,
+                can_react = 1,
+                updated_at = datetime('now')
+            RETURNING id, channel_id, member_type, member_identity, membership_status, wake_policy, can_send, can_react, can_invite,
+                cooldown_seconds, max_auto_replies_per_window, settings_json, created_at, updated_at;
+            """;
+        command.Parameters.AddWithValue("$channelId", commons.Id);
+        command.Parameters.AddWithValue("$agentIdentity", agentIdentity.Trim());
+        command.Parameters.AddWithValue("$settingsJson", string.IsNullOrWhiteSpace(sourceSettingsJson) ? defaultSettingsJson : sourceSettingsJson);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         await reader.ReadAsync(cancellationToken);
         return ReadMembership(reader);

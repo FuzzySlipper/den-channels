@@ -211,6 +211,39 @@ public sealed class ChannelApiTests : IDisposable
     }
 
     [Fact]
+    public async Task AgentCommons_IsVisibleAndAutoIncludesActiveAgentsWithMentionsOnlyWakePolicy()
+    {
+        using var client = _factory.CreateClient();
+        var projectChannel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+
+        var agent = await PutJsonAsync<MembershipPayload>(client, $"/api/channels/{projectChannel.Id}/memberships", new
+        {
+            memberType = "agent",
+            memberIdentity = "den-channels-runner",
+            wakePolicy = "all_human_messages"
+        });
+        Assert.Equal("all_human_messages", agent.WakePolicy);
+
+        var channels = await client.GetFromJsonAsync<List<ChannelPayload>>("/api/channels?limit=100");
+        Assert.NotNull(channels);
+        var commons = Assert.Single(channels, channel => channel.Slug == "agent-commons");
+        Assert.Equal("Agent Commons", commons.DisplayName);
+        Assert.Equal("system", commons.Kind);
+        Assert.Null(commons.ProjectId);
+
+        var memberships = await client.GetFromJsonAsync<GatewayMembershipsPayload>(
+            $"/api/gateway/memberships?channelId={commons.Id}");
+        Assert.NotNull(memberships);
+        var commonsAgent = Assert.Single(memberships.Members, member => member.MemberIdentity == "den-channels-runner");
+        Assert.Equal("agent", commonsAgent.MemberType);
+        Assert.Equal("active", commonsAgent.MembershipStatus);
+        Assert.Equal("mentions_only", commonsAgent.WakePolicy);
+    }
+
+    [Fact]
     public async Task ActivityEventEndpoints_AppendUpdateQueryWithoutCreatingMessages()
     {
         using var client = _factory.CreateClient();
@@ -347,7 +380,27 @@ public sealed class ChannelApiTests : IDisposable
         string? DedupeKey);
 
     private sealed record MembershipPayload(long Id, long ChannelId, string MemberType, string MemberIdentity,
-        string WakePolicy);
+        string MembershipStatus, string WakePolicy);
+
+    private sealed record GatewayMembershipsPayload(
+        long ChannelId,
+        string ChannelSlug,
+        string ChannelKind,
+        string? ProjectId,
+        List<GatewayMemberPayload> Members);
+
+    private sealed record GatewayMemberPayload(
+        long Id,
+        string MemberType,
+        string MemberIdentity,
+        string MembershipStatus,
+        string WakePolicy,
+        bool CanSend,
+        bool CanReact,
+        bool CanInvite,
+        int CooldownSeconds,
+        int MaxAutoRepliesPerWindow,
+        string? SettingsLabel);
 
     private sealed record ReactionPayload(long Id, long ChannelMessageId, string ReactionKey);
 

@@ -226,6 +226,10 @@ export function ensureProjectDefaultChannel(
   });
 }
 
+export function ensureAgentCommonsChannel(): Promise<Channel> {
+  return putChannels('/agent-commons', {});
+}
+
 export function listChannelMessages(channelId: number, opts: ListChannelMessagesOpts = {}): Promise<ChannelMessage[]> {
   const q = buildQuery({ afterId: opts.afterId, limit: opts.limit });
   return getChannels(`/channels/${channelId}/messages${q}`);
