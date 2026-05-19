@@ -51,7 +51,16 @@ public sealed class DenWebChannelFirstLayoutTests
         Assert.Contains("if (space.id === '_global') return 'global scope';", sidebar);
         Assert.DoesNotContain("if (space.id === '_global') return 'all spaces';", sidebar);
 
+        Assert.Contains("resolveAgentCommonsChannel", component);
+        Assert.Contains("return existing ?? ensureAgentCommonsChannel();", component);
         Assert.Contains("if (!projectId) return [agentCommons];", component);
+        Assert.Contains("previousProjectIdRef", component);
+        Assert.Contains("pendingProjectDefaultSelectionRef", component);
+        Assert.Contains("pendingProjectDefaultSelectionRef.current === projectId", component);
+        Assert.Contains("setSelectedChannelId(projectDefaultChannel.id)", component);
+        Assert.Contains("preferredDefaultChannel(availableChannels, projectId)?.id", component);
+        Assert.DoesNotContain("Select a project to chat", component);
+        Assert.DoesNotContain("Select a project space to join its default channel.", component);
     }
 
     [Fact]

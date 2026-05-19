@@ -66,7 +66,20 @@ function channelLabel(channel: Channel | null, projectId: string | null): string
   if (channel?.slug === 'agent-commons') return '#agent-commons';
   if (channel) return `#${channel.slug}`;
   if (projectId) return `#project-${projectId}`;
-  return '#select-project';
+  return '#agent-commons';
+}
+
+async function resolveAgentCommonsChannel(): Promise<Channel> {
+  const systemChannels = await listChannels({ kind: 'system', limit: 100 });
+  const existing = systemChannels.find(channel => channel.slug === 'agent-commons');
+  return existing ?? ensureAgentCommonsChannel();
+}
+
+function preferredDefaultChannel(channels: Channel[], projectId: string | null): Channel | undefined {
+  if (!projectId) {
+    return channels.find(candidate => candidate.slug === 'agent-commons') ?? channels[0];
+  }
+  return channels.find(candidate => candidate.kind === 'project_default') ?? channels[0];
 }
 
 function messageSender(message: ChannelMessage): string {
@@ -264,6 +277,8 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
   const [sendMode, setSendMode] = useState<ChannelSendMode>('channel');
   const [autoScroll, setAutoScroll] = useState(true);
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
+  const previousProjectIdRef = useRef<string | null>(projectId);
+  const pendingProjectDefaultSelectionRef = useRef<string | null>(null);
   const [targetMemberIdentity, setTargetMemberIdentity] = useState('');
   const [inviteIdentity, setInviteIdentity] = useState('');
   const [inviteWakePolicy, setInviteWakePolicy] = useState(DEFAULT_WAKE_POLICY);
@@ -280,7 +295,7 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
   const normalizedSenderIdentity = senderIdentity.trim();
 
   const fetchChannels = useCallback(async () => {
-    const agentCommons = await ensureAgentCommonsChannel();
+    const agentCommons = await resolveAgentCommonsChannel();
     if (!projectId) return [agentCommons];
     const projectChannels = await listChannels({ projectId, limit: 100 });
     if (projectChannels.length > 0) return [...projectChannels, agentCommons];
@@ -288,7 +303,7 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
       displayName: spaceName?.trim() || projectId,
       createdBy: normalizedSenderIdentity || 'den-web',
     });
-    return [agentCommons, ensured];
+    return [ensured, agentCommons];
   }, [normalizedSenderIdentity, projectId, spaceName]);
 
   const {
@@ -306,13 +321,44 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
   useEffect(() => {
     if (availableChannels.length === 0) {
       setSelectedChannelId(null);
+      previousProjectIdRef.current = projectId;
+      pendingProjectDefaultSelectionRef.current = projectId;
       return;
     }
-    if (!selectedChannelId || !availableChannels.some(candidate => candidate.id === selectedChannelId)) {
-      const defaultChannel = availableChannels.find(candidate => candidate.kind === 'project_default') ?? availableChannels[0];
-      setSelectedChannelId(defaultChannel.id);
+
+    const projectDefaultChannel = projectId
+      ? availableChannels.find(candidate => candidate.kind === 'project_default')
+      : undefined;
+    const projectChanged = previousProjectIdRef.current !== projectId;
+    previousProjectIdRef.current = projectId;
+
+    if (projectChanged) {
+      if (!projectId) {
+        pendingProjectDefaultSelectionRef.current = null;
+        setSelectedChannelId(preferredDefaultChannel(availableChannels, projectId)?.id ?? null);
+        return;
+      }
+
+      pendingProjectDefaultSelectionRef.current = projectId;
+      if (projectDefaultChannel) {
+        pendingProjectDefaultSelectionRef.current = null;
+        setSelectedChannelId(projectDefaultChannel.id);
+      } else if (!selectedChannelId || !availableChannels.some(candidate => candidate.id === selectedChannelId)) {
+        setSelectedChannelId(preferredDefaultChannel(availableChannels, projectId)?.id ?? null);
+      }
+      return;
     }
-  }, [availableChannels, selectedChannelId]);
+
+    if (projectId && pendingProjectDefaultSelectionRef.current === projectId && projectDefaultChannel) {
+      pendingProjectDefaultSelectionRef.current = null;
+      setSelectedChannelId(projectDefaultChannel.id);
+      return;
+    }
+
+    if (!selectedChannelId || !availableChannels.some(candidate => candidate.id === selectedChannelId)) {
+      setSelectedChannelId(preferredDefaultChannel(availableChannels, projectId)?.id ?? null);
+    }
+  }, [availableChannels, projectId, selectedChannelId]);
 
   const activeChannel = useMemo(
     () => availableChannels.find(candidate => candidate.id === selectedChannelId) ?? null,
@@ -423,12 +469,10 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
     }
   }, [activeAgentMembers, targetMemberIdentity]);
 
-  const disabledReason = !projectId
-    ? 'Select a project space to join its default channel.'
-    : channelError
-      ? 'Channel unavailable. Check den-channels API health.'
-      : null;
-  const identityRequired = Boolean(projectId) && normalizedSenderIdentity.length === 0;
+  const disabledReason = channelError
+    ? 'Channel unavailable. Check den-channels API health.'
+    : null;
+  const identityRequired = normalizedSenderIdentity.length === 0;
   const directModeRequiresTarget = sendMode === 'direct' && !selectedTarget;
   const isComposerDisabled = !activeChannel || sending || Boolean(disabledReason) || identityRequired || directModeRequiresTarget;
   const channelStatus = channelLoading && !activeChannel
@@ -601,11 +645,9 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
     }
   }, [activeChannel, normalizedSenderIdentity, refreshMessages, selectedTarget]);
 
-  const composerPlaceholder = !projectId
-    ? 'Select a project to chat'
-    : identityRequired
-      ? 'Set Posting as before sending'
-      : sendMode === 'direct' && selectedTarget
+  const composerPlaceholder = identityRequired
+    ? 'Set Posting as before sending'
+    : sendMode === 'direct' && selectedTarget
         ? `Direct message ${selectedTarget.memberIdentity} in ${channelLabel(activeChannel, projectId)}`
         : sendMode === 'direct'
           ? 'Join or select an agent before sending a direct message'
