@@ -113,6 +113,9 @@ public sealed class DenWebChannelFirstLayoutTests
         Assert.Contains("channel-chat-selector", component);
         Assert.Contains("setSelectedChannelId", component);
         Assert.Contains("channel-chat-members", component);
+        Assert.Contains("channel-chat-members-panel", component);
+        Assert.Contains("channel-chat-debug-panel", component);
+        Assert.Contains("Wake debug", component);
         Assert.Contains("Join agent", component);
         Assert.Contains("Direct message", component);
         Assert.Contains("direct_agent_message", component);
@@ -121,7 +124,12 @@ public sealed class DenWebChannelFirstLayoutTests
         Assert.Contains("claim {lastDirectResult.claimStatus}", component);
         Assert.Contains("Test wake selected", component);
         Assert.Contains("channel-chat-body-region", css);
+        Assert.Contains("grid-template-columns: minmax(0, 4fr) minmax(220px, 1fr);", css);
         Assert.Contains("channel-chat-members-list", css);
+        Assert.Contains(".channel-chat-members-panel", css);
+        Assert.Contains(".channel-chat-debug-panel", css);
+        Assert.Contains("grid-template-rows: minmax(0, 1fr) minmax(150px, 0.72fr);", css);
+        Assert.Contains("overflow-y: auto", css);
         Assert.Contains("channel-chat-delivery-status", css);
     }
 

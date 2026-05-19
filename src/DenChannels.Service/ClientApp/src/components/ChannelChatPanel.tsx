@@ -797,141 +797,149 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
         </div>
 
         <aside className="channel-chat-members" aria-label="Channel participants and active Hermes profile bindings">
-          <div className="channel-chat-members-header">
-            <strong>Participants</strong>
-            <span>{membershipsLoading ? 'loading…' : `${members.length} total`}</span>
-          </div>
-          <div className="channel-chat-members-list">
-            {membershipsError ? (
-              <div className="channel-chat-state channel-chat-state-error">{membershipsError.message}</div>
-            ) : members.length === 0 ? (
-              <div className="channel-chat-state channel-chat-state-muted">No joined agents yet.</div>
-            ) : members.map(member => {
-              const activity = memberActivityByIdentity.get(member.memberIdentity) ?? 'active';
-              const activityClass = activity === 'working' ? 'channel-chat-member-working' : 'channel-chat-member-active';
-              const status = memberStatus(member);
-              const visibleStatus = activity === 'working' ? status.replace(/^active/, 'working') : status;
-              return (
-                <div
-                  key={member.id}
-                  className={`channel-chat-member-row ${member.memberIdentity === targetMemberIdentity ? 'selected' : ''}`}
-                >
-                  <button
-                    type="button"
-                    className={`channel-chat-member ${activityClass}`}
-                    onClick={() => memberIsActiveAgent(member) && setTargetMemberIdentity(member.memberIdentity)}
-                    disabled={!memberIsActiveAgent(member)}
-                    title={visibleStatus}
+          <section className="channel-chat-members-panel" aria-label="Channel participants">
+            <div className="channel-chat-members-header">
+              <strong>Participants</strong>
+              <span>{membershipsLoading ? 'loading…' : `${members.length} total`}</span>
+            </div>
+            <div className="channel-chat-members-list">
+              {membershipsError ? (
+                <div className="channel-chat-state channel-chat-state-error">{membershipsError.message}</div>
+              ) : members.length === 0 ? (
+                <div className="channel-chat-state channel-chat-state-muted">No joined agents yet.</div>
+              ) : members.map(member => {
+                const activity = memberActivityByIdentity.get(member.memberIdentity) ?? 'active';
+                const activityClass = activity === 'working' ? 'channel-chat-member-working' : 'channel-chat-member-active';
+                const status = memberStatus(member);
+                const visibleStatus = activity === 'working' ? status.replace(/^active/, 'working') : status;
+                return (
+                  <div
+                    key={member.id}
+                    className={`channel-chat-member-row ${member.memberIdentity === targetMemberIdentity ? 'selected' : ''}`}
                   >
-                    <span className={`channel-chat-member-type member-type-${member.memberType}`}>{member.memberType}</span>
-                    <span className="channel-chat-member-identity">{member.memberIdentity}</span>
-                    <span className={`member-activity member-activity-${activity}`}>{activity}</span>
-                    <span className="channel-chat-member-status">{visibleStatus}</span>
-                  </button>
-                  {member.memberType === 'agent' && (
                     <button
                       type="button"
-                      className="channel-chat-member-edit"
-                      onClick={() => handleEditMember(member)}
-                      disabled={!activeChannel || memberSaving}
-                      aria-label={`Edit wake policy for ${member.memberIdentity}`}
+                      className={`channel-chat-member ${activityClass}`}
+                      onClick={() => memberIsActiveAgent(member) && setTargetMemberIdentity(member.memberIdentity)}
+                      disabled={!memberIsActiveAgent(member)}
+                      title={visibleStatus}
                     >
-                      Edit
+                      <span className={`channel-chat-member-type member-type-${member.memberType}`}>{member.memberType}</span>
+                      <span className="channel-chat-member-identity">{member.memberIdentity}</span>
+                      <span className={`member-activity member-activity-${activity}`}>{activity}</span>
+                      <span className="channel-chat-member-status">{visibleStatus}</span>
                     </button>
-                  )}
+                    {member.memberType === 'agent' && (
+                      <button
+                        type="button"
+                        className="channel-chat-member-edit"
+                        onClick={() => handleEditMember(member)}
+                        disabled={!activeChannel || memberSaving}
+                        aria-label={`Edit wake policy for ${member.memberIdentity}`}
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {editingMember && (
+              <div className="channel-chat-member-editor" aria-label={`Edit ${editingMember.memberIdentity} membership settings`}>
+                <div className="channel-chat-member-editor-title">
+                  <strong>Editing {editingMember.memberIdentity}</strong>
+                  <span>Changes affect future wake routing only.</span>
                 </div>
-              );
-            })}
-          </div>
-          {editingMember && (
-            <div className="channel-chat-member-editor" aria-label={`Edit ${editingMember.memberIdentity} membership settings`}>
-              <div className="channel-chat-member-editor-title">
-                <strong>Editing {editingMember.memberIdentity}</strong>
-                <span>Changes affect future wake routing only.</span>
+                <label>
+                  <span>Wake policy</span>
+                  <select
+                    value={editingWakePolicy}
+                    onChange={event => setEditingWakePolicy(event.target.value)}
+                    disabled={memberSaving}
+                  >
+                    {WAKE_POLICY_OPTIONS.map(option => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>Status</span>
+                  <select
+                    value={editingMembershipStatus}
+                    onChange={event => setEditingMembershipStatus(event.target.value)}
+                    disabled={memberSaving}
+                  >
+                    {MEMBERSHIP_STATUS_OPTIONS.map(option => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <div className="channel-chat-member-editor-actions">
+                  <button type="button" onClick={handleSaveMemberSettings} disabled={memberSaving}>
+                    {memberSaving ? 'Saving…' : 'Save settings'}
+                  </button>
+                  <button type="button" onClick={() => setEditingMemberIdentity(null)} disabled={memberSaving}>
+                    Cancel
+                  </button>
+                </div>
               </div>
-              <label>
-                <span>Wake policy</span>
-                <select
-                  value={editingWakePolicy}
-                  onChange={event => setEditingWakePolicy(event.target.value)}
-                  disabled={memberSaving}
-                >
-                  {WAKE_POLICY_OPTIONS.map(option => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>Status</span>
-                <select
-                  value={editingMembershipStatus}
-                  onChange={event => setEditingMembershipStatus(event.target.value)}
-                  disabled={memberSaving}
-                >
-                  {MEMBERSHIP_STATUS_OPTIONS.map(option => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-              <div className="channel-chat-member-editor-actions">
-                <button type="button" onClick={handleSaveMemberSettings} disabled={memberSaving}>
-                  {memberSaving ? 'Saving…' : 'Save settings'}
-                </button>
-                <button type="button" onClick={() => setEditingMemberIdentity(null)} disabled={memberSaving}>
-                  Cancel
-                </button>
-              </div>
+            )}
+          </section>
+          <section className="channel-chat-debug-panel" aria-label="Wake debug controls and evidence">
+            <div className="channel-chat-debug-header">
+              <strong>Wake debug</strong>
+              <span>Manual test tools</span>
             </div>
-          )}
-          <div className="channel-chat-invite">
-            <input
-              value={inviteIdentity}
-              onChange={event => setInviteIdentity(event.target.value)}
-              placeholder="agent identity"
-              disabled={!activeChannel || inviteSending}
-              aria-label="Agent identity to join"
-            />
-            <select
-              value={inviteWakePolicy}
-              onChange={event => setInviteWakePolicy(event.target.value)}
-              disabled={!activeChannel || inviteSending}
-              aria-label="Wake policy"
+            <div className="channel-chat-invite">
+              <input
+                value={inviteIdentity}
+                onChange={event => setInviteIdentity(event.target.value)}
+                placeholder="agent identity"
+                disabled={!activeChannel || inviteSending}
+                aria-label="Agent identity to join"
+              />
+              <select
+                value={inviteWakePolicy}
+                onChange={event => setInviteWakePolicy(event.target.value)}
+                disabled={!activeChannel || inviteSending}
+                aria-label="Wake policy"
+              >
+                {WAKE_POLICY_OPTIONS.map(option => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <button type="button" onClick={handleInviteAgent} disabled={!activeChannel || inviteSending || inviteIdentity.trim().length === 0}>
+                {inviteSending ? (inviteExistingMember ? 'Updating…' : 'Joining…') : (inviteExistingMember ? 'Update agent' : 'Join agent')}
+              </button>
+              <span className="channel-chat-routing-note">Wake policy changes apply to future deliveries only.</span>
+            </div>
+            <button
+              type="button"
+              className="channel-chat-test-wake"
+              onClick={handleTestWake}
+              disabled={!activeChannel || !selectedTarget || wakeSending || identityRequired}
             >
-              {WAKE_POLICY_OPTIONS.map(option => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-            <button type="button" onClick={handleInviteAgent} disabled={!activeChannel || inviteSending || inviteIdentity.trim().length === 0}>
-              {inviteSending ? (inviteExistingMember ? 'Updating…' : 'Joining…') : (inviteExistingMember ? 'Update agent' : 'Join agent')}
+              {wakeSending ? 'Recording wake…' : 'Test wake selected'}
             </button>
-            <span className="channel-chat-routing-note">Wake policy changes apply to future deliveries only.</span>
-          </div>
-          <button
-            type="button"
-            className="channel-chat-test-wake"
-            onClick={handleTestWake}
-            disabled={!activeChannel || !selectedTarget || wakeSending || identityRequired}
-          >
-            {wakeSending ? 'Recording wake…' : 'Test wake selected'}
-          </button>
-          {lastWakeResult && (
-            <div className="channel-chat-wake-result">
-              <strong>{lastWakeResult.status}</strong>
-              <span>{lastWakeResult.memberIdentity} · message {lastWakeResult.messageId}</span>
-              <span>{lastWakeResult.evidenceSummary}</span>
-            </div>
-          )}
-          {lastDirectResult && (
-            <div className="channel-chat-wake-result">
-              <strong>{lastDirectResult.deliveryStatus}</strong>
-              <span>
-                {lastDirectResult.memberIdentity} · request {lastDirectResult.requestId} · claim {lastDirectResult.claimStatus} · completion {lastDirectResult.completionStatus} · suppression {lastDirectResult.suppressionStatus}
-              </span>
-              <a href={lastDirectResult.gatewayMessageUrl} target="_blank" rel="noreferrer">Gateway message evidence</a>
-              <a href={lastDirectResult.gatewayEventsUrl} target="_blank" rel="noreferrer">Gateway events evidence</a>
-              <span>{lastDirectResult.evidenceSummary}</span>
-            </div>
-          )}
+            {lastWakeResult && (
+              <div className="channel-chat-wake-result">
+                <strong>{lastWakeResult.status}</strong>
+                <span>{lastWakeResult.memberIdentity} · message {lastWakeResult.messageId}</span>
+                <span>{lastWakeResult.evidenceSummary}</span>
+              </div>
+            )}
+            {lastDirectResult && (
+              <div className="channel-chat-wake-result">
+                <strong>{lastDirectResult.deliveryStatus}</strong>
+                <span>
+                  {lastDirectResult.memberIdentity} · request {lastDirectResult.requestId} · claim {lastDirectResult.claimStatus} · completion {lastDirectResult.completionStatus} · suppression {lastDirectResult.suppressionStatus}
+                </span>
+                <a href={lastDirectResult.gatewayMessageUrl} target="_blank" rel="noreferrer">Gateway message evidence</a>
+                <a href={lastDirectResult.gatewayEventsUrl} target="_blank" rel="noreferrer">Gateway events evidence</a>
+                <span>{lastDirectResult.evidenceSummary}</span>
+              </div>
+            )}
+          </section>
         </aside>
       </div>
 
