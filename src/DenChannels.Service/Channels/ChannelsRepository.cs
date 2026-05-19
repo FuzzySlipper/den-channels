@@ -431,8 +431,8 @@ public sealed partial class ChannelsRepository
     }
 
     public async Task<IReadOnlyList<ChannelActivityEventDto>> ListActivityEventsAsync(long channelId,
-        string? deliveryRequestId = null, string? hermesSessionKey = null, long? anchorMessageId = null, long? afterId = null,
-        int limit = 100, CancellationToken cancellationToken = default)
+        string? deliveryRequestId = null, string? hermesSessionKey = null, long? anchorMessageId = null, long? taskId = null,
+        long? afterId = null, int limit = 100, CancellationToken cancellationToken = default)
     {
         limit = Math.Clamp(limit, 1, 500);
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -446,6 +446,7 @@ public sealed partial class ChannelsRepository
               AND ($deliveryRequestId IS NULL OR delivery_request_id = $deliveryRequestId)
               AND ($hermesSessionKey IS NULL OR hermes_session_key = $hermesSessionKey)
               AND ($anchorMessageId IS NULL OR anchor_message_id = $anchorMessageId)
+              AND ($taskId IS NULL OR task_id = $taskId)
               AND ($afterId IS NULL OR id > $afterId)
             ORDER BY sequence ASC, id ASC
             LIMIT $limit;
@@ -454,6 +455,7 @@ public sealed partial class ChannelsRepository
         command.Parameters.AddWithValue("$deliveryRequestId", (object?)deliveryRequestId ?? DBNull.Value);
         command.Parameters.AddWithValue("$hermesSessionKey", (object?)hermesSessionKey ?? DBNull.Value);
         command.Parameters.AddWithValue("$anchorMessageId", (object?)anchorMessageId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$taskId", (object?)taskId ?? DBNull.Value);
         command.Parameters.AddWithValue("$afterId", (object?)afterId ?? DBNull.Value);
         command.Parameters.AddWithValue("$limit", limit);
         var rows = new List<ChannelActivityEventDto>();

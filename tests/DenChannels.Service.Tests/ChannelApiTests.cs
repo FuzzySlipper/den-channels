@@ -265,6 +265,27 @@ public sealed class ChannelApiTests : IDisposable
         Assert.Equal("completed", duplicate.Status);
         Assert.True(duplicate.UpdateVersion > started.UpdateVersion);
 
+        var otherTask = await PostJsonAsync<ActivityEventPayload>(client, $"/api/channels/{channel.Id}/activity-events", new
+        {
+            projectId = "den-channels",
+            agentIdentity = "den-mcp-runner",
+            deliveryRequestId = "delivery-1529",
+            hermesSessionKey = "den-channels:1529",
+            taskId = 1529,
+            eventType = "tool_call_started",
+            status = "started",
+            sequence = 2,
+            summary = "other task should not leak into task filter",
+            dedupeKey = "activity:delivery-1529:1"
+        });
+        Assert.NotEqual(started.Id, otherTask.Id);
+
+        var byTask = await client.GetFromJsonAsync<List<ActivityEventPayload>>(
+            $"/api/channels/{channel.Id}/activity-events?taskId=1526");
+        Assert.NotNull(byTask);
+        var taskActivity = Assert.Single(byTask);
+        Assert.Equal(started.Id, taskActivity.Id);
+
         var updated = await PatchJsonAsync<ActivityEventPayload>(client, $"/api/channel-activity-events/{started.Id}", new
         {
             status = "failed",
