@@ -18,6 +18,7 @@ public sealed class ChannelsDatabaseInitializerTests
         Assert.Contains("channel_messages", tables);
         Assert.Contains("channel_memberships", tables);
         Assert.Contains("channel_reactions", tables);
+        Assert.Contains("channel_activity_events", tables);
         Assert.Contains("channel_read_cursors", tables);
         Assert.Contains("schema_migrations", tables);
 
@@ -228,6 +229,79 @@ public sealed class ChannelsDatabaseInitializerTests
             VALUES (1, 'agent', 'den-channels-runner', 'Gateway delivery reply', 'agent_text', 'gateway_delivery', '44', 'den-channels', 'gateway-delivery:44');
             """);
         Assert.Equal(2, await CountRowsAsync(connection, "channel_messages"));
+    }
+
+    [Fact]
+    public async Task ActivityEventSchema_IsSeparateFromMessagesAndHasConstraints()
+    {
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        var columns = await ListColumnsAsync(connection, "channel_activity_events");
+        Assert.Contains("delivery_request_id", columns);
+        Assert.Contains("hermes_session_key", columns);
+        Assert.Contains("anchor_message_id", columns);
+        Assert.Contains("preview_json", columns);
+        Assert.Contains("dedupe_key", columns);
+
+        await ExecuteAsync(connection, """
+            INSERT INTO channels(slug, display_name, kind, project_id)
+            VALUES ('project-den-channels', 'Den Channels', 'project_default', 'den-channels');
+            INSERT INTO channel_activity_events(
+                channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key,
+                event_type, status, sequence, summary, dedupe_key)
+            VALUES (
+                1, 'den-channels', 'den-mcp-runner', 'dr-1', 'session-1',
+                'tool_call_started', 'started', 1, 'terminal: dotnet test', 'activity:dr-1:1');
+            """);
+
+        Assert.Equal(1, await CountRowsAsync(connection, "channel_activity_events"));
+        Assert.Equal(0, await CountRowsAsync(connection, "channel_messages"));
+
+        await Assert.ThrowsAsync<SqliteException>(() => ExecuteAsync(connection, """
+            INSERT INTO channel_activity_events(channel_id, agent_identity, event_type, status)
+            VALUES (1, 'den-mcp-runner', 'not_a_real_event', 'started');
+            """));
+
+        await Assert.ThrowsAsync<SqliteException>(() => ExecuteAsync(connection, """
+            INSERT INTO channel_activity_events(channel_id, agent_identity, event_type, status, sequence)
+            VALUES (1, 'den-mcp-runner', 'tool_call_started', 'started', -1);
+            """));
+    }
+
+    [Fact]
+    public async Task ApplyMigrationsAsync_AddsActivityEventStoreToLegacyDatabase()
+    {
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ExecuteAsync(connection, """
+            CREATE TABLE channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                project_id TEXT
+            );
+            CREATE TABLE channel_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL,
+                sender_type TEXT NOT NULL,
+                sender_identity TEXT NOT NULL,
+                body TEXT NOT NULL
+            );
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO schema_migrations(version, name) VALUES (1, 'initial_channel_schema');
+            """);
+
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        var tables = await ListTablesAsync(connection);
+        Assert.Contains("channel_activity_events", tables);
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+        Assert.Contains("channel_activity_events", await ListTablesAsync(connection));
     }
 
     private static async Task<SqliteConnection> OpenInMemoryDatabaseAsync()

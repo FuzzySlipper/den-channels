@@ -210,6 +210,82 @@ public sealed class ChannelApiTests : IDisposable
         Assert.Contains("user:patch", summary.Reactors);
     }
 
+    [Fact]
+    public async Task ActivityEventEndpoints_AppendUpdateQueryWithoutCreatingMessages()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+        var anchorMessage = await PostJsonAsync<MessagePayload>(client, $"/api/channels/{channel.Id}/messages", new
+        {
+            senderType = "user",
+            senderIdentity = "patch",
+            body = "Please work on task 1526"
+        });
+
+        var started = await PostJsonAsync<ActivityEventPayload>(client, $"/api/channels/{channel.Id}/activity-events", new
+        {
+            projectId = "den-channels",
+            agentIdentity = "den-mcp-runner",
+            deliveryRequestId = "delivery-1526",
+            hermesSessionKey = "den-channels:1526",
+            taskId = 1526,
+            threadId = 6445,
+            anchorMessageId = anchorMessage.Id,
+            eventType = "tool_call_started",
+            status = "started",
+            sequence = 1,
+            title = "terminal",
+            summary = "dotnet test",
+            previewJson = "{\"command\":\"dotnet test\",\"apiKey\":\"sk-test-secret\"}",
+            metadataJson = "{\"authorization\":\"Bearer very-secret-token\"}",
+            dedupeKey = "activity:delivery-1526:1"
+        });
+        Assert.Equal("started", started.Status);
+        Assert.Equal(anchorMessage.Id, started.AnchorMessageId);
+        Assert.DoesNotContain("sk-test-secret", started.PreviewJson);
+        Assert.DoesNotContain("very-secret-token", started.MetadataJson);
+        Assert.Contains("[REDACTED]", started.PreviewJson);
+
+        var duplicate = await PostJsonAsync<ActivityEventPayload>(client, $"/api/channels/{channel.Id}/activity-events", new
+        {
+            projectId = "den-channels",
+            agentIdentity = "den-mcp-runner",
+            deliveryRequestId = "delivery-1526",
+            hermesSessionKey = "den-channels:1526",
+            eventType = "tool_call_completed",
+            status = "completed",
+            sequence = 1,
+            summary = "dotnet test passed",
+            dedupeKey = "activity:delivery-1526:1"
+        });
+        Assert.Equal(started.Id, duplicate.Id);
+        Assert.Equal("completed", duplicate.Status);
+        Assert.True(duplicate.UpdateVersion > started.UpdateVersion);
+
+        var updated = await PatchJsonAsync<ActivityEventPayload>(client, $"/api/channel-activity-events/{started.Id}", new
+        {
+            status = "failed",
+            summary = "dotnet test failed before fix"
+        });
+        Assert.Equal("failed", updated.Status);
+        Assert.Contains("failed", updated.Summary);
+
+        var byDelivery = await client.GetFromJsonAsync<List<ActivityEventPayload>>(
+            $"/api/channels/{channel.Id}/activity-events?deliveryRequestId=delivery-1526");
+        Assert.NotNull(byDelivery);
+        var activityEvent = Assert.Single(byDelivery);
+        Assert.Equal(started.Id, activityEvent.Id);
+        Assert.Equal("den-channels:1526", activityEvent.HermesSessionKey);
+
+        var messages = await client.GetFromJsonAsync<List<MessagePayload>>($"/api/channels/{channel.Id}/messages?afterId=0&limit=10");
+        Assert.NotNull(messages);
+        var onlyMessage = Assert.Single(messages);
+        Assert.Equal(anchorMessage.Id, onlyMessage.Id);
+    }
+
     public void Dispose()
     {
         _factory.Dispose();
@@ -235,6 +311,15 @@ public sealed class ChannelApiTests : IDisposable
         return payload;
     }
 
+    private static async Task<T> PatchJsonAsync<T>(HttpClient client, string url, object request)
+    {
+        using var response = await client.PatchAsJsonAsync(url, request);
+        response.EnsureSuccessStatusCode();
+        var payload = await response.Content.ReadFromJsonAsync<T>();
+        Assert.NotNull(payload);
+        return payload;
+    }
+
     private sealed record ChannelPayload(long Id, string Slug, string DisplayName, string Kind, string? ProjectId);
 
     private sealed record MessagePayload(long Id, long ChannelId, string Body, string? SourceKind, string? DeepLink,
@@ -247,4 +332,8 @@ public sealed class ChannelApiTests : IDisposable
 
     private sealed record ReactionSummaryPayload(long ChannelMessageId, string ReactionKey, int Count,
         string[] Reactors);
+
+    private sealed record ActivityEventPayload(long Id, long ChannelId, string? ProjectId, string AgentIdentity,
+        string? DeliveryRequestId, string? HermesSessionKey, long? AnchorMessageId, string EventType, string Status,
+        long Sequence, long UpdateVersion, string? Summary, string? PreviewJson, string? MetadataJson);
 }

@@ -110,3 +110,49 @@ public sealed record AddChannelReactionRequest(
     string ReactorType,
     string ReactorIdentity,
     string ReactionKey);
+
+public sealed record ChannelActivityEventDto(
+    long Id,
+    long ChannelId,
+    string? ProjectId,
+    string AgentIdentity,
+    string? DeliveryRequestId,
+    string? HermesSessionKey,
+    long? TaskId,
+    long? ThreadId,
+    long? AnchorMessageId,
+    string EventType,
+    string Status,
+    long Sequence,
+    long UpdateVersion,
+    string? Title,
+    string? Summary,
+    string? PreviewJson,
+    string? MetadataJson,
+    string? DedupeKey,
+    string CreatedAt,
+    string UpdatedAt);
+
+public sealed record AppendChannelActivityEventRequest(
+    string? ProjectId,
+    string AgentIdentity,
+    string? DeliveryRequestId,
+    string? HermesSessionKey,
+    long? TaskId,
+    long? ThreadId,
+    long? AnchorMessageId,
+    string EventType,
+    string? Status,
+    long? Sequence,
+    string? Title,
+    string? Summary,
+    string? PreviewJson,
+    string? MetadataJson,
+    string? DedupeKey);
+
+public sealed record UpdateChannelActivityEventRequest(
+    string? Status,
+    string? Title,
+    string? Summary,
+    string? PreviewJson,
+    string? MetadataJson);

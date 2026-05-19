@@ -46,6 +46,7 @@ public sealed class ChannelsDatabaseInitializer
 
         await EnsureChannelMessageCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureChannelMessagesSourceKindConstraintAsync(connection, cancellationToken);
+        await EnsureChannelActivityEventsSchemaAsync(connection, cancellationToken);
         await ExecuteNonQueryAsync(connection, PostCreateIndexesSql, cancellationToken);
     }
 
@@ -60,6 +61,12 @@ public sealed class ChannelsDatabaseInitializer
             return;
 
         await ExecuteNonQueryAsync(connection, RebuildChannelMessagesWithGatewayDeliverySourceKindSql, cancellationToken);
+    }
+
+    private static async Task EnsureChannelActivityEventsSchemaAsync(SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await ExecuteNonQueryAsync(connection, ChannelActivityEventsSchemaSql, cancellationToken);
     }
 
     private static async Task<string?> GetTableCreateSqlAsync(SqliteConnection connection, string tableName,
@@ -265,6 +272,43 @@ public sealed class ChannelsDatabaseInitializer
         CREATE INDEX IF NOT EXISTS idx_channel_reactions_message
             ON channel_reactions(channel_message_id);
 
+        CREATE TABLE IF NOT EXISTS channel_activity_events (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id            INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+            project_id            TEXT,
+            agent_identity        TEXT NOT NULL,
+            delivery_request_id   TEXT,
+            hermes_session_key    TEXT,
+            task_id               INTEGER,
+            thread_id             INTEGER,
+            anchor_message_id     INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
+            event_type            TEXT NOT NULL
+                                  CHECK (event_type IN ('tool_call_started', 'tool_call_completed', 'tool_call_failed', 'lifecycle_status', 'aggregation_snapshot', 'run_summary')),
+            status                TEXT NOT NULL DEFAULT 'completed'
+                                  CHECK (status IN ('started', 'completed', 'failed', 'interim')),
+            sequence              INTEGER NOT NULL DEFAULT 0 CHECK (sequence >= 0),
+            update_version        INTEGER NOT NULL DEFAULT 1 CHECK (update_version >= 1),
+            title                 TEXT,
+            summary               TEXT,
+            preview_json          TEXT,
+            metadata_json         TEXT,
+            dedupe_key            TEXT,
+            created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_channel_created
+            ON channel_activity_events(channel_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_delivery
+            ON channel_activity_events(delivery_request_id, sequence, id)
+            WHERE delivery_request_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_session
+            ON channel_activity_events(hermes_session_key, sequence, id)
+            WHERE hermes_session_key IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_channel_activity_events_dedupe
+            ON channel_activity_events(channel_id, dedupe_key)
+            WHERE dedupe_key IS NOT NULL;
+
         CREATE TABLE IF NOT EXISTS channel_read_cursors (
             id                         INTEGER PRIMARY KEY AUTOINCREMENT,
             channel_id                 INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
@@ -276,6 +320,45 @@ public sealed class ChannelsDatabaseInitializer
             updated_at                 TEXT NOT NULL DEFAULT (datetime('now')),
             UNIQUE(channel_id, reader_type, reader_identity)
         );
+        """;
+
+    private const string ChannelActivityEventsSchemaSql = """
+        CREATE TABLE IF NOT EXISTS channel_activity_events (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id            INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+            project_id            TEXT,
+            agent_identity        TEXT NOT NULL,
+            delivery_request_id   TEXT,
+            hermes_session_key    TEXT,
+            task_id               INTEGER,
+            thread_id             INTEGER,
+            anchor_message_id     INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
+            event_type            TEXT NOT NULL
+                                  CHECK (event_type IN ('tool_call_started', 'tool_call_completed', 'tool_call_failed', 'lifecycle_status', 'aggregation_snapshot', 'run_summary')),
+            status                TEXT NOT NULL DEFAULT 'completed'
+                                  CHECK (status IN ('started', 'completed', 'failed', 'interim')),
+            sequence              INTEGER NOT NULL DEFAULT 0 CHECK (sequence >= 0),
+            update_version        INTEGER NOT NULL DEFAULT 1 CHECK (update_version >= 1),
+            title                 TEXT,
+            summary               TEXT,
+            preview_json          TEXT,
+            metadata_json         TEXT,
+            dedupe_key            TEXT,
+            created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_channel_created
+            ON channel_activity_events(channel_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_delivery
+            ON channel_activity_events(delivery_request_id, sequence, id)
+            WHERE delivery_request_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_session
+            ON channel_activity_events(hermes_session_key, sequence, id)
+            WHERE hermes_session_key IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_channel_activity_events_dedupe
+            ON channel_activity_events(channel_id, dedupe_key)
+            WHERE dedupe_key IS NOT NULL;
         """;
 
     private const string PostCreateIndexesSql = """

@@ -1,10 +1,11 @@
 using DenChannels.Service.Configuration;
+using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
 
 namespace DenChannels.Service.Channels;
 
-public sealed class ChannelsRepository
+public sealed partial class ChannelsRepository
 {
     private readonly IOptions<DenChannelsOptions> _options;
 
@@ -361,6 +362,107 @@ public sealed class ChannelsRepository
         return ReadReaction(reader);
     }
 
+    public async Task<ChannelActivityEventDto> AppendActivityEventAsync(long channelId,
+        AppendChannelActivityEventRequest request, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO channel_activity_events(
+                channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key, task_id, thread_id,
+                anchor_message_id, event_type, status, sequence, title, summary, preview_json, metadata_json, dedupe_key)
+            VALUES (
+                $channelId, $projectId, $agentIdentity, $deliveryRequestId, $hermesSessionKey, $taskId, $threadId,
+                $anchorMessageId, $eventType, $status, $sequence, $title, $summary, $previewJson, $metadataJson, $dedupeKey)
+            ON CONFLICT(channel_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET
+                project_id = COALESCE(excluded.project_id, channel_activity_events.project_id),
+                agent_identity = excluded.agent_identity,
+                delivery_request_id = COALESCE(excluded.delivery_request_id, channel_activity_events.delivery_request_id),
+                hermes_session_key = COALESCE(excluded.hermes_session_key, channel_activity_events.hermes_session_key),
+                task_id = COALESCE(excluded.task_id, channel_activity_events.task_id),
+                thread_id = COALESCE(excluded.thread_id, channel_activity_events.thread_id),
+                anchor_message_id = COALESCE(excluded.anchor_message_id, channel_activity_events.anchor_message_id),
+                event_type = excluded.event_type,
+                status = excluded.status,
+                sequence = excluded.sequence,
+                title = COALESCE(excluded.title, channel_activity_events.title),
+                summary = COALESCE(excluded.summary, channel_activity_events.summary),
+                preview_json = COALESCE(excluded.preview_json, channel_activity_events.preview_json),
+                metadata_json = COALESCE(excluded.metadata_json, channel_activity_events.metadata_json),
+                update_version = channel_activity_events.update_version + 1,
+                updated_at = datetime('now')
+            RETURNING id, channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key, task_id, thread_id,
+                anchor_message_id, event_type, status, sequence, update_version, title, summary, preview_json, metadata_json,
+                dedupe_key, created_at, updated_at;
+            """;
+        AddActivityParameters(command, channelId, request);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        return ReadActivityEvent(reader);
+    }
+
+    public async Task<ChannelActivityEventDto?> UpdateActivityEventAsync(long activityEventId,
+        UpdateChannelActivityEventRequest request, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE channel_activity_events
+            SET status = COALESCE($status, status),
+                title = COALESCE($title, title),
+                summary = COALESCE($summary, summary),
+                preview_json = COALESCE($previewJson, preview_json),
+                metadata_json = COALESCE($metadataJson, metadata_json),
+                update_version = update_version + 1,
+                updated_at = datetime('now')
+            WHERE id = $id
+            RETURNING id, channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key, task_id, thread_id,
+                anchor_message_id, event_type, status, sequence, update_version, title, summary, preview_json, metadata_json,
+                dedupe_key, created_at, updated_at;
+            """;
+        command.Parameters.AddWithValue("$id", activityEventId);
+        command.Parameters.AddWithValue("$status", (object?)request.Status ?? DBNull.Value);
+        command.Parameters.AddWithValue("$title", NormalizeActivityText(request.Title, 200));
+        command.Parameters.AddWithValue("$summary", NormalizeActivityText(request.Summary, 1000));
+        command.Parameters.AddWithValue("$previewJson", NormalizeActivityText(request.PreviewJson, 4000));
+        command.Parameters.AddWithValue("$metadataJson", NormalizeActivityText(request.MetadataJson, 4000));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadActivityEvent(reader) : null;
+    }
+
+    public async Task<IReadOnlyList<ChannelActivityEventDto>> ListActivityEventsAsync(long channelId,
+        string? deliveryRequestId = null, string? hermesSessionKey = null, long? anchorMessageId = null, long? afterId = null,
+        int limit = 100, CancellationToken cancellationToken = default)
+    {
+        limit = Math.Clamp(limit, 1, 500);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key, task_id, thread_id,
+                anchor_message_id, event_type, status, sequence, update_version, title, summary, preview_json, metadata_json,
+                dedupe_key, created_at, updated_at
+            FROM channel_activity_events
+            WHERE channel_id = $channelId
+              AND ($deliveryRequestId IS NULL OR delivery_request_id = $deliveryRequestId)
+              AND ($hermesSessionKey IS NULL OR hermes_session_key = $hermesSessionKey)
+              AND ($anchorMessageId IS NULL OR anchor_message_id = $anchorMessageId)
+              AND ($afterId IS NULL OR id > $afterId)
+            ORDER BY sequence ASC, id ASC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$deliveryRequestId", (object?)deliveryRequestId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$hermesSessionKey", (object?)hermesSessionKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$anchorMessageId", (object?)anchorMessageId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$afterId", (object?)afterId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$limit", limit);
+        var rows = new List<ChannelActivityEventDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadActivityEvent(reader));
+        return rows;
+    }
+
     private async Task<SqliteConnection> OpenConnectionAsync(CancellationToken cancellationToken)
     {
         var path = _options.Value.Database.Path;
@@ -387,7 +489,39 @@ public sealed class ChannelsRepository
         command.Parameters.AddWithValue("$settingsJson", (object?)request.SettingsJson ?? DBNull.Value);
     }
 
+    private static void AddActivityParameters(SqliteCommand command, long channelId, AppendChannelActivityEventRequest request)
+    {
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$projectId", (object?)request.ProjectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$agentIdentity", request.AgentIdentity);
+        command.Parameters.AddWithValue("$deliveryRequestId", (object?)request.DeliveryRequestId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$hermesSessionKey", (object?)request.HermesSessionKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$taskId", (object?)request.TaskId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$threadId", (object?)request.ThreadId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$anchorMessageId", (object?)request.AnchorMessageId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$eventType", request.EventType);
+        command.Parameters.AddWithValue("$status", request.Status ?? "completed");
+        command.Parameters.AddWithValue("$sequence", request.Sequence ?? 0);
+        command.Parameters.AddWithValue("$title", NormalizeActivityText(request.Title, 200));
+        command.Parameters.AddWithValue("$summary", NormalizeActivityText(request.Summary, 1000));
+        command.Parameters.AddWithValue("$previewJson", NormalizeActivityText(request.PreviewJson, 4000));
+        command.Parameters.AddWithValue("$metadataJson", NormalizeActivityText(request.MetadataJson, 4000));
+        command.Parameters.AddWithValue("$dedupeKey", (object?)request.DedupeKey ?? DBNull.Value);
+    }
+
     private static string DefaultMessageKind(string senderType) => senderType == "agent" ? "agent_text" : "human_text";
+
+    private static object NormalizeActivityText(string? value, int maxLength)
+    {
+        if (string.IsNullOrEmpty(value))
+            return DBNull.Value;
+
+        var redacted = SecretLikeValueRegex().Replace(value, match => $"{match.Groups[1].Value}\"[REDACTED]\"");
+        return redacted.Length <= maxLength ? redacted : redacted[..maxLength] + "…";
+    }
+
+    [GeneratedRegex("((?:\\\"?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|auth(?:orization)?|token|password|secret)\\\"?\\s*[:=]\\s*))(\\\"[^\\\"]*\\\"|[^,}\\s]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex SecretLikeValueRegex();
 
     private static ChannelDto ReadChannel(SqliteDataReader reader) => new(
         reader.GetInt64(0),
@@ -446,6 +580,28 @@ public sealed class ChannelsRepository
         reader.GetString(3),
         reader.GetString(4),
         reader.GetString(5));
+
+    private static ChannelActivityEventDto ReadActivityEvent(SqliteDataReader reader) => new(
+        reader.GetInt64(0),
+        reader.GetInt64(1),
+        GetNullableString(reader, 2),
+        reader.GetString(3),
+        GetNullableString(reader, 4),
+        GetNullableString(reader, 5),
+        GetNullableInt64(reader, 6),
+        GetNullableInt64(reader, 7),
+        GetNullableInt64(reader, 8),
+        reader.GetString(9),
+        reader.GetString(10),
+        reader.GetInt64(11),
+        reader.GetInt64(12),
+        GetNullableString(reader, 13),
+        GetNullableString(reader, 14),
+        GetNullableString(reader, 15),
+        GetNullableString(reader, 16),
+        GetNullableString(reader, 17),
+        reader.GetString(18),
+        reader.GetString(19));
 
     private static string? GetNullableString(SqliteDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);

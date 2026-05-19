@@ -62,6 +62,39 @@ public static class ChannelRoutes
             CancellationToken cancellationToken) => Results.Ok(
                 await repository.ListReactionSummariesAsync(channelId, cancellationToken)));
 
+        api.MapPost("/channels/{channelId:long}/activity-events", async (ChannelsRepository repository, long channelId,
+            AppendChannelActivityEventRequest request, CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                var activityEvent = await repository.AppendActivityEventAsync(channelId, request, cancellationToken);
+                return Results.Created($"/api/channels/{channelId}/activity-events/{activityEvent.Id}", activityEvent);
+            }
+            catch (SqliteException ex) when (IsConstraintFailure(ex))
+            {
+                return Results.Conflict(new ProblemDetailsDto("activity_event_constraint_failed", ex.SqliteErrorCode, ex.Message));
+            }
+        });
+
+        api.MapGet("/channels/{channelId:long}/activity-events", async (ChannelsRepository repository, long channelId,
+            string? deliveryRequestId, string? hermesSessionKey, long? anchorMessageId, long? afterId, int? limit,
+            CancellationToken cancellationToken) => Results.Ok(await repository.ListActivityEventsAsync(
+                channelId, deliveryRequestId, hermesSessionKey, anchorMessageId, afterId, limit ?? 100, cancellationToken)));
+
+        api.MapPatch("/channel-activity-events/{activityEventId:long}", async (ChannelsRepository repository, long activityEventId,
+            UpdateChannelActivityEventRequest request, CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                var activityEvent = await repository.UpdateActivityEventAsync(activityEventId, request, cancellationToken);
+                return activityEvent is null ? Results.NotFound() : Results.Ok(activityEvent);
+            }
+            catch (SqliteException ex) when (IsConstraintFailure(ex))
+            {
+                return Results.Conflict(new ProblemDetailsDto("activity_event_constraint_failed", ex.SqliteErrorCode, ex.Message));
+            }
+        });
+
         api.MapPut("/channels/{channelId:long}/memberships", async (ChannelsRepository repository, long channelId,
             UpsertChannelMembershipRequest request, CancellationToken cancellationToken) =>
         {
