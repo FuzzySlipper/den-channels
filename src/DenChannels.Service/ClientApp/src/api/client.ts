@@ -3,6 +3,7 @@ import type {
   Channel,
   ChannelMessage,
   ChannelReactionSummary,
+  ChannelActivityEvent,
   ProjectWithStats,
   Space,
   TaskSummary,
@@ -178,6 +179,15 @@ export interface ListChannelMessagesOpts {
   limit?: number;
 }
 
+export interface ListChannelActivityEventsOpts {
+  deliveryRequestId?: string;
+  hermesSessionKey?: string;
+  anchorMessageId?: number;
+  taskId?: number;
+  afterId?: number;
+  limit?: number;
+}
+
 export interface PostChannelMessageRequest {
   senderType: string;
   senderIdentity: string;
@@ -219,6 +229,18 @@ export function ensureProjectDefaultChannel(
 export function listChannelMessages(channelId: number, opts: ListChannelMessagesOpts = {}): Promise<ChannelMessage[]> {
   const q = buildQuery({ afterId: opts.afterId, limit: opts.limit });
   return getChannels(`/channels/${channelId}/messages${q}`);
+}
+
+export function listChannelActivityEvents(channelId: number, opts: ListChannelActivityEventsOpts = {}): Promise<ChannelActivityEvent[]> {
+  const q = buildQuery({
+    deliveryRequestId: opts.deliveryRequestId,
+    hermesSessionKey: opts.hermesSessionKey,
+    anchorMessageId: opts.anchorMessageId,
+    taskId: opts.taskId,
+    afterId: opts.afterId,
+    limit: opts.limit,
+  });
+  return getChannels(`/channels/${channelId}/activity-events${q}`);
 }
 
 export function postChannelMessage(channelId: number, request: PostChannelMessageRequest): Promise<ChannelMessage> {

@@ -115,6 +115,29 @@ export interface ChannelReactionSummary {
   reactors: string[];
 }
 
+export interface ChannelActivityEvent {
+  id: number;
+  channelId: number;
+  projectId: string | null;
+  agentIdentity: string;
+  deliveryRequestId: string | null;
+  hermesSessionKey: string | null;
+  taskId: number | null;
+  threadId: number | null;
+  anchorMessageId: number | null;
+  eventType: string;
+  status: string;
+  sequence: number;
+  updateVersion: number;
+  title: string | null;
+  summary: string | null;
+  previewJson: string | null;
+  metadataJson: string | null;
+  dedupeKey: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type ChannelWakePolicy =
   | 'never'
   | 'mentions_only'

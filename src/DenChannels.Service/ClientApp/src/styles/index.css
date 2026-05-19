@@ -1406,6 +1406,106 @@ button.list-item {
   overflow-wrap: anywhere;
 }
 
+.channel-chat-details-block {
+  display: block;
+  margin: 4px 0;
+  padding: 6px 8px;
+  border: 1px solid rgba(122, 162, 247, 0.25);
+  border-radius: 6px;
+  background: rgba(122, 162, 247, 0.06);
+  white-space: pre-wrap;
+}
+
+.channel-chat-details-block summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 700;
+  white-space: normal;
+}
+
+.channel-chat-details-block div {
+  margin-top: 6px;
+  color: var(--text);
+}
+
+.channel-chat-activity-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 6px;
+  padding: 6px 8px;
+  border: 1px solid rgba(187, 154, 247, 0.28);
+  border-radius: 6px;
+  background: rgba(187, 154, 247, 0.07);
+  white-space: normal;
+}
+
+.channel-chat-activity-timeline-compact {
+  margin-top: 6px;
+}
+
+.channel-chat-activity-heading,
+.channel-chat-activity-row {
+  display: grid;
+  grid-template-columns: 72px minmax(90px, 160px) minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.channel-chat-activity-heading {
+  grid-template-columns: minmax(0, 1fr) auto;
+  color: var(--purple);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.channel-chat-activity-agent {
+  color: var(--purple);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel-chat-activity-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+.channel-chat-activity-main strong {
+  color: var(--text-bright);
+}
+
+.channel-chat-activity-status,
+.channel-chat-activity-task {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 5px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.channel-chat-activity-preview {
+  flex-basis: 100%;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.channel-chat-activity-completed .channel-chat-activity-status {
+  color: var(--green);
+}
+
+.channel-chat-activity-failed .channel-chat-activity-status {
+  color: var(--red);
+}
+
 .channel-chat-delivery-status {
   display: flex;
   flex-wrap: wrap;

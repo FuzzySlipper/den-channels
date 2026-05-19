@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
-import type { Channel, ChannelMessage, ChannelReactionSummary, GatewayDirectAgentMessage, GatewayMember, GatewayMemberships, GatewayTestWake } from '../api/types';
+import type { Channel, ChannelActivityEvent, ChannelMessage, ChannelReactionSummary, GatewayDirectAgentMessage, GatewayMember, GatewayMemberships, GatewayTestWake } from '../api/types';
 import {
   ensureProjectDefaultChannel,
+  listChannelActivityEvents,
   listChannelMessages,
   listChannelReactions,
   listChannels,
@@ -15,6 +16,7 @@ import {
 } from '../api/client';
 import { usePolling } from '../hooks/usePolling';
 import { formatTimeAgo } from '../utils';
+import { parseMessageBodySegments, sortActivityEvents, toActivityDisplayModel } from './channelChatRenderModel';
 
 const SENDER_IDENTITY_STORAGE_KEY = 'den-channel-sender-identity';
 const DEFAULT_WAKE_POLICY = 'mentions_only';
@@ -210,6 +212,48 @@ function memberIsActiveAgent(member: GatewayMember): boolean {
   return member.memberType === 'agent' && member.membershipStatus === 'active';
 }
 
+function MessageBody({ body }: { body: string }) {
+  return (
+    <>
+      {parseMessageBodySegments(body).map((segment, index) => segment.type === 'details' ? (
+        <details key={`details-${index}`} className="channel-chat-details-block">
+          <summary>{segment.summary}</summary>
+          <div>{segment.body}</div>
+        </details>
+      ) : (
+        <span key={`text-${index}`}>{segment.text}</span>
+      ))}
+    </>
+  );
+}
+
+function ActivityTimeline({ events, compact = false }: { events: ChannelActivityEvent[]; compact?: boolean }) {
+  if (events.length === 0) return null;
+  const displayEvents = sortActivityEvents(events).map(toActivityDisplayModel);
+  return (
+    <div className={`channel-chat-activity-timeline ${compact ? 'channel-chat-activity-timeline-compact' : ''}`} aria-label="Agent activity breadcrumbs">
+      {!compact && (
+        <div className="channel-chat-activity-heading">
+          <span>Agent activity</span>
+          <span>{displayEvents.length} breadcrumb{displayEvents.length === 1 ? '' : 's'}</span>
+        </div>
+      )}
+      {displayEvents.map(event => (
+        <div key={event.id} className={`channel-chat-activity-row channel-chat-activity-${event.status.toLowerCase()}`}>
+          <span className="message-time">{formatTimeAgo(event.createdAt)}</span>
+          <span className="channel-chat-activity-agent">{event.agentIdentity}</span>
+          <span className="channel-chat-activity-main">
+            <strong>{event.title}{event.count ? ` ×${event.count}` : ''}</strong>
+            <span className="channel-chat-activity-status">{event.status}</span>
+            {event.taskId && <span className="channel-chat-activity-task">task #{event.taskId}</span>}
+            {event.preview && <span className="channel-chat-activity-preview">{event.preview}</span>}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeChange }: Props) {
   const [draft, setDraft] = useState('');
   const [senderIdentity, setSenderIdentity] = useState(readStoredSenderIdentity);
@@ -282,6 +326,17 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
     refresh: refreshMessages,
   } = usePolling(fetchMessages, 4000);
 
+  const fetchActivityEvents = useCallback(
+    () => activeChannel ? listChannelActivityEvents(activeChannel.id, { limit: 120 }) : Promise.resolve([]),
+    [activeChannel],
+  );
+  const {
+    data: activityEvents,
+    loading: activityLoading,
+    error: activityError,
+    refresh: refreshActivityEvents,
+  } = usePolling<ChannelActivityEvent[]>(fetchActivityEvents, 4000);
+
   const fetchReactions = useCallback(
     () => activeChannel ? listChannelReactions(activeChannel.id) : Promise.resolve([]),
     [activeChannel],
@@ -318,6 +373,22 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
     }
     return grouped;
   }, [reactions]);
+
+  const activityEventsByAnchorMessageId = useMemo(() => {
+    const grouped = new Map<number, ChannelActivityEvent[]>();
+    for (const event of activityEvents ?? []) {
+      if (!event.anchorMessageId) continue;
+      const current = grouped.get(event.anchorMessageId) ?? [];
+      current.push(event);
+      grouped.set(event.anchorMessageId, current);
+    }
+    return grouped;
+  }, [activityEvents]);
+
+  const unanchoredActivityEvents = useMemo(
+    () => (activityEvents ?? []).filter(event => !event.anchorMessageId),
+    [activityEvents],
+  );
 
   const members = useMemo(() => memberships?.members ?? [], [memberships]);
   const memberActivityByIdentity = useMemo(() => {
@@ -388,13 +459,14 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
       }
       setDraft('');
       refreshMessages();
+      refreshActivityEvents();
       refreshReactions();
     } catch (error) {
       setSendError(error instanceof Error ? error : new Error(String(error)));
     } finally {
       setSending(false);
     }
-  }, [activeChannel, draft, isComposerDisabled, normalizedSenderIdentity, refreshMessages, refreshReactions, selectedTarget, sendMode]);
+  }, [activeChannel, draft, isComposerDisabled, normalizedSenderIdentity, refreshActivityEvents, refreshMessages, refreshReactions, selectedTarget, sendMode]);
 
   const handleReactToMessage = useCallback(async (message: ChannelMessage, reactionKey: string) => {
     const reactorIdentity = normalizedSenderIdentity || targetMemberIdentity;
@@ -505,7 +577,7 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
   useEffect(() => {
     if (!autoScroll) return;
     scrollAnchorRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
-  }, [autoScroll, sortedMessages.length]);
+  }, [autoScroll, sortedMessages.length, activityEvents?.length]);
 
   return (
     <section className={`panel channel-chat-panel channel-chat-panel-size-${panelSize}`} aria-label="Project channel chat">
@@ -568,6 +640,7 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
           onClick={() => {
             refreshChannels();
             refreshMessages();
+            refreshActivityEvents();
             refreshReactions();
             refreshMemberships();
           }}
@@ -580,23 +653,27 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
         <div className="channel-chat-scrollback" aria-live="polite">
           {disabledReason ? (
             <div className="channel-chat-state channel-chat-state-muted">{disabledReason}</div>
-          ) : messagesLoading && sortedMessages.length === 0 ? (
+          ) : (messagesLoading || activityLoading) && sortedMessages.length === 0 && unanchoredActivityEvents.length === 0 ? (
             <div className="channel-chat-state">Loading channel messages…</div>
-          ) : messagesError ? (
-            <div className="channel-chat-state channel-chat-state-error">{messagesError.message}</div>
-          ) : sortedMessages.length === 0 ? (
+          ) : messagesError || activityError ? (
+            <div className="channel-chat-state channel-chat-state-error">{(messagesError ?? activityError)?.message}</div>
+          ) : sortedMessages.length === 0 && unanchoredActivityEvents.length === 0 ? (
             <div className="channel-chat-state channel-chat-state-muted">No channel messages yet. Start the scrollback below.</div>
           ) : (
-            sortedMessages.map(message => {
-              const evidence = directMessageEvidence(message);
-              const wakeProgress = deriveWakeProgress(message, sortedMessages);
-              const messageReactions = reactionsByMessageId.get(message.id) ?? [];
-              return (
+            <>
+              <ActivityTimeline events={unanchoredActivityEvents} />
+              {sortedMessages.map(message => {
+                const evidence = directMessageEvidence(message);
+                const wakeProgress = deriveWakeProgress(message, sortedMessages);
+                const messageReactions = reactionsByMessageId.get(message.id) ?? [];
+                const anchoredActivityEvents = activityEventsByAnchorMessageId.get(message.id) ?? [];
+                return (
                 <div key={message.id} className="channel-chat-message">
                   <span className="message-time">{formatTimeAgo(message.createdAt)}</span>
                   <span className={`channel-chat-sender channel-chat-sender-${message.senderType}`}>{messageSender(message)}</span>
                   <span className="channel-chat-body">
-                    {message.body}
+                    <MessageBody body={message.body} />
+                    <ActivityTimeline events={anchoredActivityEvents} compact />
                     {wakeProgress && (
                       <span className={`channel-chat-wake-progress channel-chat-wake-progress-${wakeProgress.state}`}>
                         <strong>{wakeProgress.label}</strong>
@@ -634,7 +711,8 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
                   </span>
                 </div>
               );
-            })
+              })}
+            </>
           )}
           <div className="channel-chat-scroll-anchor" ref={scrollAnchorRef} aria-hidden="true" />
         </div>
@@ -778,9 +856,9 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
         </aside>
       </div>
 
-      {(channelError || messagesError || membershipsError || sendError) && (
+      {(channelError || messagesError || activityError || membershipsError || sendError) && (
         <div className="channel-chat-error">
-          {(sendError ?? membershipsError ?? messagesError ?? channelError)?.message}
+          {(sendError ?? membershipsError ?? activityError ?? messagesError ?? channelError)?.message}
         </div>
       )}
 
