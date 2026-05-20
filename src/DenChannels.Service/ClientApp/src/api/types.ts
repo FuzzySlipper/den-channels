@@ -11,7 +11,8 @@ export type MessageIntent =
   | 'review_feedback'
   | 'review_approval'
   | 'task_ready'
-  | 'task_blocked';
+  | 'task_blocked'
+  | 'notification';
 export type AgentStreamKind = 'ops' | 'message';
 export type AgentStreamDeliveryMode = 'record_only' | 'notify' | 'wake';
 export type DispatchStatus = 'pending' | 'approved' | 'rejected' | 'completed' | 'expired';

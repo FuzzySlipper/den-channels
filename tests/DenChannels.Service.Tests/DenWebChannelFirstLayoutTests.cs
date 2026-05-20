@@ -245,6 +245,8 @@ public sealed class DenWebChannelFirstLayoutTests
         var app = ReadClientSource("App.tsx");
         var component = ReadClientSource("components", "MessagesInbox.tsx");
         var css = ReadClientSource("styles", "index.css");
+        var types = ReadClientSource("api", "types.ts");
+        var messageIntents = ReadClientSource("messageIntents.ts");
 
         Assert.Contains("'messages'", filterBar);
         Assert.Contains("onViewModeChange('messages')", filterBar);
@@ -253,6 +255,9 @@ public sealed class DenWebChannelFirstLayoutTests
         Assert.Contains("viewMode === 'messages'", app);
         Assert.Contains("getMessages", component);
         Assert.Contains("User-directed", component);
+        Assert.Contains("message.intent === 'notification'", component);
+        Assert.Contains("| 'notification'", types);
+        Assert.Contains("notification: 'Notification'", messageIntents);
         Assert.Contains("project-level and task-attached messages", component);
         Assert.Contains("separate from channel chat and agent activity breadcrumbs", component);
         Assert.Contains("messages-inbox-user-chip", component);

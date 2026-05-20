@@ -38,6 +38,7 @@ function isUserDirected(message: Message): boolean {
   const type = firstString(metadata.type, metadata.kind);
   return message.intent === 'question'
     || message.intent === 'task_blocked'
+    || message.intent === 'notification'
     || type === 'user_notification'
     || type === 'notification'
     || recipient === 'user'
