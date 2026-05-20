@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { ChannelActivityEvent } from '../api/types';
-import { findActiveMentionQuery, getMentionSuggestions, insertMentionToken, parseMessageBodySegments, toActivityDisplayModel } from './channelChatRenderModel';
+import type { ChannelActivityEvent, ChannelMessage } from '../api/types';
+import { activityMatchesChannelMessage, channelMessageDeliveryRequestId, findActiveMentionQuery, getMentionSuggestions, insertMentionToken, parseMessageBodySegments, toActivityDisplayModel } from './channelChatRenderModel';
 
 function activity(overrides: Partial<ChannelActivityEvent>): ChannelActivityEvent {
   return {
@@ -31,6 +31,31 @@ function activity(overrides: Partial<ChannelActivityEvent>): ChannelActivityEven
   };
 }
 
+function channelMessage(overrides: Partial<ChannelMessage>): ChannelMessage {
+  const base: ChannelMessage = {
+    id: 42,
+    channelId: 10,
+    senderType: 'agent',
+    senderIdentity: 'den-mcp-runner',
+    body: 'final answer',
+    messageKind: 'agent_text',
+    sourceKind: 'gateway_delivery',
+    sourceId: '228',
+    sourceProjectId: 'den-channels',
+    summary: null,
+    deepLink: null,
+    threadRootMessageId: null,
+    replyToMessageId: null,
+    metadataJson: null,
+    dedupeKey: 'gateway-delivery:228:final',
+    finalChannelMessageId: null,
+    createdAt: '2026-05-19T00:00:00Z',
+    editedAt: null,
+    deletedAt: null,
+  };
+  return { ...base, ...overrides };
+}
+
 describe('parseMessageBodySegments', () => {
   it('turns details/summary artifacts into disclosure segments without raw tag clutter', () => {
     const segments = parseMessageBodySegments('Before\n<details>\n<summary>What I would propose</summary>\n\n1. Take #1308\n2. Store findings\n</details>\nAfter');
@@ -40,6 +65,25 @@ describe('parseMessageBodySegments', () => {
       { type: 'details', summary: 'What I would propose', body: '1. Take #1308\n2. Store findings' },
       { type: 'text', text: '\nAfter' },
     ]);
+  });
+});
+
+describe('activity/message delivery matching', () => {
+  it('resolves delivery ids from final gateway messages without terminalizing anything in the UI', () => {
+    expect(channelMessageDeliveryRequestId(channelMessage({}))).toBe('228');
+    expect(channelMessageDeliveryRequestId(channelMessage({
+      sourceId: null,
+      dedupeKey: null,
+      metadataJson: JSON.stringify({ delivery_request_id: 229 }),
+    }))).toBe('229');
+  });
+
+  it('matches unanchored activity to the visible final message by delivery id', () => {
+    const message = channelMessage({ id: 398, sourceId: '228', dedupeKey: 'gateway-delivery:228:final' });
+
+    expect(activityMatchesChannelMessage(activity({ deliveryRequestId: '228', anchorMessageId: null }), message)).toBe(true);
+    expect(activityMatchesChannelMessage(activity({ deliveryRequestId: '999', finalChannelMessageId: 398 }), message)).toBe(true);
+    expect(activityMatchesChannelMessage(activity({ deliveryRequestId: '999', anchorMessageId: null }), message)).toBe(false);
   });
 });
 

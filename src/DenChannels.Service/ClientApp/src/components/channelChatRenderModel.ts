@@ -1,4 +1,4 @@
-import type { ChannelActivityEvent, GatewayMember } from '../api/types';
+import type { ChannelActivityEvent, ChannelMessage, GatewayMember } from '../api/types';
 
 export type MessageBodySegment =
   | { type: 'text'; text: string }
@@ -83,6 +83,35 @@ export function sortActivityEvents(events: ChannelActivityEvent[]): ChannelActiv
   return [...events].sort((left, right) => left.id - right.id || left.sequence - right.sequence);
 }
 
+export function channelMessageDeliveryRequestId(
+  message: Pick<ChannelMessage, 'metadataJson' | 'sourceKind' | 'sourceId' | 'dedupeKey'>,
+): string | null {
+  const metadata = parseJsonObject(message.metadataJson);
+  const fromMetadata = firstIdentifier(
+    metadata.deliveryRequestId,
+    metadata.delivery_request_id,
+    metadata.deliveryId,
+    metadata.delivery_id,
+    metadata.requestId,
+    metadata.request_id,
+  );
+  if (fromMetadata) return fromMetadata;
+
+  if (message.sourceKind === 'gateway_delivery' || message.sourceKind === 'external_adapter_message') {
+    const sourceId = firstString(message.sourceId);
+    if (sourceId && /^\d+$/.test(sourceId)) return sourceId;
+  }
+
+  const dedupeMatch = message.dedupeKey?.match(/^gateway-delivery:(\d+):/);
+  return dedupeMatch?.[1] ?? null;
+}
+
+export function activityMatchesChannelMessage(event: ChannelActivityEvent, message: Pick<ChannelMessage, 'id' | 'metadataJson' | 'sourceKind' | 'sourceId' | 'dedupeKey'>): boolean {
+  if (event.anchorMessageId === message.id || event.finalChannelMessageId === message.id) return true;
+  const deliveryRequestId = channelMessageDeliveryRequestId(message);
+  return Boolean(deliveryRequestId && event.deliveryRequestId === deliveryRequestId);
+}
+
 export interface MentionSuggestion {
   identity: string;
   label: string;
@@ -149,6 +178,14 @@ function parseJsonValue(value: string | null): unknown {
 function firstString(...values: unknown[]): string | null {
   for (const value of values) {
     if (typeof value === 'string' && value.trim().length > 0) return value.trim();
+  }
+  return null;
+}
+
+function firstIdentifier(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   }
   return null;
 }

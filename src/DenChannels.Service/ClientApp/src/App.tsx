@@ -517,6 +517,7 @@ export default function App() {
         projectId={!isAggregateSpace && !isGlobal ? effectiveSpaceId : null}
         spaceName={activeSpace?.name ?? effectiveSpaceId}
         panelSize={channelPanelSize}
+        scrollResetKey={effectiveSpaceId}
         onPanelSizeChange={setChannelPanelSize}
       />
 
