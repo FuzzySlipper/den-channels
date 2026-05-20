@@ -244,6 +244,51 @@ public sealed class ChannelApiTests : IDisposable
     }
 
     [Fact]
+    public async Task AgentCommons_AutoEnsureDoesNotOverrideMutedNeverBrake()
+    {
+        using var client = _factory.CreateClient();
+        var commons = await PutJsonAsync<ChannelPayload>(client, "/api/agent-commons", new { });
+        await PutJsonAsync<MembershipPayload>(client, $"/api/agent-commons/memberships/den-mcp-runner", new { });
+        var braked = await PutJsonAsync<MembershipPayload>(client, $"/api/channels/{commons.Id}/memberships", new
+        {
+            memberType = "agent",
+            memberIdentity = "den-mcp-runner",
+            membershipStatus = "muted",
+            wakePolicy = "never"
+        });
+        Assert.Equal("muted", braked.MembershipStatus);
+        Assert.Equal("never", braked.WakePolicy);
+
+        var ensuredAgain = await PutJsonAsync<MembershipPayload>(client, "/api/agent-commons/memberships/den-mcp-runner", new { });
+
+        Assert.Equal("muted", ensuredAgain.MembershipStatus);
+        Assert.Equal("never", ensuredAgain.WakePolicy);
+    }
+
+    [Fact]
+    public async Task AgentCommons_BrakeMutesAllActiveAgentMemberships()
+    {
+        using var client = _factory.CreateClient();
+        await PutJsonAsync<MembershipPayload>(client, "/api/agent-commons/memberships/den-mcp-runner", new { });
+        await PutJsonAsync<MembershipPayload>(client, "/api/agent-commons/memberships/reviewer", new { });
+
+        var brake = await PostJsonAsync<AgentCommonsBrakePayload>(client, "/api/agent-commons/brake", new
+        {
+            membershipStatus = "muted",
+            wakePolicy = "never",
+            requestedBy = "test"
+        });
+
+        Assert.Equal("applied", brake.Status);
+        Assert.True(brake.UpdatedCount >= 2);
+        var memberships = await client.GetFromJsonAsync<GatewayMembershipsPayload>(
+            $"/api/gateway/memberships?channelId={brake.ChannelId}");
+        Assert.NotNull(memberships);
+        Assert.Contains(memberships.Members, member => member.MemberIdentity == "den-mcp-runner" && member.MembershipStatus == "muted" && member.WakePolicy == "never");
+        Assert.Contains(memberships.Members, member => member.MemberIdentity == "reviewer" && member.MembershipStatus == "muted" && member.WakePolicy == "never");
+    }
+
+    [Fact]
     public async Task ActivityEventEndpoints_AppendUpdateQueryWithoutCreatingMessages()
     {
         using var client = _factory.CreateClient();
@@ -428,6 +473,8 @@ public sealed class ChannelApiTests : IDisposable
 
     private sealed record MembershipPayload(long Id, long ChannelId, string MemberType, string MemberIdentity,
         string MembershipStatus, string WakePolicy);
+
+    private sealed record AgentCommonsBrakePayload(string Status, long ChannelId, int UpdatedCount, string MembershipStatus, string WakePolicy);
 
     private sealed record GatewayMembershipsPayload(
         long ChannelId,

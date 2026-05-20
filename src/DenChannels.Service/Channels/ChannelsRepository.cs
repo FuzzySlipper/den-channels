@@ -349,10 +349,13 @@ public sealed partial class ChannelsRepository
             ON CONFLICT(channel_id, member_type, member_identity)
             DO UPDATE SET
                 membership_status = CASE
+                    WHEN channel_memberships.membership_status IN ('muted', 'left', 'banned') THEN channel_memberships.membership_status
                     WHEN channel_memberships.settings_json LIKE '%"systemManaged":true%' THEN 'active'
                     ELSE channel_memberships.membership_status
                 END,
                 wake_policy = CASE
+                    WHEN channel_memberships.wake_policy = 'never' THEN channel_memberships.wake_policy
+                    WHEN channel_memberships.membership_status IN ('muted', 'left', 'banned') THEN channel_memberships.wake_policy
                     WHEN channel_memberships.settings_json LIKE '%"systemManaged":true%' THEN 'mentions_only'
                     ELSE channel_memberships.wake_policy
                 END,
@@ -368,6 +371,28 @@ public sealed partial class ChannelsRepository
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         await reader.ReadAsync(cancellationToken);
         return ReadMembership(reader);
+    }
+
+    public async Task<AgentCommonsBrakeResultDto> ApplyAgentCommonsBrakeAsync(string membershipStatus = "muted", string wakePolicy = "never",
+        CancellationToken cancellationToken = default)
+    {
+        var commons = await EnsureAgentCommonsChannelAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE channel_memberships
+            SET membership_status = $membershipStatus,
+                wake_policy = $wakePolicy,
+                updated_at = datetime('now')
+            WHERE channel_id = $channelId
+              AND member_type = 'agent'
+              AND membership_status = 'active';
+            """;
+        command.Parameters.AddWithValue("$channelId", commons.Id);
+        command.Parameters.AddWithValue("$membershipStatus", membershipStatus);
+        command.Parameters.AddWithValue("$wakePolicy", wakePolicy);
+        var updated = await command.ExecuteNonQueryAsync(cancellationToken);
+        return new AgentCommonsBrakeResultDto("applied", commons.Id, updated, membershipStatus, wakePolicy);
     }
 
     public async Task<IReadOnlyList<ChannelReactionSummaryDto>> ListReactionSummariesAsync(long channelId,

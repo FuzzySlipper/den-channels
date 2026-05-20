@@ -340,7 +340,7 @@ public static class GatewayRoutes
                 return Results.NotFound(new GatewayErrorDto("member_not_active_agent",
                     $"Active agent member '{request.MemberIdentity}' is not joined to channel {channel.Id}."));
 
-            var requestId = $"direct-agent-message:{channel.Id}:{member.Id}:{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+            var requestId = $"direct-agent-message:{channel.Id}:{Uri.EscapeDataString(member.MemberIdentity)}:{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
             var gatewayEventsUrl = $"/api/gateway/events?channelId={channel.Id}&afterId=0&limit=50";
             var metadataJson = JsonSerializer.Serialize(new
             {
