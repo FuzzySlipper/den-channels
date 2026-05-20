@@ -318,6 +318,8 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
   const [sendMode, setSendMode] = useState<ChannelSendMode>('channel');
   const [autoScroll, setAutoScroll] = useState(true);
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
+  const previousAutoScrollChannelIdRef = useRef<number | null>(null);
+  const pendingAutoScrollSnapChannelIdRef = useRef<number | null>(null);
   const previousProjectIdRef = useRef<string | null>(projectId);
   const pendingProjectDefaultSelectionRef = useRef<string | null>(null);
   const [targetMemberIdentity, setTargetMemberIdentity] = useState('');
@@ -695,9 +697,24 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
           : `Message ${channelLabel(activeChannel, projectId)}`;
 
   useEffect(() => {
+    const channelId = activeChannel?.id ?? null;
+    if (previousAutoScrollChannelIdRef.current !== channelId) {
+      previousAutoScrollChannelIdRef.current = channelId;
+      pendingAutoScrollSnapChannelIdRef.current = channelId;
+    }
+
     if (!autoScroll) return;
-    scrollAnchorRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
-  }, [autoScroll, sortedMessages.length, activityEvents?.length]);
+
+    const shouldSnapToBottom = channelId !== null && pendingAutoScrollSnapChannelIdRef.current === channelId;
+    scrollAnchorRef.current?.scrollIntoView({
+      block: 'end',
+      behavior: shouldSnapToBottom ? 'auto' : 'smooth',
+    });
+
+    if (shouldSnapToBottom && !messagesLoading && !activityLoading) {
+      pendingAutoScrollSnapChannelIdRef.current = null;
+    }
+  }, [activeChannel?.id, activityEvents?.length, activityLoading, autoScroll, messagesLoading, sortedMessages.length]);
 
   return (
     <section className={`panel channel-chat-panel channel-chat-panel-size-${panelSize}`} aria-label="Project channel chat">

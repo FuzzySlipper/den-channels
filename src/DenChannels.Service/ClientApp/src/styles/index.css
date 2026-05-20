@@ -1775,7 +1775,7 @@ button.list-item {
 
 .focused-session-toolbar {
   display: grid;
-  grid-template-columns: minmax(180px, 0.35fr) auto minmax(280px, 1fr) auto;
+  grid-template-columns: minmax(180px, 0.35fr) auto minmax(280px, 1fr) auto auto;
   gap: 8px;
   align-items: center;
   padding: 8px 10px;
