@@ -17,6 +17,7 @@ import { TaskDetail } from './components/TaskDetail';
 import { FilterBar } from './components/FilterBar';
 import type { WorkspaceViewMode } from './components/FilterBar';
 import { MessageDetail } from './components/MessageDetail';
+import { MessagesInbox } from './components/MessagesInbox';
 import { AgentStreamFeed } from './components/AgentStreamFeed';
 import { AgentStreamDetail } from './components/AgentStreamDetail';
 import { SubagentRunDetail } from './components/SubagentRunDetail';
@@ -181,15 +182,17 @@ export default function App() {
   const sortLabel = sortMode !== 'priority' ? ` ↕${sortMode}` : '';
   const mainTitle = viewMode === 'tasks'
     ? 'Tasks'
-    : viewMode === 'documents'
-      ? 'Documents'
-      : viewMode === 'git'
-        ? 'Git'
-        : viewMode === 'sessions'
-          ? 'Sessions'
-          : viewMode === 'agent-stream'
-            ? 'Agent Stream'
-            : 'Librarian';
+    : viewMode === 'messages'
+      ? 'Messages'
+      : viewMode === 'documents'
+        ? 'Documents'
+        : viewMode === 'git'
+          ? 'Git'
+          : viewMode === 'sessions'
+            ? 'Sessions'
+            : viewMode === 'agent-stream'
+              ? 'Agent Stream'
+              : 'Librarian';
   const mainCount = viewMode === 'tasks'
     ? `(${taskCount}${filterLabel}${sortLabel})`
     : viewMode === 'documents'
@@ -457,6 +460,14 @@ export default function App() {
                 onSelect={handleTaskSelect}
                 statusFilter={statusFilter}
                 sortMode={sortMode}
+              />
+            ) : viewMode === 'messages' ? (
+              <MessagesInbox
+                spaces={spaces}
+                currentSpaceId={effectiveSpaceId}
+                isAggregate={isAggregateSpace}
+                onSelect={handleMessageSelect}
+                onOpenTask={handleTaskSelect}
               />
             ) : viewMode === 'documents' ? (
               <DocumentList

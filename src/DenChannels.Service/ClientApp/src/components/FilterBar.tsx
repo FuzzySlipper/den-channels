@@ -1,4 +1,4 @@
-export type WorkspaceViewMode = 'tasks' | 'documents' | 'git' | 'librarian' | 'agent-stream' | 'sessions';
+export type WorkspaceViewMode = 'tasks' | 'messages' | 'documents' | 'git' | 'librarian' | 'agent-stream' | 'sessions';
 
 interface Props {
   statusFilter: string | null;
@@ -47,6 +47,12 @@ export function FilterBar({
           onClick={() => onViewModeChange('tasks')}
         >
           Tasks
+        </button>
+        <button
+          className={viewMode === 'messages' ? 'active' : ''}
+          onClick={() => onViewModeChange('messages')}
+        >
+          Messages
         </button>
         <button
           className={viewMode === 'documents' ? 'active' : ''}
