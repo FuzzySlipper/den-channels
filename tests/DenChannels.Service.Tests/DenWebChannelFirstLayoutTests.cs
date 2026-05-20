@@ -236,6 +236,31 @@ public sealed class DenWebChannelFirstLayoutTests
         Assert.Contains("candidate.sourceKind === 'external_adapter_message'", component);
     }
 
+
+    [Fact]
+    public void MessagesView_IsFirstClassWorkspaceTabAndSeparatesHumanMessagesFromActivity()
+    {
+        Assert.True(ClientFileExists("components", "MessagesInbox.tsx"));
+        var filterBar = ReadClientSource("components", "FilterBar.tsx");
+        var app = ReadClientSource("App.tsx");
+        var component = ReadClientSource("components", "MessagesInbox.tsx");
+        var css = ReadClientSource("styles", "index.css");
+
+        Assert.Contains("'messages'", filterBar);
+        Assert.Contains("onViewModeChange('messages')", filterBar);
+        Assert.Contains("Messages", filterBar);
+        Assert.Contains("MessagesInbox", app);
+        Assert.Contains("viewMode === 'messages'", app);
+        Assert.Contains("getMessages", component);
+        Assert.Contains("User-directed", component);
+        Assert.Contains("project-level and task-attached messages", component);
+        Assert.Contains("separate from channel chat and agent activity breadcrumbs", component);
+        Assert.Contains("messages-inbox-user-chip", component);
+        Assert.Contains("messages-inbox-urgency-high", css);
+        Assert.DoesNotContain("listAgentStream", component);
+        Assert.DoesNotContain("channel_activity_events", component);
+    }
+
     [Fact]
     public void SessionsView_IsTopLevelWorkspaceTab_AndKeepsCompactChannelChatPanel()
     {
