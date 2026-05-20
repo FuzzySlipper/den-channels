@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, FormEvent, KeyboardEvent } from 'react';
+import type { ChangeEvent, FormEvent, KeyboardEvent, UIEvent } from 'react';
 import type { Channel, ChannelActivityEvent, ChannelMessage, ChannelReactionSummary, GatewayDirectAgentMessage, GatewayMember, GatewayMemberships, GatewayTestWake } from '../api/types';
 import {
   ensureAgentCommonsChannel,
@@ -48,6 +48,7 @@ const MEMBERSHIP_STATUS_OPTIONS = [
 ];
 
 const QUICK_REACTIONS = ['✅', '👀', '👍', '🫡', '❓'];
+const SCROLL_BOTTOM_PIN_THRESHOLD_PX = 48;
 
 interface Props {
   projectId: string | null;
@@ -77,6 +78,10 @@ function channelLabel(channel: Channel | null, projectId: string | null): string
   if (channel) return `#${channel.slug}`;
   if (projectId) return `#project-${projectId}`;
   return '#agent-commons';
+}
+
+function isScrollElementPinnedToBottom(element: HTMLElement): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= SCROLL_BOTTOM_PIN_THRESHOLD_PX;
 }
 
 async function resolveAgentCommonsChannel(): Promise<Channel> {
@@ -327,7 +332,9 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, scrollResetK
   const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null);
   const [sendMode, setSendMode] = useState<ChannelSendMode>('channel');
   const [autoScroll, setAutoScroll] = useState(true);
+  const scrollbackRef = useRef<HTMLDivElement | null>(null);
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
+  const isScrollPinnedToBottomRef = useRef(true);
   const previousAutoScrollKeyRef = useRef<string | null>(null);
   const pendingAutoScrollSnapKeyRef = useRef<string | null>(null);
   const previousProjectIdRef = useRef<string | null>(projectId);
@@ -557,6 +564,10 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, scrollResetK
     persistSenderIdentity(value);
   }, []);
 
+  const handleScrollbackScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
+    isScrollPinnedToBottomRef.current = isScrollElementPinnedToBottom(event.currentTarget);
+  }, []);
+
   const insertMention = useCallback((identity: string) => {
     if (!mentionQuery) return;
     setDraft(current => insertMentionToken(current, mentionQuery, identity));
@@ -726,15 +737,19 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, scrollResetK
     if (previousAutoScrollKeyRef.current !== autoScrollKey) {
       previousAutoScrollKeyRef.current = autoScrollKey;
       pendingAutoScrollSnapKeyRef.current = autoScrollKey;
+      isScrollPinnedToBottomRef.current = true;
     }
 
     if (!autoScroll) return;
 
     const shouldSnapToBottom = activeChannel !== null && pendingAutoScrollSnapKeyRef.current === autoScrollKey;
+    if (!shouldSnapToBottom && !isScrollPinnedToBottomRef.current) return;
+
     scrollAnchorRef.current?.scrollIntoView({
       block: 'end',
       behavior: shouldSnapToBottom ? 'auto' : 'smooth',
     });
+    isScrollPinnedToBottomRef.current = true;
 
     if (shouldSnapToBottom && !messagesLoading && !activityLoading) {
       pendingAutoScrollSnapKeyRef.current = null;
@@ -812,7 +827,7 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, scrollResetK
       </div>
 
       <div className="channel-chat-body-region">
-        <div className="channel-chat-scrollback" aria-live="polite">
+        <div className="channel-chat-scrollback" aria-live="polite" ref={scrollbackRef} onScroll={handleScrollbackScroll}>
           {disabledReason ? (
             <div className="channel-chat-state channel-chat-state-muted">{disabledReason}</div>
           ) : (messagesLoading || activityLoading) && sortedMessages.length === 0 && unanchoredActivityEvents.length === 0 ? (
