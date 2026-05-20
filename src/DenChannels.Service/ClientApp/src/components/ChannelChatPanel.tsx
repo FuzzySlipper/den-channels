@@ -254,17 +254,58 @@ function ActivityTimeline({ events, compact = false }: { events: ChannelActivity
         </div>
       )}
       {displayEvents.map(event => (
-        <div key={event.id} className={`channel-chat-activity-row channel-chat-activity-${event.status.toLowerCase()}`}>
+        <div key={event.id} className={`channel-chat-activity-row channel-chat-activity-${event.status.toLowerCase()} ${event.terminal ? 'channel-chat-activity-terminal' : ''}`}>
           <span className="message-time">{formatTimeAgo(event.createdAt)}</span>
           <span className="channel-chat-activity-agent">{event.agentIdentity}</span>
           <span className="channel-chat-activity-main">
             <strong>{event.title}{event.count ? ` ×${event.count}` : ''}</strong>
             <span className="channel-chat-activity-status">{event.status}</span>
+            <span className="channel-chat-activity-stage">{event.terminal ? 'terminal' : event.deliveryStage}</span>
             {event.taskId && <span className="channel-chat-activity-task">task #{event.taskId}</span>}
+            {event.finalChannelMessageId && <span className="channel-chat-activity-task">final message #{event.finalChannelMessageId}</span>}
             {event.preview && <span className="channel-chat-activity-preview">{event.preview}</span>}
           </span>
         </div>
       ))}
+    </div>
+  );
+}
+
+function DeliveryProgressCards({ events }: { events: ChannelActivityEvent[] }) {
+  const groups = useMemo(() => {
+    const grouped = new Map<string, ChannelActivityEvent[]>();
+    for (const event of events) {
+      const key = event.deliveryRequestId ?? event.hermesSessionKey ?? `activity-${event.id}`;
+      const current = grouped.get(key) ?? [];
+      current.push(event);
+      grouped.set(key, current);
+    }
+    return [...grouped.entries()]
+      .map(([key, group]) => [key, sortActivityEvents(group)] as const)
+      .sort((left, right) => left[1][0].id - right[1][0].id);
+  }, [events]);
+
+  if (groups.length === 0) return null;
+
+  return (
+    <div className="channel-chat-delivery-progress-cards" aria-label="Agent delivery progress">
+      {groups.map(([key, group]) => {
+        const latest = group[group.length - 1];
+        const model = toActivityDisplayModel(latest);
+        const terminal = group.some(event => event.terminal);
+        return (
+          <details key={key} className={`channel-chat-delivery-progress ${terminal ? 'channel-chat-delivery-progress-terminal' : ''}`} open={!terminal}>
+            <summary>
+              <span>{terminal ? 'Delivery finished' : 'Agent working'}</span>
+              <strong>{latest.agentIdentity}</strong>
+              <span>{latest.deliveryRequestId ? `delivery ${latest.deliveryRequestId}` : key}</span>
+              <span>{group.length} event{group.length === 1 ? '' : 's'}</span>
+              {model.finalChannelMessageId && <span>final message #{model.finalChannelMessageId}</span>}
+            </summary>
+            <ActivityTimeline events={group} compact />
+          </details>
+        );
+      })}
     </div>
   );
 }
@@ -740,7 +781,7 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
             <div className="channel-chat-state channel-chat-state-muted">No channel messages yet. Start the scrollback below.</div>
           ) : (
             <>
-              <ActivityTimeline events={unanchoredActivityEvents} />
+              <DeliveryProgressCards events={unanchoredActivityEvents} />
               {sortedMessages.map(message => {
                 const evidence = directMessageEvidence(message);
                 const wakeProgress = deriveWakeProgress(message, sortedMessages);

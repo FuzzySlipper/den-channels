@@ -15,6 +15,8 @@ function activity(overrides: Partial<ChannelActivityEvent>): ChannelActivityEven
     anchorMessageId: null,
     eventType: 'tool_call_completed',
     status: 'completed',
+    deliveryStage: 'progress',
+    terminal: false,
     sequence: 1,
     updateVersion: 1,
     title: null,
@@ -22,6 +24,7 @@ function activity(overrides: Partial<ChannelActivityEvent>): ChannelActivityEven
     previewJson: null,
     metadataJson: null,
     dedupeKey: null,
+    finalChannelMessageId: null,
     createdAt: '2026-05-19T00:00:00Z',
     updatedAt: '2026-05-19T00:00:00Z',
     ...overrides,
@@ -53,6 +56,21 @@ describe('toActivityDisplayModel', () => {
     expect(model.count).toBe(2);
     expect(model.preview).toBe('Loaded den-mcp reference');
     expect(model.taskId).toBe(1528);
+    expect(model.deliveryStage).toBe('progress');
+    expect(model.terminal).toBe(false);
+  });
+
+  it('surfaces terminal delivery metadata separately from progress rows', () => {
+    const model = toActivityDisplayModel(activity({
+      status: 'completed',
+      deliveryStage: 'final',
+      terminal: true,
+      finalChannelMessageId: 4242,
+    }));
+
+    expect(model.deliveryStage).toBe('final');
+    expect(model.terminal).toBe(true);
+    expect(model.finalChannelMessageId).toBe(4242);
   });
 
   it('truncates long terminal previews for compact timeline rows', () => {

@@ -49,6 +49,7 @@ public sealed class ChannelsDatabaseInitializer
         await EnsureChannelMessageCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureChannelMessagesSourceKindConstraintAsync(connection, cancellationToken);
         await EnsureChannelActivityEventsSchemaAsync(connection, cancellationToken);
+        await EnsureChannelActivityEventsCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureAgentCommonsSeedAsync(connection, cancellationToken);
         await ExecuteNonQueryAsync(connection, PostCreateIndexesSql, cancellationToken);
     }
@@ -70,6 +71,15 @@ public sealed class ChannelsDatabaseInitializer
         CancellationToken cancellationToken)
     {
         await ExecuteNonQueryAsync(connection, ChannelActivityEventsSchemaSql, cancellationToken);
+    }
+
+
+    private static async Task EnsureChannelActivityEventsCompatibilityColumnsAsync(SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await EnsureColumnAsync(connection, "channel_activity_events", "delivery_stage", "TEXT NOT NULL DEFAULT 'progress'", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_activity_events", "terminal", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_activity_events", "final_channel_message_id", "INTEGER", cancellationToken);
     }
 
     private static async Task EnsureAgentCommonsSeedAsync(SqliteConnection connection,
@@ -313,6 +323,9 @@ public sealed class ChannelsDatabaseInitializer
                                   CHECK (event_type IN ('tool_call_started', 'tool_call_completed', 'tool_call_failed', 'lifecycle_status', 'aggregation_snapshot', 'run_summary')),
             status                TEXT NOT NULL DEFAULT 'completed'
                                   CHECK (status IN ('started', 'completed', 'failed', 'interim')),
+            delivery_stage        TEXT NOT NULL DEFAULT 'progress',
+            terminal              INTEGER NOT NULL DEFAULT 0 CHECK (terminal IN (0, 1)),
+            final_channel_message_id INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
             sequence              INTEGER NOT NULL DEFAULT 0 CHECK (sequence >= 0),
             update_version        INTEGER NOT NULL DEFAULT 1 CHECK (update_version >= 1),
             title                 TEXT,
@@ -364,6 +377,9 @@ public sealed class ChannelsDatabaseInitializer
                                   CHECK (event_type IN ('tool_call_started', 'tool_call_completed', 'tool_call_failed', 'lifecycle_status', 'aggregation_snapshot', 'run_summary')),
             status                TEXT NOT NULL DEFAULT 'completed'
                                   CHECK (status IN ('started', 'completed', 'failed', 'interim')),
+            delivery_stage        TEXT NOT NULL DEFAULT 'progress',
+            terminal              INTEGER NOT NULL DEFAULT 0 CHECK (terminal IN (0, 1)),
+            final_channel_message_id INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
             sequence              INTEGER NOT NULL DEFAULT 0 CHECK (sequence >= 0),
             update_version        INTEGER NOT NULL DEFAULT 1 CHECK (update_version >= 1),
             title                 TEXT,

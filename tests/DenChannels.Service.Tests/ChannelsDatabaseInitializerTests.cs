@@ -243,16 +243,19 @@ public sealed class ChannelsDatabaseInitializerTests
         Assert.Contains("anchor_message_id", columns);
         Assert.Contains("preview_json", columns);
         Assert.Contains("dedupe_key", columns);
+        Assert.Contains("delivery_stage", columns);
+        Assert.Contains("terminal", columns);
+        Assert.Contains("final_channel_message_id", columns);
 
         await ExecuteAsync(connection, """
             INSERT INTO channels(slug, display_name, kind, project_id)
             VALUES ('project-den-channels', 'Den Channels', 'project_default', 'den-channels');
             INSERT INTO channel_activity_events(
                 channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key,
-                event_type, status, sequence, summary, dedupe_key)
+                event_type, status, delivery_stage, terminal, sequence, summary, dedupe_key)
             VALUES (
                 1, 'den-channels', 'den-mcp-runner', 'dr-1', 'session-1',
-                'tool_call_started', 'started', 1, 'terminal: dotnet test', 'activity:dr-1:1');
+                'tool_call_started', 'started', 'tool', 0, 1, 'terminal: dotnet test', 'activity:dr-1:1');
             """);
 
         Assert.Equal(1, await CountRowsAsync(connection, "channel_activity_events"));

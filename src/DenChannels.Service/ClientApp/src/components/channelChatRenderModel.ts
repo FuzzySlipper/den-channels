@@ -41,11 +41,14 @@ export interface ActivityDisplayModel {
   id: number;
   agentIdentity: string;
   status: string;
+  deliveryStage: string;
+  terminal: boolean;
   title: string;
   preview: string | null;
   count: number | null;
   taskId: number | null;
   anchorMessageId: number | null;
+  finalChannelMessageId: number | null;
   createdAt: string;
 }
 
@@ -64,11 +67,14 @@ export function toActivityDisplayModel(event: ChannelActivityEvent): ActivityDis
     id: event.id,
     agentIdentity: event.agentIdentity,
     status: event.status || event.eventType,
+    deliveryStage: event.deliveryStage || 'progress',
+    terminal: Boolean(event.terminal),
     title,
     preview: summarizePreview(preview, event.summary),
     count,
     taskId: event.taskId,
     anchorMessageId: event.anchorMessageId,
+    finalChannelMessageId: event.finalChannelMessageId,
     createdAt: event.createdAt,
   };
 }

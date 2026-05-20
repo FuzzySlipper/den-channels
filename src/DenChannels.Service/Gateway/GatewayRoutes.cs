@@ -34,6 +34,7 @@ public static class GatewayRoutes
                 "GET /api/gateway/events?channelId={id}&afterId={id}&limit={n}",
                 "GET /api/gateway/events?projectId={projectId}&afterId={id}&limit={n}",
                 "POST /api/gateway/system-messages",
+                "POST /api/gateway/channel-activity-events",
                 "POST /api/gateway/direct-agent-messages",
                 "POST /api/gateway/test-wakes"
             ])));
@@ -254,6 +255,53 @@ public static class GatewayRoutes
 
             var msg = await repository.PostMessageAsync(resolvedChannelId, postRequest, cancellationToken);
             return Results.Created($"/api/gateway/messages/{msg.Id}", ToGatewayMessageDto(msg));
+        });
+
+
+        // -----------------------------------------------------------------------
+        // POST /api/gateway/channel-activity-events
+        // Non-waking progress/activity record for Gateway/Hermes delivery runs.
+        // -----------------------------------------------------------------------
+        gw.MapPost("/channel-activity-events", async (
+            ChannelsRepository repository,
+            AppendChannelActivityEventRequest request,
+            long? channelId,
+            string? projectId,
+            CancellationToken cancellationToken) =>
+        {
+            if (channelId is null && string.IsNullOrWhiteSpace(projectId) && string.IsNullOrWhiteSpace(request.ProjectId))
+                return Results.BadRequest(new GatewayErrorDto("missing_parameter",
+                    "Provide channelId, projectId, or request.projectId."));
+
+            long resolvedChannelId;
+            if (channelId is not null)
+            {
+                var channel = await repository.GetChannelAsync(channelId.Value, cancellationToken);
+                if (channel is null)
+                    return Results.NotFound(new GatewayErrorDto("channel_not_found",
+                        $"Channel {channelId} not found."));
+                resolvedChannelId = channel.Id;
+            }
+            else
+            {
+                var resolvedProjectId = string.IsNullOrWhiteSpace(projectId) ? request.ProjectId : projectId;
+                var existing = await repository.ListChannelsAsync(resolvedProjectId, "project_default", 1, cancellationToken);
+                ChannelDto defaultChannel;
+                if (existing.Count > 0)
+                {
+                    defaultChannel = existing[0];
+                }
+                else
+                {
+                    defaultChannel = await repository.EnsureProjectDefaultChannelAsync(
+                        resolvedProjectId!, null, cancellationToken);
+                }
+                resolvedChannelId = defaultChannel.Id;
+            }
+
+            var activityEvent = await repository.AppendActivityEventAsync(resolvedChannelId, request, cancellationToken);
+            return Results.Created($"/api/channels/{resolvedChannelId}/activity-events/{activityEvent.Id}",
+                new { status = "recorded", activityEvent });
         });
 
         // -----------------------------------------------------------------------

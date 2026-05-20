@@ -103,6 +103,7 @@ export interface ChannelMessage {
   replyToMessageId: number | null;
   metadataJson: string | null;
   dedupeKey: string | null;
+  finalChannelMessageId: number | null;
   createdAt: string;
   editedAt: string | null;
   deletedAt: string | null;
@@ -127,6 +128,8 @@ export interface ChannelActivityEvent {
   anchorMessageId: number | null;
   eventType: string;
   status: string;
+  deliveryStage: string;
+  terminal: boolean;
   sequence: number;
   updateVersion: number;
   title: string | null;
@@ -134,6 +137,7 @@ export interface ChannelActivityEvent {
   previewJson: string | null;
   metadataJson: string | null;
   dedupeKey: string | null;
+  finalChannelMessageId: number | null;
   createdAt: string;
   updatedAt: string;
 }

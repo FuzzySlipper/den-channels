@@ -123,6 +123,8 @@ public sealed record ChannelActivityEventDto(
     long? AnchorMessageId,
     string EventType,
     string Status,
+    string DeliveryStage,
+    bool Terminal,
     long Sequence,
     long UpdateVersion,
     string? Title,
@@ -130,6 +132,7 @@ public sealed record ChannelActivityEventDto(
     string? PreviewJson,
     string? MetadataJson,
     string? DedupeKey,
+    long? FinalChannelMessageId,
     string CreatedAt,
     string UpdatedAt);
 
@@ -143,16 +146,22 @@ public sealed record AppendChannelActivityEventRequest(
     long? AnchorMessageId,
     string EventType,
     string? Status,
+    string? DeliveryStage,
+    bool? Terminal,
     long? Sequence,
     string? Title,
     string? Summary,
     string? PreviewJson,
     string? MetadataJson,
-    string? DedupeKey);
+    string? DedupeKey,
+    long? FinalChannelMessageId);
 
 public sealed record UpdateChannelActivityEventRequest(
     string? Status,
+    string? DeliveryStage,
+    bool? Terminal,
     string? Title,
     string? Summary,
     string? PreviewJson,
-    string? MetadataJson);
+    string? MetadataJson,
+    long? FinalChannelMessageId);

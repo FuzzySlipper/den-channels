@@ -269,6 +269,8 @@ public sealed class ChannelApiTests : IDisposable
             anchorMessageId = anchorMessage.Id,
             eventType = "tool_call_started",
             status = "started",
+            deliveryStage = "tool",
+            terminal = false,
             sequence = 1,
             title = "terminal",
             summary = "dotnet test",
@@ -278,6 +280,8 @@ public sealed class ChannelApiTests : IDisposable
         });
         Assert.Equal("started", started.Status);
         Assert.Equal(anchorMessage.Id, started.AnchorMessageId);
+        Assert.Equal("tool", started.DeliveryStage);
+        Assert.False(started.Terminal);
         Assert.DoesNotContain("sk-test-secret", started.PreviewJson);
         Assert.DoesNotContain("very-secret-token", started.MetadataJson);
         Assert.Contains("[REDACTED]", started.PreviewJson);
@@ -290,6 +294,8 @@ public sealed class ChannelApiTests : IDisposable
             hermesSessionKey = "den-channels:1526",
             eventType = "tool_call_completed",
             status = "completed",
+            deliveryStage = "tool",
+            terminal = false,
             sequence = 1,
             summary = "dotnet test passed",
             dedupeKey = "activity:delivery-1526:1"
@@ -307,6 +313,8 @@ public sealed class ChannelApiTests : IDisposable
             taskId = 1529,
             eventType = "tool_call_started",
             status = "started",
+            deliveryStage = "tool",
+            terminal = false,
             sequence = 2,
             summary = "other task should not leak into task filter",
             dedupeKey = "activity:delivery-1529:1"
@@ -322,9 +330,13 @@ public sealed class ChannelApiTests : IDisposable
         var updated = await PatchJsonAsync<ActivityEventPayload>(client, $"/api/channel-activity-events/{started.Id}", new
         {
             status = "failed",
+            deliveryStage = "failure",
+            terminal = true,
             summary = "dotnet test failed before fix"
         });
         Assert.Equal("failed", updated.Status);
+        Assert.Equal("failure", updated.DeliveryStage);
+        Assert.True(updated.Terminal);
         Assert.Contains("failed", updated.Summary);
 
         var byDelivery = await client.GetFromJsonAsync<List<ActivityEventPayload>>(
@@ -338,6 +350,41 @@ public sealed class ChannelApiTests : IDisposable
         Assert.NotNull(messages);
         var onlyMessage = Assert.Single(messages);
         Assert.Equal(anchorMessage.Id, onlyMessage.Id);
+    }
+
+
+    [Fact]
+    public async Task GatewayActivityEndpoint_RecordsNonWakingProgressWithoutCreatingMessages()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+
+        var recorded = await PostJsonAsync<GatewayActivityResultPayload>(client,
+            $"/api/gateway/channel-activity-events?channelId={channel.Id}", new
+            {
+                projectId = "den-channels",
+                agentIdentity = "sysadmin",
+                deliveryRequestId = "delivery-1546",
+                eventType = "lifecycle_status",
+                status = "interim",
+                deliveryStage = "assistant_interim",
+                terminal = false,
+                sequence = 1,
+                summary = "I will inspect task context before the final answer",
+                dedupeKey = "activity:delivery-1546:interim:1"
+            });
+
+        Assert.Equal("recorded", recorded.Status);
+        Assert.Equal("assistant_interim", recorded.ActivityEvent.DeliveryStage);
+        Assert.False(recorded.ActivityEvent.Terminal);
+        Assert.Equal("delivery-1546", recorded.ActivityEvent.DeliveryRequestId);
+
+        var messages = await client.GetFromJsonAsync<List<MessagePayload>>($"/api/channels/{channel.Id}/messages?afterId=0&limit=10");
+        Assert.NotNull(messages);
+        Assert.Empty(messages);
     }
 
     public void Dispose()
@@ -407,7 +454,10 @@ public sealed class ChannelApiTests : IDisposable
     private sealed record ReactionSummaryPayload(long ChannelMessageId, string ReactionKey, int Count,
         string[] Reactors);
 
+    private sealed record GatewayActivityResultPayload(string Status, ActivityEventPayload ActivityEvent);
+
     private sealed record ActivityEventPayload(long Id, long ChannelId, string? ProjectId, string AgentIdentity,
         string? DeliveryRequestId, string? HermesSessionKey, long? AnchorMessageId, string EventType, string Status,
-        long Sequence, long UpdateVersion, string? Summary, string? PreviewJson, string? MetadataJson);
+        string DeliveryStage, bool Terminal, long Sequence, long UpdateVersion, string? Summary, string? PreviewJson,
+        string? MetadataJson, long? FinalChannelMessageId);
 }

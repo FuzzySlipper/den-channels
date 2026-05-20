@@ -209,6 +209,24 @@ public sealed class DenWebChannelFirstLayoutTests
         Assert.Contains(".member-activity-working", css);
     }
 
+
+    [Fact]
+    public void ChannelChatPanel_GroupsDeliveryProgressSeparatelyFromFinalReplies()
+    {
+        var component = ReadClientSource("components", "ChannelChatPanel.tsx");
+        var css = ReadClientSource("styles", "index.css");
+
+        Assert.Contains("DeliveryProgressCards", component);
+        Assert.Contains("Agent delivery progress", component);
+        Assert.Contains("Agent working", component);
+        Assert.Contains("Delivery finished", component);
+        Assert.Contains("final message #", component);
+        Assert.Contains("channel-chat-delivery-progress", component);
+        Assert.Contains("channel-chat-activity-terminal", component);
+        Assert.Contains(".channel-chat-delivery-progress", css);
+        Assert.Contains(".channel-chat-activity-stage", css);
+    }
+
     [Fact]
     public void ChannelChatPanel_TreatsGatewayDeliveryAsAgentReplyEvidenceDuringCutover()
     {
