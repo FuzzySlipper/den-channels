@@ -288,64 +288,88 @@ public sealed class ChannelApiTests : IDisposable
         {
             displayName = "Den Channels"
         });
-        var anchorMessage = await PostJsonAsync<MessagePayload>(client, $"/api/channels/{channel.Id}/messages", new
+        var parentMessage = await PostJsonAsync<GatewayMessagePayload>(client, "/api/gateway/system-messages", new
         {
-            senderType = "user",
-            senderIdentity = "patch",
-            body = "Please work on task 1526"
+            channelId = channel.Id,
+            body = "Parent #1567 final delivery block",
+            sourceKind = "gateway_delivery",
+            sourceId = "parent-1567-source",
+            deliveryRequestId = "parent-1567",
+            dedupeKey = "gateway-delivery:parent-1567"
         });
+        Assert.Equal("parent-1567", parentMessage.DeliveryRequestId);
 
-        var started = await PostJsonAsync<ActivityEventPayload>(client, $"/api/channels/{channel.Id}/activity-events", new
+        var coderStarted = await PostJsonAsync<ActivityEventPayload>(client, $"/api/channels/{channel.Id}/activity-events", new
         {
             projectId = "den-channels",
             agentIdentity = "den-mcp-runner",
-            deliveryRequestId = "delivery-1526",
-            hermesSessionKey = "den-channels:1526",
-            displayBlockId = "block-1526",
-            parentHermesSessionKey = "den-channels:parent",
+            deliveryRequestId = "coder-1567",
+            hermesSessionKey = "den-channels:1567:coder",
+            displayBlockId = "parent-1567",
+            parentHermesSessionKey = "den-channels:1567:parent",
             parentAgentIdentity = "den-mcp-runner",
-            workerRunId = "worker-run-1526",
+            workerRunId = "coder-1567",
             workerRole = "coder",
-            taskId = 1526,
+            taskId = 1567,
             threadId = 6445,
-            anchorMessageId = anchorMessage.Id,
+            anchorMessageId = parentMessage.Id,
             eventType = "tool_call_started",
             status = "started",
             sequence = 1,
             title = "terminal",
             summary = "dotnet test",
-            previewJson = "{\"command\":\"dotnet test\",\"apiKey\":\"sk-test-secret\"}",
+            previewJson = "{\"command\":\"dotnet test\",\"apiKey\":\"***\"}",
             metadataJson = "{\"authorization\":\"Bearer very-secret-token\"}",
-            dedupeKey = "activity:delivery-1526:1"
+            dedupeKey = "activity:coder-1567:1"
         });
-        Assert.Equal("started", started.Status);
-        Assert.Equal(anchorMessage.Id, started.AnchorMessageId);
-        Assert.Equal("block-1526", started.DisplayBlockId);
-        Assert.Equal("den-channels:parent", started.ParentHermesSessionKey);
-        Assert.Equal("den-mcp-runner", started.ParentAgentIdentity);
-        Assert.Equal("worker-run-1526", started.WorkerRunId);
-        Assert.Equal("coder", started.WorkerRole);
-        Assert.DoesNotContain("***", started.PreviewJson);
-        Assert.DoesNotContain("very-secret-token", started.MetadataJson);
-        Assert.Contains("[REDACTED]", started.PreviewJson);
+        Assert.Equal("started", coderStarted.Status);
+        Assert.Equal(parentMessage.Id, coderStarted.AnchorMessageId);
+        Assert.Equal("parent-1567", coderStarted.DisplayBlockId);
+        Assert.Equal("den-channels:1567:parent", coderStarted.ParentHermesSessionKey);
+        Assert.Equal("den-mcp-runner", coderStarted.ParentAgentIdentity);
+        Assert.Equal("coder-1567", coderStarted.WorkerRunId);
+        Assert.Equal("coder", coderStarted.WorkerRole);
+        Assert.DoesNotContain("***", coderStarted.PreviewJson);
+        Assert.DoesNotContain("very-secret-token", coderStarted.MetadataJson);
+        Assert.Contains("[REDACTED]", coderStarted.PreviewJson);
 
         var duplicate = await PostJsonAsync<ActivityEventPayload>(client, $"/api/channels/{channel.Id}/activity-events", new
         {
             projectId = "den-channels",
             agentIdentity = "den-mcp-runner",
-            deliveryRequestId = "delivery-1526",
-            hermesSessionKey = "den-channels:1526",
+            deliveryRequestId = "coder-1567",
+            hermesSessionKey = "den-channels:1567:coder",
             eventType = "tool_call_completed",
             status = "completed",
             sequence = 1,
             summary = "dotnet test passed",
-            dedupeKey = "activity:delivery-1526:1"
+            dedupeKey = "activity:coder-1567:1"
         });
-        Assert.Equal(started.Id, duplicate.Id);
+        Assert.Equal(coderStarted.Id, duplicate.Id);
         Assert.Equal("completed", duplicate.Status);
-        Assert.Equal("block-1526", duplicate.DisplayBlockId);
-        Assert.Equal("worker-run-1526", duplicate.WorkerRunId);
-        Assert.True(duplicate.UpdateVersion > started.UpdateVersion);
+        Assert.Equal("parent-1567", duplicate.DisplayBlockId);
+        Assert.Equal("coder-1567", duplicate.WorkerRunId);
+        Assert.True(duplicate.UpdateVersion > coderStarted.UpdateVersion);
+
+        var reviewerStarted = await PostJsonAsync<ActivityEventPayload>(client, $"/api/channels/{channel.Id}/activity-events", new
+        {
+            projectId = "den-channels",
+            agentIdentity = "den-mcp-runner-reviewer",
+            deliveryRequestId = "reviewer-1567",
+            hermesSessionKey = "den-channels:1567:reviewer",
+            displayBlockId = "parent-1567",
+            parentHermesSessionKey = "den-channels:1567:parent",
+            parentAgentIdentity = "den-mcp-runner",
+            workerRunId = "reviewer-1567",
+            workerRole = "reviewer",
+            taskId = 1567,
+            eventType = "tool_call_started",
+            status = "started",
+            sequence = 1,
+            summary = "reviewer checks grouping",
+            dedupeKey = "activity:reviewer-1567:1"
+        });
+        Assert.NotEqual(coderStarted.Id, reviewerStarted.Id);
 
         var otherTask = await PostJsonAsync<ActivityEventPayload>(client, $"/api/channels/{channel.Id}/activity-events", new
         {
@@ -362,15 +386,14 @@ public sealed class ChannelApiTests : IDisposable
             summary = "other task should not leak into task filter",
             dedupeKey = "activity:delivery-1529:1"
         });
-        Assert.NotEqual(started.Id, otherTask.Id);
+        Assert.NotEqual(coderStarted.Id, otherTask.Id);
 
         var byTask = await client.GetFromJsonAsync<List<ActivityEventPayload>>(
-            $"/api/channels/{channel.Id}/activity-events?taskId=1526");
+            $"/api/channels/{channel.Id}/activity-events?taskId=1567");
         Assert.NotNull(byTask);
-        var taskActivity = Assert.Single(byTask);
-        Assert.Equal(started.Id, taskActivity.Id);
+        Assert.Equal(new[] { coderStarted.Id, reviewerStarted.Id }, byTask.Select(activity => activity.Id).Order().ToArray());
 
-        var updated = await PatchJsonAsync<ActivityEventPayload>(client, $"/api/channel-activity-events/{started.Id}", new
+        var updated = await PatchJsonAsync<ActivityEventPayload>(client, $"/api/channel-activity-events/{coderStarted.Id}", new
         {
             status = "failed",
             summary = "dotnet test failed before fix"
@@ -379,26 +402,35 @@ public sealed class ChannelApiTests : IDisposable
         Assert.Contains("failed", updated.Summary);
 
         var byDelivery = await client.GetFromJsonAsync<List<ActivityEventPayload>>(
-            $"/api/channels/{channel.Id}/activity-events?deliveryRequestId=delivery-1526");
+            $"/api/channels/{channel.Id}/activity-events?deliveryRequestId=coder-1567");
         Assert.NotNull(byDelivery);
         var activityEvent = Assert.Single(byDelivery);
-        Assert.Equal(started.Id, activityEvent.Id);
-        Assert.Equal("den-channels:1526", activityEvent.HermesSessionKey);
+        Assert.Equal(coderStarted.Id, activityEvent.Id);
+        Assert.Equal("den-channels:1567:coder", activityEvent.HermesSessionKey);
 
+        var displayBlockJson = await client.GetStringAsync($"/api/channels/{channel.Id}/activity-events?displayBlockId=parent-1567");
+        Assert.Contains("\"displayBlockId\":\"parent-1567\"", displayBlockJson);
+        Assert.Contains("\"workerRunId\":\"coder-1567\"", displayBlockJson);
+        Assert.Contains("\"workerRunId\":\"reviewer-1567\"", displayBlockJson);
+        Assert.DoesNotContain("displayDeliveryRequestId", displayBlockJson);
         var byDisplayBlock = await client.GetFromJsonAsync<List<ActivityEventPayload>>(
-            $"/api/channels/{channel.Id}/activity-events?displayBlockId=block-1526");
+            $"/api/channels/{channel.Id}/activity-events?displayBlockId=parent-1567");
         Assert.NotNull(byDisplayBlock);
-        Assert.Equal(started.Id, Assert.Single(byDisplayBlock).Id);
+        Assert.Equal(new[] { coderStarted.Id, reviewerStarted.Id }, byDisplayBlock.Select(activity => activity.Id).Order().ToArray());
 
         var byWorkerRun = await client.GetFromJsonAsync<List<ActivityEventPayload>>(
-            $"/api/channels/{channel.Id}/activity-events?workerRunId=worker-run-1526");
+            $"/api/channels/{channel.Id}/activity-events?workerRunId=coder-1567");
         Assert.NotNull(byWorkerRun);
-        Assert.Equal(started.Id, Assert.Single(byWorkerRun).Id);
+        Assert.Equal(coderStarted.Id, Assert.Single(byWorkerRun).Id);
 
+        var messagesJson = await client.GetStringAsync($"/api/channels/{channel.Id}/messages?afterId=0&limit=10");
+        Assert.Contains("\"deliveryRequestId\":\"parent-1567\"", messagesJson);
+        Assert.DoesNotContain("displayDeliveryRequestId", messagesJson);
         var messages = await client.GetFromJsonAsync<List<MessagePayload>>($"/api/channels/{channel.Id}/messages?afterId=0&limit=10");
         Assert.NotNull(messages);
         var onlyMessage = Assert.Single(messages);
-        Assert.Equal(anchorMessage.Id, onlyMessage.Id);
+        Assert.Equal(parentMessage.Id, onlyMessage.Id);
+        Assert.Equal("parent-1567", onlyMessage.DeliveryRequestId);
     }
 
     public void Dispose()

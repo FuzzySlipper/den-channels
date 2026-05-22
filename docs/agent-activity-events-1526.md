@@ -78,6 +78,26 @@ The append route is idempotent when `dedupeKey` is supplied: uniqueness is scope
 
 Repeated appends preserve known display/parent/worker correlation fields unless the retry supplies a replacement value.
 
+## #1567 fake E2E coverage note
+
+The storage/listing and render-model fake E2E tests use aligned fixture ids:
+
+- parent final message `deliveryRequestId`: `parent-1567`
+- coder worker `deliveryRequestId` / `workerRunId`: `coder-1567`
+- reviewer worker `deliveryRequestId` / `workerRunId`: `reviewer-1567`
+
+The invariant is that stored and accepted payload fields remain camelCase (`displayBlockId`,
+`workerRunId`, `deliveryRequestId`) and render grouping only uses
+`activity.displayBlockId == message.deliveryRequestId` for child activity under a visible parent
+block. There is no `displayDeliveryRequestId` field or fallback dependency.
+
+Focused validation commands:
+
+```bash
+dotnet test DenChannels.slnx --filter ChannelApiTests
+cd src/DenChannels.Service/ClientApp && npm run test:rendering
+```
+
 ## Message-to-delivery linkage
 
 Channel messages now expose first-class `delivery_request_id` / `deliveryRequestId` for Gateway-delivered

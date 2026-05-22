@@ -105,27 +105,28 @@ describe('toActivityDisplayModel', () => {
     expect(model.preview?.endsWith('…')).toBe(true);
   });
 
-  it('preserves display block, worker, and parent fields for spawned worker headers', () => {
+  it('preserves camelCase display block, worker, and parent fields for spawned worker headers', () => {
     const model = toActivityDisplayModel(activity({
-      displayBlockId: 'dr-parent',
-      workerRunId: 'run_1566_workerabcdef',
+      displayBlockId: 'parent-1567',
+      workerRunId: 'coder-1567',
       workerRole: 'coder',
       parentAgentIdentity: 'orchestrator',
-      parentHermesSessionKey: 'parent-session',
+      parentHermesSessionKey: 'parent-session-1567',
     }));
 
-    expect(model.displayBlockId).toBe('dr-parent');
-    expect(model.workerRunId).toBe('run_1566_workerabcdef');
+    expect(model.displayBlockId).toBe('parent-1567');
+    expect(model.workerRunId).toBe('coder-1567');
     expect(model.workerRole).toBe('coder');
     expect(model.parentAgentIdentity).toBe('orchestrator');
-    expect(model.parentHermesSessionKey).toBe('parent-session');
+    expect(model.parentHermesSessionKey).toBe('parent-session-1567');
+    expect('displayDeliveryRequestId' in (model as unknown as Record<string, unknown>)).toBe(false);
   });
 });
 
 describe('activity/message grouping', () => {
   it('matches displayBlockId to a final message first-class deliveryRequestId even when child deliveryRequestId differs', () => {
-    const parentMessage = message({ id: 42, deliveryRequestId: 'parent-delivery' });
-    const childEvent = activity({ deliveryRequestId: 'child-delivery', displayBlockId: 'parent-delivery' });
+    const parentMessage = message({ id: 42, deliveryRequestId: 'parent-1567' });
+    const childEvent = activity({ deliveryRequestId: 'coder-1567', displayBlockId: 'parent-1567', workerRunId: 'coder-1567' });
 
     expect(activityMatchesChannelMessage(childEvent, parentMessage)).toBe(true);
   });
@@ -148,26 +149,30 @@ describe('activity/message grouping', () => {
     expect(activityMatchesChannelMessage(activity({ metadataJson: JSON.stringify({ finalChannelMessageId: 42 }) }), parentMessage)).toBe(true);
   });
 
-  it('attaches displayBlockId activity to an interim block when no final parent message exists', () => {
+  it('attaches coder/reviewer displayBlockId activity to an interim block when no final parent message exists', () => {
     const grouped = groupActivityEventsForChannelMessages([], [
-      activity({ id: 1, displayBlockId: 'parent-delivery', workerRunId: 'run-a', createdAt: '2026-05-19T00:00:02Z' }),
-      activity({ id: 2, displayBlockId: 'parent-delivery', workerRunId: 'run-b', createdAt: '2026-05-19T00:00:01Z' }),
+      activity({ id: 1, deliveryRequestId: 'coder-1567', displayBlockId: 'parent-1567', workerRunId: 'coder-1567', workerRole: 'coder', createdAt: '2026-05-19T00:00:02Z' }),
+      activity({ id: 2, deliveryRequestId: 'reviewer-1567', displayBlockId: 'parent-1567', workerRunId: 'reviewer-1567', workerRole: 'reviewer', createdAt: '2026-05-19T00:00:01Z' }),
       activity({ id: 3 }),
     ]);
 
     expect(grouped.byMessageId.size).toBe(0);
     expect(grouped.displayBlocks).toHaveLength(1);
-    expect(grouped.displayBlocks[0].displayBlockId).toBe('parent-delivery');
+    expect(grouped.displayBlocks[0].displayBlockId).toBe('parent-1567');
     expect(grouped.displayBlocks[0].events.map(event => event.id)).toEqual([2, 1]);
+    expect(grouped.displayBlocks[0].events.map(event => event.workerRunId)).toEqual(['reviewer-1567', 'coder-1567']);
     expect(grouped.unanchoredEvents.map(event => event.id)).toEqual([3]);
   });
 
-  it('does not leave displayBlockId-matched final-message activity in detached blocks or unanchored events', () => {
-    const parentMessage = message({ id: 42, deliveryRequestId: 'parent-delivery' });
-    const childEvent = activity({ id: 7, displayBlockId: 'parent-delivery' });
-    const grouped = groupActivityEventsForChannelMessages([parentMessage], [childEvent]);
+  it('consumes coder/reviewer displayBlockId activity into the final parent delivery message', () => {
+    const parentMessage = message({ id: 42, deliveryRequestId: 'parent-1567' });
+    const grouped = groupActivityEventsForChannelMessages([parentMessage], [
+      activity({ id: 1, deliveryRequestId: 'coder-1567', displayBlockId: 'parent-1567', workerRunId: 'coder-1567', workerRole: 'coder', createdAt: '2026-05-19T00:00:02Z' }),
+      activity({ id: 2, deliveryRequestId: 'reviewer-1567', displayBlockId: 'parent-1567', workerRunId: 'reviewer-1567', workerRole: 'reviewer', createdAt: '2026-05-19T00:00:01Z' }),
+    ]);
 
-    expect(grouped.byMessageId.get(42)?.map(event => event.id)).toEqual([7]);
+    expect(grouped.byMessageId.get(42)?.map(event => event.id)).toEqual([2, 1]);
+    expect(grouped.byMessageId.get(42)?.map(event => event.workerRunId)).toEqual(['reviewer-1567', 'coder-1567']);
     expect(grouped.displayBlocks).toEqual([]);
     expect(grouped.unanchoredEvents).toEqual([]);
   });
