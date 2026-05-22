@@ -1512,12 +1512,19 @@ button.list-item {
 }
 
 .channel-chat-activity-status,
-.channel-chat-activity-task {
+.channel-chat-activity-task,
+.channel-chat-activity-worker-chip {
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 0 5px;
   color: var(--text-muted);
   font-size: 10px;
+}
+
+.channel-chat-activity-worker-chip {
+  border-color: rgba(125, 207, 255, 0.4);
+  color: var(--cyan);
+  font-weight: 700;
 }
 
 .channel-chat-activity-preview {
@@ -1534,6 +1541,40 @@ button.list-item {
 
 .channel-chat-activity-failed .channel-chat-activity-status {
   color: var(--red);
+}
+
+.channel-chat-delivery-progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+
+.channel-chat-delivery-progress-card {
+  border: 1px dashed rgba(125, 207, 255, 0.38);
+  border-radius: 8px;
+  padding: 8px;
+  background: rgba(125, 207, 255, 0.06);
+  white-space: normal;
+}
+
+.channel-chat-delivery-progress-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.channel-chat-delivery-progress-heading strong {
+  color: var(--cyan);
+}
+
+.channel-chat-delivery-progress-heading span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .channel-chat-delivery-status {

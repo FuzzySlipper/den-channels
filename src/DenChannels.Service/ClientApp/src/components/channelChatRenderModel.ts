@@ -1,4 +1,4 @@
-import type { ChannelActivityEvent, GatewayMember } from '../api/types';
+import type { ChannelActivityEvent, ChannelMessage, GatewayMember } from '../api/types';
 
 export type MessageBodySegment =
   | { type: 'text'; text: string }
@@ -40,6 +40,11 @@ function cleanDetailsBody(value: string): string {
 export interface ActivityDisplayModel {
   id: number;
   agentIdentity: string;
+  displayBlockId: string | null;
+  workerRunId: string | null;
+  workerRole: string | null;
+  parentAgentIdentity: string | null;
+  parentHermesSessionKey: string | null;
   status: string;
   title: string;
   preview: string | null;
@@ -63,6 +68,11 @@ export function toActivityDisplayModel(event: ChannelActivityEvent): ActivityDis
   return {
     id: event.id,
     agentIdentity: event.agentIdentity,
+    displayBlockId: event.displayBlockId,
+    workerRunId: event.workerRunId,
+    workerRole: event.workerRole,
+    parentAgentIdentity: event.parentAgentIdentity,
+    parentHermesSessionKey: event.parentHermesSessionKey,
     status: event.status || event.eventType,
     title,
     preview: summarizePreview(preview, event.summary),
@@ -74,7 +84,92 @@ export function toActivityDisplayModel(event: ChannelActivityEvent): ActivityDis
 }
 
 export function sortActivityEvents(events: ChannelActivityEvent[]): ChannelActivityEvent[] {
-  return [...events].sort((left, right) => left.id - right.id || left.sequence - right.sequence);
+  return [...events].sort((left, right) => {
+    const createdAtDiff = Date.parse(left.createdAt) - Date.parse(right.createdAt);
+    if (createdAtDiff !== 0 && Number.isFinite(createdAtDiff)) return createdAtDiff;
+    if (left.workerRunId && left.workerRunId === right.workerRunId && left.sequence !== right.sequence) {
+      return left.sequence - right.sequence;
+    }
+    return left.id - right.id;
+  });
+}
+
+export interface ActivityDisplayBlock {
+  displayBlockId: string;
+  events: ChannelActivityEvent[];
+}
+
+export interface GroupedChannelActivityEvents {
+  byMessageId: Map<number, ChannelActivityEvent[]>;
+  displayBlocks: ActivityDisplayBlock[];
+  unanchoredEvents: ChannelActivityEvent[];
+}
+
+export function groupActivityEventsForChannelMessages(
+  messages: ChannelMessage[],
+  events: ChannelActivityEvent[],
+): GroupedChannelActivityEvents {
+  const byMessageId = new Map<number, ChannelActivityEvent[]>();
+  const interimBlocksById = new Map<string, ChannelActivityEvent[]>();
+  const unanchoredEvents: ChannelActivityEvent[] = [];
+
+  for (const event of events) {
+    const message = messages.find(candidate => activityMatchesChannelMessage(event, candidate));
+    if (message) {
+      const current = byMessageId.get(message.id) ?? [];
+      current.push(event);
+      byMessageId.set(message.id, current);
+      continue;
+    }
+
+    if (event.displayBlockId) {
+      const current = interimBlocksById.get(event.displayBlockId) ?? [];
+      current.push(event);
+      interimBlocksById.set(event.displayBlockId, current);
+      continue;
+    }
+
+    unanchoredEvents.push(event);
+  }
+
+  for (const [messageId, messageEvents] of byMessageId.entries()) {
+    byMessageId.set(messageId, sortActivityEvents(messageEvents));
+  }
+
+  return {
+    byMessageId,
+    displayBlocks: [...interimBlocksById.entries()]
+      .map(([displayBlockId, blockEvents]) => ({ displayBlockId, events: sortActivityEvents(blockEvents) }))
+      .sort((left, right) => compareActivityEventArrays(left.events, right.events) || left.displayBlockId.localeCompare(right.displayBlockId)),
+    unanchoredEvents: sortActivityEvents(unanchoredEvents),
+  };
+}
+
+export function activityMatchesChannelMessage(event: ChannelActivityEvent, message: ChannelMessage): boolean {
+  if (event.anchorMessageId === message.id) return true;
+  if (activityFinalChannelMessageId(event) === message.id) return true;
+
+  const messageDeliveryRequestId = channelMessageDeliveryRequestId(message);
+  if (!messageDeliveryRequestId) return false;
+
+  return event.deliveryRequestId === messageDeliveryRequestId || event.displayBlockId === messageDeliveryRequestId;
+}
+
+export function channelMessageDeliveryRequestId(message: ChannelMessage): string | null {
+  const firstClass = firstString(message.deliveryRequestId);
+  if (firstClass) return firstClass;
+
+  const metadata = parseJsonObject(message.metadataJson);
+  const metadataDeliveryRequestId = firstString(
+    metadata.deliveryRequestId,
+    metadata.delivery_request_id,
+    metadata.channelMessageDeliveryRequestId,
+    metadata.channel_message_delivery_request_id,
+  );
+  if (metadataDeliveryRequestId) return metadataDeliveryRequestId;
+
+  const dedupeKey = firstString(message.dedupeKey);
+  return dedupeKey ? legacyDeliveryRequestIdFromDedupeKey(dedupeKey) : null;
 }
 
 export interface MentionSuggestion {
@@ -158,6 +253,17 @@ function firstNumber(...values: unknown[]): number | null {
   return null;
 }
 
+function firstPositiveInteger(...values: unknown[]): number | null {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isInteger(value) && value > 0) return value;
+    if (typeof value === 'string') {
+      const parsed = Number(value);
+      if (Number.isInteger(parsed) && parsed > 0) return parsed;
+    }
+  }
+  return null;
+}
+
 function summarizePreview(preview: unknown, fallback: string | null): string | null {
   const direct = firstString(
     typeof preview === 'string' ? preview : null,
@@ -178,4 +284,24 @@ function truncate(value: string, max = 180): string {
 
 function humanizeEventType(value: string): string {
   return value.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function activityFinalChannelMessageId(event: ChannelActivityEvent): number | null {
+  const metadata = parseJsonObject(event.metadataJson);
+  return firstPositiveInteger(metadata.finalChannelMessageId, metadata.final_channel_message_id);
+}
+
+function legacyDeliveryRequestIdFromDedupeKey(dedupeKey: string): string | null {
+  const gatewayDelivery = /^gateway-delivery:(.+):final$/i.exec(dedupeKey);
+  if (gatewayDelivery?.[1]) return gatewayDelivery[1];
+  const named = /(?:^|[:|;,\s])(?:deliveryRequestId|delivery_request_id|channelMessageDeliveryRequestId|channel_message_delivery_request_id)=([^:|;,\s]+)/i.exec(dedupeKey);
+  return named?.[1] ?? null;
+}
+
+function compareActivityEventArrays(left: ChannelActivityEvent[], right: ChannelActivityEvent[]): number {
+  const leftFirst = left[0];
+  const rightFirst = right[0];
+  if (!leftFirst || !rightFirst) return left.length - right.length;
+  const sorted = sortActivityEvents([leftFirst, rightFirst]);
+  return sorted[0] === leftFirst ? -1 : 1;
 }

@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import type { ChannelActivityEvent } from '../api/types';
-import { findActiveMentionQuery, getMentionSuggestions, insertMentionToken, parseMessageBodySegments, toActivityDisplayModel } from './channelChatRenderModel';
+import type { ChannelActivityEvent, ChannelMessage } from '../api/types';
+import {
+  activityMatchesChannelMessage,
+  channelMessageDeliveryRequestId,
+  findActiveMentionQuery,
+  getMentionSuggestions,
+  groupActivityEventsForChannelMessages,
+  insertMentionToken,
+  parseMessageBodySegments,
+  sortActivityEvents,
+  toActivityDisplayModel,
+} from './channelChatRenderModel';
 
 function activity(overrides: Partial<ChannelActivityEvent>): ChannelActivityEvent {
   return {
@@ -29,6 +39,31 @@ function activity(overrides: Partial<ChannelActivityEvent>): ChannelActivityEven
     dedupeKey: null,
     createdAt: '2026-05-19T00:00:00Z',
     updatedAt: '2026-05-19T00:00:00Z',
+    ...overrides,
+  };
+}
+
+function message(overrides: Partial<ChannelMessage>): ChannelMessage {
+  return {
+    id: 100,
+    channelId: 10,
+    senderType: 'agent',
+    senderIdentity: 'den-mcp-runner',
+    body: 'done',
+    messageKind: 'agent_text',
+    sourceKind: 'gateway_delivery',
+    sourceId: 'dr-parent',
+    sourceProjectId: 'den-channels',
+    summary: null,
+    deepLink: null,
+    threadRootMessageId: null,
+    replyToMessageId: null,
+    metadataJson: null,
+    deliveryRequestId: 'dr-parent',
+    dedupeKey: null,
+    createdAt: '2026-05-19T00:01:00Z',
+    editedAt: null,
+    deletedAt: null,
     ...overrides,
   };
 }
@@ -68,6 +103,83 @@ describe('toActivityDisplayModel', () => {
 
     expect(model.preview?.length).toBeLessThanOrEqual(180);
     expect(model.preview?.endsWith('…')).toBe(true);
+  });
+
+  it('preserves display block, worker, and parent fields for spawned worker headers', () => {
+    const model = toActivityDisplayModel(activity({
+      displayBlockId: 'dr-parent',
+      workerRunId: 'run_1566_workerabcdef',
+      workerRole: 'coder',
+      parentAgentIdentity: 'orchestrator',
+      parentHermesSessionKey: 'parent-session',
+    }));
+
+    expect(model.displayBlockId).toBe('dr-parent');
+    expect(model.workerRunId).toBe('run_1566_workerabcdef');
+    expect(model.workerRole).toBe('coder');
+    expect(model.parentAgentIdentity).toBe('orchestrator');
+    expect(model.parentHermesSessionKey).toBe('parent-session');
+  });
+});
+
+describe('activity/message grouping', () => {
+  it('matches displayBlockId to a final message first-class deliveryRequestId even when child deliveryRequestId differs', () => {
+    const parentMessage = message({ id: 42, deliveryRequestId: 'parent-delivery' });
+    const childEvent = activity({ deliveryRequestId: 'child-delivery', displayBlockId: 'parent-delivery' });
+
+    expect(activityMatchesChannelMessage(childEvent, parentMessage)).toBe(true);
+  });
+
+  it('keeps existing deliveryRequestId matching and legacy fallback matching working', () => {
+    const firstClassMessage = message({ id: 42, deliveryRequestId: 'first-class-delivery' });
+    const legacyMetadataMessage = message({ id: 43, deliveryRequestId: null, metadataJson: JSON.stringify({ deliveryRequestId: 'metadata-delivery' }) });
+    const legacyDedupeMessage = message({ id: 44, deliveryRequestId: null, metadataJson: null, dedupeKey: 'gateway-delivery:dedupe-delivery:final' });
+
+    expect(activityMatchesChannelMessage(activity({ deliveryRequestId: 'first-class-delivery' }), firstClassMessage)).toBe(true);
+    expect(activityMatchesChannelMessage(activity({ deliveryRequestId: 'metadata-delivery' }), legacyMetadataMessage)).toBe(true);
+    expect(activityMatchesChannelMessage(activity({ displayBlockId: 'dedupe-delivery' }), legacyDedupeMessage)).toBe(true);
+    expect(channelMessageDeliveryRequestId(legacyDedupeMessage)).toBe('dedupe-delivery');
+  });
+
+  it('matches explicit anchors and final channel message metadata', () => {
+    const parentMessage = message({ id: 42, deliveryRequestId: null });
+
+    expect(activityMatchesChannelMessage(activity({ anchorMessageId: 42 }), parentMessage)).toBe(true);
+    expect(activityMatchesChannelMessage(activity({ metadataJson: JSON.stringify({ finalChannelMessageId: 42 }) }), parentMessage)).toBe(true);
+  });
+
+  it('attaches displayBlockId activity to an interim block when no final parent message exists', () => {
+    const grouped = groupActivityEventsForChannelMessages([], [
+      activity({ id: 1, displayBlockId: 'parent-delivery', workerRunId: 'run-a', createdAt: '2026-05-19T00:00:02Z' }),
+      activity({ id: 2, displayBlockId: 'parent-delivery', workerRunId: 'run-b', createdAt: '2026-05-19T00:00:01Z' }),
+      activity({ id: 3 }),
+    ]);
+
+    expect(grouped.byMessageId.size).toBe(0);
+    expect(grouped.displayBlocks).toHaveLength(1);
+    expect(grouped.displayBlocks[0].displayBlockId).toBe('parent-delivery');
+    expect(grouped.displayBlocks[0].events.map(event => event.id)).toEqual([2, 1]);
+    expect(grouped.unanchoredEvents.map(event => event.id)).toEqual([3]);
+  });
+
+  it('does not leave displayBlockId-matched final-message activity in detached blocks or unanchored events', () => {
+    const parentMessage = message({ id: 42, deliveryRequestId: 'parent-delivery' });
+    const childEvent = activity({ id: 7, displayBlockId: 'parent-delivery' });
+    const grouped = groupActivityEventsForChannelMessages([parentMessage], [childEvent]);
+
+    expect(grouped.byMessageId.get(42)?.map(event => event.id)).toEqual([7]);
+    expect(grouped.displayBlocks).toEqual([]);
+    expect(grouped.unanchoredEvents).toEqual([]);
+  });
+
+  it('orders cross-worker activity by createdAt while sequence remains per workerRunId', () => {
+    const sorted = sortActivityEvents([
+      activity({ id: 3, workerRunId: 'run-a', sequence: 2, createdAt: '2026-05-19T00:00:01Z' }),
+      activity({ id: 2, workerRunId: 'run-b', sequence: 1, createdAt: '2026-05-19T00:00:00Z' }),
+      activity({ id: 1, workerRunId: 'run-a', sequence: 1, createdAt: '2026-05-19T00:00:01Z' }),
+    ]);
+
+    expect(sorted.map(event => event.id)).toEqual([2, 1, 3]);
   });
 });
 

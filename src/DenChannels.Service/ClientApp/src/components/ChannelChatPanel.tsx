@@ -17,7 +17,7 @@ import {
 } from '../api/client';
 import { usePolling } from '../hooks/usePolling';
 import { formatTimeAgo } from '../utils';
-import { findActiveMentionQuery, getMentionSuggestions, insertMentionToken, parseMessageBodySegments, sortActivityEvents, toActivityDisplayModel } from './channelChatRenderModel';
+import { findActiveMentionQuery, getMentionSuggestions, groupActivityEventsForChannelMessages, insertMentionToken, parseMessageBodySegments, sortActivityEvents, toActivityDisplayModel } from './channelChatRenderModel';
 
 const SENDER_IDENTITY_STORAGE_KEY = 'den-channel-sender-identity';
 const DEFAULT_WAKE_POLICY = 'mentions_only';
@@ -254,10 +254,11 @@ function ActivityTimeline({ events, compact = false }: { events: ChannelActivity
         </div>
       )}
       {displayEvents.map(event => (
-        <div key={event.id} className={`channel-chat-activity-row channel-chat-activity-${event.status.toLowerCase()}`}>
+        <div key={event.id} className={`channel-chat-activity-row channel-chat-activity-${activityStatusClass(event.status)}`}>
           <span className="message-time">{formatTimeAgo(event.createdAt)}</span>
           <span className="channel-chat-activity-agent">{event.agentIdentity}</span>
           <span className="channel-chat-activity-main">
+            {activityWorkerChip(event)}
             <strong>{event.title}{event.count ? ` ×${event.count}` : ''}</strong>
             <span className="channel-chat-activity-status">{event.status}</span>
             {event.taskId && <span className="channel-chat-activity-task">task #{event.taskId}</span>}
@@ -267,6 +268,49 @@ function ActivityTimeline({ events, compact = false }: { events: ChannelActivity
       ))}
     </div>
   );
+}
+
+function DeliveryProgressCards({ blocks }: { blocks: Array<{ displayBlockId: string; events: ChannelActivityEvent[] }> }) {
+  if (blocks.length === 0) return null;
+  return (
+    <div className="channel-chat-delivery-progress-list" aria-label="In-progress delivery activity">
+      {blocks.map(block => (
+        <div key={block.displayBlockId} className="channel-chat-delivery-progress-card">
+          <div className="channel-chat-delivery-progress-heading">
+            <strong>Delivery in progress</strong>
+            <span>{block.displayBlockId}</span>
+          </div>
+          <ActivityTimeline events={block.events} compact />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function activityWorkerChip(event: ReturnType<typeof toActivityDisplayModel>) {
+  if (!event.workerRunId && !event.workerRole && !event.parentAgentIdentity && !event.parentHermesSessionKey) return null;
+  const role = event.workerRole?.trim() || 'worker';
+  const run = event.workerRunId ? shortWorkerRunId(event.workerRunId) : 'pending';
+  const title = [
+    event.displayBlockId ? `display block ${event.displayBlockId}` : null,
+    event.parentAgentIdentity ? `parent agent ${event.parentAgentIdentity}` : null,
+    event.parentHermesSessionKey ? `parent session ${event.parentHermesSessionKey}` : null,
+  ].filter(Boolean).join(' · ');
+  return (
+    <span className="channel-chat-activity-worker-chip" title={title || undefined}>
+      {role} · {event.agentIdentity || 'agent'} · {run}
+    </span>
+  );
+}
+
+function shortWorkerRunId(value: string): string {
+  const normalized = value.trim();
+  if (normalized.length <= 12) return normalized;
+  return normalized.slice(0, 8);
+}
+
+function activityStatusClass(status: string): string {
+  return status.toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
 }
 
 export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeChange }: Props) {
@@ -424,21 +468,13 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
     return grouped;
   }, [reactions]);
 
-  const activityEventsByAnchorMessageId = useMemo(() => {
-    const grouped = new Map<number, ChannelActivityEvent[]>();
-    for (const event of activityEvents ?? []) {
-      if (!event.anchorMessageId) continue;
-      const current = grouped.get(event.anchorMessageId) ?? [];
-      current.push(event);
-      grouped.set(event.anchorMessageId, current);
-    }
-    return grouped;
-  }, [activityEvents]);
-
-  const unanchoredActivityEvents = useMemo(
-    () => (activityEvents ?? []).filter(event => !event.anchorMessageId),
-    [activityEvents],
+  const groupedActivityEvents = useMemo(
+    () => groupActivityEventsForChannelMessages(sortedMessages, activityEvents ?? []),
+    [activityEvents, sortedMessages],
   );
+  const activityEventsByMessageId = groupedActivityEvents.byMessageId;
+  const deliveryProgressBlocks = groupedActivityEvents.displayBlocks;
+  const unanchoredActivityEvents = groupedActivityEvents.unanchoredEvents;
 
   const members = useMemo(() => memberships?.members ?? [], [memberships]);
   const memberActivityByIdentity = useMemo(() => {
@@ -732,20 +768,21 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
         <div className="channel-chat-scrollback" aria-live="polite">
           {disabledReason ? (
             <div className="channel-chat-state channel-chat-state-muted">{disabledReason}</div>
-          ) : (messagesLoading || activityLoading) && sortedMessages.length === 0 && unanchoredActivityEvents.length === 0 ? (
+          ) : (messagesLoading || activityLoading) && sortedMessages.length === 0 && unanchoredActivityEvents.length === 0 && deliveryProgressBlocks.length === 0 ? (
             <div className="channel-chat-state">Loading channel messages…</div>
           ) : messagesError || activityError ? (
             <div className="channel-chat-state channel-chat-state-error">{(messagesError ?? activityError)?.message}</div>
-          ) : sortedMessages.length === 0 && unanchoredActivityEvents.length === 0 ? (
+          ) : sortedMessages.length === 0 && unanchoredActivityEvents.length === 0 && deliveryProgressBlocks.length === 0 ? (
             <div className="channel-chat-state channel-chat-state-muted">No channel messages yet. Start the scrollback below.</div>
           ) : (
             <>
               <ActivityTimeline events={unanchoredActivityEvents} />
+              <DeliveryProgressCards blocks={deliveryProgressBlocks} />
               {sortedMessages.map(message => {
                 const evidence = directMessageEvidence(message);
                 const wakeProgress = deriveWakeProgress(message, sortedMessages);
                 const messageReactions = reactionsByMessageId.get(message.id) ?? [];
-                const anchoredActivityEvents = activityEventsByAnchorMessageId.get(message.id) ?? [];
+                const anchoredActivityEvents = activityEventsByMessageId.get(message.id) ?? [];
                 return (
                 <div key={message.id} className="channel-chat-message">
                   <span className="message-time">{formatTimeAgo(message.createdAt)}</span>
