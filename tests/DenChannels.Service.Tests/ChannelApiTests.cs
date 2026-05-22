@@ -105,6 +105,7 @@ public sealed class ChannelApiTests : IDisposable
         Assert.NotNull(posted);
         Assert.Equal("task_message", posted.SourceKind);
         Assert.Equal("den://project/den-channels/task/1320", posted.DeepLink);
+        Assert.Null(posted.DeliveryRequestId);
 
         var messages = await client.GetFromJsonAsync<List<MessagePayload>>($"/api/channels/{channel.Id}/messages?afterId=0&limit=10");
         Assert.NotNull(messages);
@@ -152,6 +153,42 @@ public sealed class ChannelApiTests : IDisposable
         Assert.NotNull(afterCursor);
         var cursorMessage = Assert.Single(afterCursor);
         Assert.Equal("message 085", cursorMessage.Body);
+    }
+
+    [Fact]
+    public async Task GatewaySystemMessage_PopulatesDeliveryRequestIdFromRequestAndFallbacks()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+
+        var explicitDelivery = await PostJsonAsync<GatewayMessagePayload>(client, "/api/gateway/system-messages", new
+        {
+            channelId = channel.Id,
+            body = "Gateway delivered reply",
+            sourceKind = "gateway_delivery",
+            sourceId = "source-44",
+            deliveryRequestId = "delivery-44",
+            dedupeKey = "gateway-delivery:44"
+        });
+        Assert.Equal("delivery-44", explicitDelivery.DeliveryRequestId);
+
+        var fallbackDelivery = await PostJsonAsync<GatewayMessagePayload>(client, "/api/gateway/system-messages", new
+        {
+            channelId = channel.Id,
+            body = "Gateway delivered reply fallback",
+            sourceKind = "gateway_delivery",
+            sourceId = "source-45",
+            dedupeKey = "gateway-delivery:45"
+        });
+        Assert.Equal("source-45", fallbackDelivery.DeliveryRequestId);
+
+        var messages = await client.GetFromJsonAsync<List<MessagePayload>>($"/api/channels/{channel.Id}/messages?afterId=0&limit=10");
+        Assert.NotNull(messages);
+        Assert.Contains(messages, message => message.DeliveryRequestId == "delivery-44");
+        Assert.Contains(messages, message => message.DeliveryRequestId == "source-45");
     }
 
     [Fact]
@@ -264,6 +301,11 @@ public sealed class ChannelApiTests : IDisposable
             agentIdentity = "den-mcp-runner",
             deliveryRequestId = "delivery-1526",
             hermesSessionKey = "den-channels:1526",
+            displayBlockId = "block-1526",
+            parentHermesSessionKey = "den-channels:parent",
+            parentAgentIdentity = "den-mcp-runner",
+            workerRunId = "worker-run-1526",
+            workerRole = "coder",
             taskId = 1526,
             threadId = 6445,
             anchorMessageId = anchorMessage.Id,
@@ -278,7 +320,12 @@ public sealed class ChannelApiTests : IDisposable
         });
         Assert.Equal("started", started.Status);
         Assert.Equal(anchorMessage.Id, started.AnchorMessageId);
-        Assert.DoesNotContain("sk-test-secret", started.PreviewJson);
+        Assert.Equal("block-1526", started.DisplayBlockId);
+        Assert.Equal("den-channels:parent", started.ParentHermesSessionKey);
+        Assert.Equal("den-mcp-runner", started.ParentAgentIdentity);
+        Assert.Equal("worker-run-1526", started.WorkerRunId);
+        Assert.Equal("coder", started.WorkerRole);
+        Assert.DoesNotContain("***", started.PreviewJson);
         Assert.DoesNotContain("very-secret-token", started.MetadataJson);
         Assert.Contains("[REDACTED]", started.PreviewJson);
 
@@ -296,6 +343,8 @@ public sealed class ChannelApiTests : IDisposable
         });
         Assert.Equal(started.Id, duplicate.Id);
         Assert.Equal("completed", duplicate.Status);
+        Assert.Equal("block-1526", duplicate.DisplayBlockId);
+        Assert.Equal("worker-run-1526", duplicate.WorkerRunId);
         Assert.True(duplicate.UpdateVersion > started.UpdateVersion);
 
         var otherTask = await PostJsonAsync<ActivityEventPayload>(client, $"/api/channels/{channel.Id}/activity-events", new
@@ -304,6 +353,8 @@ public sealed class ChannelApiTests : IDisposable
             agentIdentity = "den-mcp-runner",
             deliveryRequestId = "delivery-1529",
             hermesSessionKey = "den-channels:1529",
+            displayBlockId = "block-1529",
+            workerRunId = "worker-run-1529",
             taskId = 1529,
             eventType = "tool_call_started",
             status = "started",
@@ -333,6 +384,16 @@ public sealed class ChannelApiTests : IDisposable
         var activityEvent = Assert.Single(byDelivery);
         Assert.Equal(started.Id, activityEvent.Id);
         Assert.Equal("den-channels:1526", activityEvent.HermesSessionKey);
+
+        var byDisplayBlock = await client.GetFromJsonAsync<List<ActivityEventPayload>>(
+            $"/api/channels/{channel.Id}/activity-events?displayBlockId=block-1526");
+        Assert.NotNull(byDisplayBlock);
+        Assert.Equal(started.Id, Assert.Single(byDisplayBlock).Id);
+
+        var byWorkerRun = await client.GetFromJsonAsync<List<ActivityEventPayload>>(
+            $"/api/channels/{channel.Id}/activity-events?workerRunId=worker-run-1526");
+        Assert.NotNull(byWorkerRun);
+        Assert.Equal(started.Id, Assert.Single(byWorkerRun).Id);
 
         var messages = await client.GetFromJsonAsync<List<MessagePayload>>($"/api/channels/{channel.Id}/messages?afterId=0&limit=10");
         Assert.NotNull(messages);
@@ -377,7 +438,10 @@ public sealed class ChannelApiTests : IDisposable
     private sealed record ChannelPayload(long Id, string Slug, string DisplayName, string Kind, string? ProjectId);
 
     private sealed record MessagePayload(long Id, long ChannelId, string Body, string? SourceKind, string? DeepLink,
-        string? DedupeKey);
+        string? DeliveryRequestId, string? DedupeKey);
+
+    private sealed record GatewayMessagePayload(long Id, long ChannelId, string? SourceKind, string? SourceId,
+        string? DeliveryRequestId, string? DedupeKey);
 
     private sealed record MembershipPayload(long Id, long ChannelId, string MemberType, string MemberIdentity,
         string MembershipStatus, string WakePolicy);
@@ -408,6 +472,7 @@ public sealed class ChannelApiTests : IDisposable
         string[] Reactors);
 
     private sealed record ActivityEventPayload(long Id, long ChannelId, string? ProjectId, string AgentIdentity,
-        string? DeliveryRequestId, string? HermesSessionKey, long? AnchorMessageId, string EventType, string Status,
+        string? DeliveryRequestId, string? HermesSessionKey, string? DisplayBlockId, string? ParentHermesSessionKey,
+        string? ParentAgentIdentity, string? WorkerRunId, string? WorkerRole, long? AnchorMessageId, string EventType, string Status,
         long Sequence, long UpdateVersion, string? Summary, string? PreviewJson, string? MetadataJson);
 }

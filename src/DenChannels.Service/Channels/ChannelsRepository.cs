@@ -126,12 +126,12 @@ public sealed partial class ChannelsRepository
         command.CommandText = """
             INSERT INTO channel_messages(
                 channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
-                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, dedupe_key)
+                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key)
             VALUES (
                 $channelId, $senderType, $senderIdentity, $body, $messageKind, $sourceKind, $sourceId, $sourceProjectId,
-                $summary, $deepLink, $threadRootMessageId, $replyToMessageId, $metadataJson, $dedupeKey)
+                $summary, $deepLink, $threadRootMessageId, $replyToMessageId, $metadataJson, $deliveryRequestId, $dedupeKey)
             RETURNING id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
-                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, dedupe_key, created_at, edited_at, deleted_at;
+                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key, created_at, edited_at, deleted_at;
             """;
         command.Parameters.AddWithValue("$channelId", channelId);
         command.Parameters.AddWithValue("$senderType", request.SenderType);
@@ -146,6 +146,7 @@ public sealed partial class ChannelsRepository
         command.Parameters.AddWithValue("$threadRootMessageId", (object?)request.ThreadRootMessageId ?? DBNull.Value);
         command.Parameters.AddWithValue("$replyToMessageId", (object?)request.ReplyToMessageId ?? DBNull.Value);
         command.Parameters.AddWithValue("$metadataJson", (object?)request.MetadataJson ?? DBNull.Value);
+        command.Parameters.AddWithValue("$deliveryRequestId", (object?)DeriveMessageDeliveryRequestId(request) ?? DBNull.Value);
         command.Parameters.AddWithValue("$dedupeKey", (object?)request.DedupeKey ?? DBNull.Value);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         await reader.ReadAsync(cancellationToken);
@@ -161,10 +162,10 @@ public sealed partial class ChannelsRepository
         command.CommandText = afterId is null
             ? """
               SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
-                  summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, dedupe_key, created_at, edited_at, deleted_at
+                  summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key, created_at, edited_at, deleted_at
               FROM (
                   SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
-                      summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, dedupe_key, created_at, edited_at, deleted_at
+                      summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key, created_at, edited_at, deleted_at
                   FROM channel_messages
                   WHERE channel_id = $channelId
                     AND deleted_at IS NULL
@@ -175,7 +176,7 @@ public sealed partial class ChannelsRepository
               """
             : """
               SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
-                  summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, dedupe_key, created_at, edited_at, deleted_at
+                  summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key, created_at, edited_at, deleted_at
               FROM channel_messages
               WHERE channel_id = $channelId
                 AND id > $afterId
@@ -200,7 +201,7 @@ public sealed partial class ChannelsRepository
         await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
-                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, dedupe_key, created_at, edited_at, deleted_at
+                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key, created_at, edited_at, deleted_at
             FROM channel_messages
             WHERE id = $messageId
               AND deleted_at IS NULL;
@@ -218,7 +219,7 @@ public sealed partial class ChannelsRepository
         await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
-                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, dedupe_key, created_at, edited_at, deleted_at
+                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key, created_at, edited_at, deleted_at
             FROM channel_messages
             WHERE source_kind = $sourceKind
               AND source_id = $sourceId
@@ -268,7 +269,7 @@ public sealed partial class ChannelsRepository
         await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
-                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, dedupe_key, created_at, edited_at, deleted_at
+                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key, created_at, edited_at, deleted_at
             FROM channel_messages
             WHERE channel_id = $channelId
               AND dedupe_key = $dedupeKey
@@ -441,15 +442,22 @@ public sealed partial class ChannelsRepository
         command.CommandText = """
             INSERT INTO channel_activity_events(
                 channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key, task_id, thread_id,
-                anchor_message_id, event_type, status, sequence, title, summary, preview_json, metadata_json, dedupe_key)
+                anchor_message_id, event_type, status, sequence, title, summary, preview_json, metadata_json,
+                display_block_id, parent_hermes_session_key, parent_agent_identity, worker_run_id, worker_role, dedupe_key)
             VALUES (
                 $channelId, $projectId, $agentIdentity, $deliveryRequestId, $hermesSessionKey, $taskId, $threadId,
-                $anchorMessageId, $eventType, $status, $sequence, $title, $summary, $previewJson, $metadataJson, $dedupeKey)
+                $anchorMessageId, $eventType, $status, $sequence, $title, $summary, $previewJson, $metadataJson,
+                $displayBlockId, $parentHermesSessionKey, $parentAgentIdentity, $workerRunId, $workerRole, $dedupeKey)
             ON CONFLICT(channel_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET
                 project_id = COALESCE(excluded.project_id, channel_activity_events.project_id),
                 agent_identity = excluded.agent_identity,
                 delivery_request_id = COALESCE(excluded.delivery_request_id, channel_activity_events.delivery_request_id),
                 hermes_session_key = COALESCE(excluded.hermes_session_key, channel_activity_events.hermes_session_key),
+                display_block_id = COALESCE(excluded.display_block_id, channel_activity_events.display_block_id),
+                parent_hermes_session_key = COALESCE(excluded.parent_hermes_session_key, channel_activity_events.parent_hermes_session_key),
+                parent_agent_identity = COALESCE(excluded.parent_agent_identity, channel_activity_events.parent_agent_identity),
+                worker_run_id = COALESCE(excluded.worker_run_id, channel_activity_events.worker_run_id),
+                worker_role = COALESCE(excluded.worker_role, channel_activity_events.worker_role),
                 task_id = COALESCE(excluded.task_id, channel_activity_events.task_id),
                 thread_id = COALESCE(excluded.thread_id, channel_activity_events.thread_id),
                 anchor_message_id = COALESCE(excluded.anchor_message_id, channel_activity_events.anchor_message_id),
@@ -462,9 +470,10 @@ public sealed partial class ChannelsRepository
                 metadata_json = COALESCE(excluded.metadata_json, channel_activity_events.metadata_json),
                 update_version = channel_activity_events.update_version + 1,
                 updated_at = datetime('now')
-            RETURNING id, channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key, task_id, thread_id,
-                anchor_message_id, event_type, status, sequence, update_version, title, summary, preview_json, metadata_json,
-                dedupe_key, created_at, updated_at;
+            RETURNING id, channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key,
+                display_block_id, parent_hermes_session_key, parent_agent_identity, worker_run_id, worker_role,
+                task_id, thread_id, anchor_message_id, event_type, status, sequence, update_version, title, summary,
+                preview_json, metadata_json, dedupe_key, created_at, updated_at;
             """;
         AddActivityParameters(command, channelId, request);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -487,9 +496,10 @@ public sealed partial class ChannelsRepository
                 update_version = update_version + 1,
                 updated_at = datetime('now')
             WHERE id = $id
-            RETURNING id, channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key, task_id, thread_id,
-                anchor_message_id, event_type, status, sequence, update_version, title, summary, preview_json, metadata_json,
-                dedupe_key, created_at, updated_at;
+            RETURNING id, channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key,
+                display_block_id, parent_hermes_session_key, parent_agent_identity, worker_run_id, worker_role,
+                task_id, thread_id, anchor_message_id, event_type, status, sequence, update_version, title, summary,
+                preview_json, metadata_json, dedupe_key, created_at, updated_at;
             """;
         command.Parameters.AddWithValue("$id", activityEventId);
         command.Parameters.AddWithValue("$status", (object?)request.Status ?? DBNull.Value);
@@ -502,20 +512,24 @@ public sealed partial class ChannelsRepository
     }
 
     public async Task<IReadOnlyList<ChannelActivityEventDto>> ListActivityEventsAsync(long channelId,
-        string? deliveryRequestId = null, string? hermesSessionKey = null, long? anchorMessageId = null, long? taskId = null,
-        long? afterId = null, int limit = 100, CancellationToken cancellationToken = default)
+        string? deliveryRequestId = null, string? hermesSessionKey = null, string? displayBlockId = null,
+        string? workerRunId = null, long? anchorMessageId = null, long? taskId = null, long? afterId = null,
+        int limit = 100, CancellationToken cancellationToken = default)
     {
         limit = Math.Clamp(limit, 1, 500);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key, task_id, thread_id,
-                anchor_message_id, event_type, status, sequence, update_version, title, summary, preview_json, metadata_json,
-                dedupe_key, created_at, updated_at
+            SELECT id, channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key,
+                display_block_id, parent_hermes_session_key, parent_agent_identity, worker_run_id, worker_role,
+                task_id, thread_id, anchor_message_id, event_type, status, sequence, update_version, title, summary,
+                preview_json, metadata_json, dedupe_key, created_at, updated_at
             FROM channel_activity_events
             WHERE channel_id = $channelId
               AND ($deliveryRequestId IS NULL OR delivery_request_id = $deliveryRequestId)
               AND ($hermesSessionKey IS NULL OR hermes_session_key = $hermesSessionKey)
+              AND ($displayBlockId IS NULL OR display_block_id = $displayBlockId)
+              AND ($workerRunId IS NULL OR worker_run_id = $workerRunId)
               AND ($anchorMessageId IS NULL OR anchor_message_id = $anchorMessageId)
               AND ($taskId IS NULL OR task_id = $taskId)
               AND ($afterId IS NULL OR id > $afterId)
@@ -525,6 +539,8 @@ public sealed partial class ChannelsRepository
         command.Parameters.AddWithValue("$channelId", channelId);
         command.Parameters.AddWithValue("$deliveryRequestId", (object?)deliveryRequestId ?? DBNull.Value);
         command.Parameters.AddWithValue("$hermesSessionKey", (object?)hermesSessionKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$displayBlockId", (object?)displayBlockId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workerRunId", (object?)workerRunId ?? DBNull.Value);
         command.Parameters.AddWithValue("$anchorMessageId", (object?)anchorMessageId ?? DBNull.Value);
         command.Parameters.AddWithValue("$taskId", (object?)taskId ?? DBNull.Value);
         command.Parameters.AddWithValue("$afterId", (object?)afterId ?? DBNull.Value);
@@ -569,6 +585,11 @@ public sealed partial class ChannelsRepository
         command.Parameters.AddWithValue("$agentIdentity", request.AgentIdentity);
         command.Parameters.AddWithValue("$deliveryRequestId", (object?)request.DeliveryRequestId ?? DBNull.Value);
         command.Parameters.AddWithValue("$hermesSessionKey", (object?)request.HermesSessionKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$displayBlockId", (object?)request.DisplayBlockId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$parentHermesSessionKey", (object?)request.ParentHermesSessionKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$parentAgentIdentity", (object?)request.ParentAgentIdentity ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workerRunId", (object?)request.WorkerRunId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workerRole", (object?)request.WorkerRole ?? DBNull.Value);
         command.Parameters.AddWithValue("$taskId", (object?)request.TaskId ?? DBNull.Value);
         command.Parameters.AddWithValue("$threadId", (object?)request.ThreadId ?? DBNull.Value);
         command.Parameters.AddWithValue("$anchorMessageId", (object?)request.AnchorMessageId ?? DBNull.Value);
@@ -583,6 +604,20 @@ public sealed partial class ChannelsRepository
     }
 
     private static string DefaultMessageKind(string senderType) => senderType == "agent" ? "agent_text" : "human_text";
+
+    private static string? DeriveMessageDeliveryRequestId(PostChannelMessageRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.DeliveryRequestId))
+            return request.DeliveryRequestId;
+
+        if (string.Equals(request.SourceKind, "gateway_delivery", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(request.SourceId))
+        {
+            return request.SourceId;
+        }
+
+        return null;
+    }
 
     private static object NormalizeActivityText(string? value, int maxLength)
     {
@@ -626,9 +661,10 @@ public sealed partial class ChannelsRepository
         GetNullableInt64(reader, 12),
         GetNullableString(reader, 13),
         GetNullableString(reader, 14),
-        reader.GetString(15),
-        GetNullableString(reader, 16),
-        GetNullableString(reader, 17));
+        GetNullableString(reader, 15),
+        reader.GetString(16),
+        GetNullableString(reader, 17),
+        GetNullableString(reader, 18));
 
     private static ChannelMembershipDto ReadMembership(SqliteDataReader reader) => new(
         reader.GetInt64(0),
@@ -661,20 +697,25 @@ public sealed partial class ChannelsRepository
         reader.GetString(3),
         GetNullableString(reader, 4),
         GetNullableString(reader, 5),
-        GetNullableInt64(reader, 6),
-        GetNullableInt64(reader, 7),
-        GetNullableInt64(reader, 8),
-        reader.GetString(9),
-        reader.GetString(10),
-        reader.GetInt64(11),
-        reader.GetInt64(12),
-        GetNullableString(reader, 13),
-        GetNullableString(reader, 14),
-        GetNullableString(reader, 15),
-        GetNullableString(reader, 16),
-        GetNullableString(reader, 17),
-        reader.GetString(18),
-        reader.GetString(19));
+        GetNullableString(reader, 6),
+        GetNullableString(reader, 7),
+        GetNullableString(reader, 8),
+        GetNullableString(reader, 9),
+        GetNullableString(reader, 10),
+        GetNullableInt64(reader, 11),
+        GetNullableInt64(reader, 12),
+        GetNullableInt64(reader, 13),
+        reader.GetString(14),
+        reader.GetString(15),
+        reader.GetInt64(16),
+        reader.GetInt64(17),
+        GetNullableString(reader, 18),
+        GetNullableString(reader, 19),
+        GetNullableString(reader, 20),
+        GetNullableString(reader, 21),
+        GetNullableString(reader, 22),
+        reader.GetString(23),
+        reader.GetString(24));
 
     private static string? GetNullableString(SqliteDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);

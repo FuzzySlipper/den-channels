@@ -81,6 +81,7 @@ public sealed record GatewayMessageDto(
     string? SourceKind,
     string? SourceId,
     string? SourceProjectId,
+    string? DeliveryRequestId,
     string? DedupeKey,
     string? DeepLink,
     string? Summary,
@@ -103,6 +104,7 @@ public sealed record GatewayEventItemDto(
     string? SourceKind,
     string? SourceId,
     string? SourceProjectId,
+    string? DeliveryRequestId,
     string? DedupeKey,
     string? DeepLink,
     string? Summary,
@@ -122,4 +124,5 @@ public sealed record PostGatewaySystemMessageRequest(
     string? Summary,
     string? DeepLink,
     string? MetadataJson,
+    string? DeliveryRequestId,
     string? DedupeKey);

@@ -29,6 +29,19 @@ public sealed class ChannelsDatabaseInitializerTests
         Assert.Contains("deep_link", messageColumns);
         Assert.Contains("metadata_json", messageColumns);
         Assert.Contains("dedupe_key", messageColumns);
+        Assert.Contains("delivery_request_id", messageColumns);
+
+        var activityColumns = await ListColumnsAsync(connection, "channel_activity_events");
+        Assert.Contains("display_block_id", activityColumns);
+        Assert.Contains("parent_hermes_session_key", activityColumns);
+        Assert.Contains("parent_agent_identity", activityColumns);
+        Assert.Contains("worker_run_id", activityColumns);
+        Assert.Contains("worker_role", activityColumns);
+
+        var indexes = await ListIndexesAsync(connection);
+        Assert.Contains("idx_channel_messages_delivery_request", indexes);
+        Assert.Contains("idx_channel_activity_events_display_block", indexes);
+        Assert.Contains("idx_channel_activity_events_worker_run", indexes);
     }
 
     [Fact]
@@ -180,6 +193,7 @@ public sealed class ChannelsDatabaseInitializerTests
         var messageColumns = await ListColumnsAsync(connection, "channel_messages");
         Assert.Contains("source_project_id", messageColumns);
         Assert.Contains("dedupe_key", messageColumns);
+        Assert.Contains("delivery_request_id", messageColumns);
     }
 
     [Fact]
@@ -241,6 +255,11 @@ public sealed class ChannelsDatabaseInitializerTests
         Assert.Contains("delivery_request_id", columns);
         Assert.Contains("hermes_session_key", columns);
         Assert.Contains("anchor_message_id", columns);
+        Assert.Contains("display_block_id", columns);
+        Assert.Contains("parent_hermes_session_key", columns);
+        Assert.Contains("parent_agent_identity", columns);
+        Assert.Contains("worker_run_id", columns);
+        Assert.Contains("worker_role", columns);
         Assert.Contains("preview_json", columns);
         Assert.Contains("dedupe_key", columns);
 
@@ -249,9 +268,11 @@ public sealed class ChannelsDatabaseInitializerTests
             VALUES ('project-den-channels', 'Den Channels', 'project_default', 'den-channels');
             INSERT INTO channel_activity_events(
                 channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key,
+                display_block_id, parent_hermes_session_key, parent_agent_identity, worker_run_id, worker_role,
                 event_type, status, sequence, summary, dedupe_key)
             VALUES (
                 1, 'den-channels', 'den-mcp-runner', 'dr-1', 'session-1',
+                'block-1', 'parent-session', 'parent-agent', 'worker-1', 'coder',
                 'tool_call_started', 'started', 1, 'terminal: dotnet test', 'activity:dr-1:1');
             """);
 
@@ -304,6 +325,52 @@ public sealed class ChannelsDatabaseInitializerTests
         Assert.Contains("channel_activity_events", await ListTablesAsync(connection));
     }
 
+    [Fact]
+    public async Task ApplyMigrationsAsync_AddsActivityCorrelationColumnsToLegacyActivityTable()
+    {
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ExecuteAsync(connection, """
+            CREATE TABLE channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                project_id TEXT
+            );
+            CREATE TABLE channel_activity_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL,
+                project_id TEXT,
+                agent_identity TEXT NOT NULL,
+                delivery_request_id TEXT,
+                hermes_session_key TEXT,
+                task_id INTEGER,
+                thread_id INTEGER,
+                anchor_message_id INTEGER,
+                event_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'completed',
+                sequence INTEGER NOT NULL DEFAULT 0,
+                update_version INTEGER NOT NULL DEFAULT 1,
+                title TEXT,
+                summary TEXT,
+                preview_json TEXT,
+                metadata_json TEXT,
+                dedupe_key TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            """);
+
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        var columns = await ListColumnsAsync(connection, "channel_activity_events");
+        Assert.Contains("display_block_id", columns);
+        Assert.Contains("parent_hermes_session_key", columns);
+        Assert.Contains("parent_agent_identity", columns);
+        Assert.Contains("worker_run_id", columns);
+        Assert.Contains("worker_role", columns);
+    }
+
     private static async Task<SqliteConnection> OpenInMemoryDatabaseAsync()
     {
         var connection = new SqliteConnection("Data Source=:memory:");
@@ -331,6 +398,17 @@ public sealed class ChannelsDatabaseInitializerTests
         while (await reader.ReadAsync())
             columns.Add(reader.GetString(1));
         return columns;
+    }
+
+    private static async Task<HashSet<string>> ListIndexesAsync(SqliteConnection connection)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT name FROM sqlite_master WHERE type = 'index';";
+        await using var reader = await command.ExecuteReaderAsync();
+        var indexes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (await reader.ReadAsync())
+            indexes.Add(reader.GetString(0));
+        return indexes;
     }
 
     private static async Task<int> CountRowsAsync(SqliteConnection connection, string tableName)

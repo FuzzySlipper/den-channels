@@ -172,6 +172,7 @@ public static class GatewayRoutes
                 m.SourceKind,
                 m.SourceId,
                 m.SourceProjectId,
+                m.DeliveryRequestId,
                 m.DedupeKey,
                 m.DeepLink,
                 m.Summary,
@@ -250,6 +251,7 @@ public static class GatewayRoutes
                 ThreadRootMessageId: null,
                 ReplyToMessageId: null,
                 MetadataJson: request.MetadataJson,
+                DeliveryRequestId: request.DeliveryRequestId,
                 DedupeKey: request.DedupeKey);
 
             var msg = await repository.PostMessageAsync(resolvedChannelId, postRequest, cancellationToken);
@@ -324,6 +326,7 @@ public static class GatewayRoutes
                 ThreadRootMessageId: null,
                 ReplyToMessageId: null,
                 MetadataJson: metadataJson,
+                DeliveryRequestId: null,
                 DedupeKey: null), cancellationToken);
 
             var gatewayMessageUrl = $"/api/gateway/messages/{msg.Id}";
@@ -413,6 +416,7 @@ public static class GatewayRoutes
                 ThreadRootMessageId: null,
                 ReplyToMessageId: null,
                 MetadataJson: metadataJson,
+                DeliveryRequestId: null,
                 DedupeKey: null), cancellationToken);
 
             return Results.Created($"/api/gateway/messages/{msg.Id}", new GatewayTestWakeDto(
@@ -442,6 +446,7 @@ public static class GatewayRoutes
         m.SourceKind,
         m.SourceId,
         m.SourceProjectId,
+        m.DeliveryRequestId,
         m.DedupeKey,
         m.DeepLink,
         m.Summary,

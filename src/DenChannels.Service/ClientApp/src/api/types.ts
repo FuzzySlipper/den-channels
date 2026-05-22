@@ -102,6 +102,7 @@ export interface ChannelMessage {
   threadRootMessageId: number | null;
   replyToMessageId: number | null;
   metadataJson: string | null;
+  deliveryRequestId: string | null;
   dedupeKey: string | null;
   createdAt: string;
   editedAt: string | null;
@@ -122,6 +123,11 @@ export interface ChannelActivityEvent {
   agentIdentity: string;
   deliveryRequestId: string | null;
   hermesSessionKey: string | null;
+  displayBlockId: string | null;
+  parentHermesSessionKey: string | null;
+  parentAgentIdentity: string | null;
+  workerRunId: string | null;
+  workerRole: string | null;
   taskId: number | null;
   threadId: number | null;
   anchorMessageId: number | null;

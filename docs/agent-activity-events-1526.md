@@ -3,6 +3,8 @@
 Den Channels persists agent/tool-call breadcrumbs as **activity events**, not as conversation messages.
 
 Planning anchor: Den task #1525 and document `agent-activity-event-model-planning-note`.
+Cross-profile display-block extension: Den docs `cross-profile-activity-display-blocks` and
+ADR `adr-activity-render-block-correlation`.
 
 ## Ownership
 
@@ -19,6 +21,11 @@ Activity records live in `channel_activity_events` with these durable associatio
 - `agent_identity`
 - optional `delivery_request_id`
 - optional `hermes_session_key`
+- optional `display_block_id` — render-block grouping key for the visible parent operation block;
+  v1 values are sourced from the parent orchestrator delivery id, but the field is deliberately
+  a render-block id, not a Gateway delivery foreign key
+- optional parent context: `parent_hermes_session_key`, `parent_agent_identity`
+- optional spawned-worker context: `worker_run_id`, `worker_role`
 - optional Den `task_id` / `thread_id`
 - optional `anchor_message_id`
 - `event_type`, `status`, `sequence`, `update_version`
@@ -55,6 +62,12 @@ Query channel activity events:
 GET /api/channels/{channelId}/activity-events?deliveryRequestId=...&hermesSessionKey=...&anchorMessageId=...&afterId=...&limit=...
 ```
 
+The list route also supports server-side display-block filters:
+
+```http
+GET /api/channels/{channelId}/activity-events?displayBlockId=...&workerRunId=...
+```
+
 Update an activity event:
 
 ```http
@@ -62,6 +75,19 @@ PATCH /api/channel-activity-events/{activityEventId}
 ```
 
 The append route is idempotent when `dedupeKey` is supplied: uniqueness is scoped to `(channel_id, dedupe_key)`, and a repeated append updates the existing activity row and increments `update_version`.
+
+Repeated appends preserve known display/parent/worker correlation fields unless the retry supplies a replacement value.
+
+## Message-to-delivery linkage
+
+Channel messages now expose first-class `delivery_request_id` / `deliveryRequestId` for Gateway-delivered
+messages. Activity renderers should match cross-profile child activity by exact key equality:
+
+```text
+activity.displayBlockId == message.deliveryRequestId
+```
+
+Older metadata/dedupe-key parsing remains a compatibility fallback for pre-migration rows only.
 
 ## Non-wake invariant
 

@@ -182,6 +182,8 @@ export interface ListChannelMessagesOpts {
 export interface ListChannelActivityEventsOpts {
   deliveryRequestId?: string;
   hermesSessionKey?: string;
+  displayBlockId?: string;
+  workerRunId?: string;
   anchorMessageId?: number;
   taskId?: number;
   afterId?: number;
@@ -201,6 +203,7 @@ export interface PostChannelMessageRequest {
   threadRootMessageId?: number | null;
   replyToMessageId?: number | null;
   metadataJson?: string | null;
+  deliveryRequestId?: string | null;
   dedupeKey?: string | null;
 }
 
@@ -239,6 +242,8 @@ export function listChannelActivityEvents(channelId: number, opts: ListChannelAc
   const q = buildQuery({
     deliveryRequestId: opts.deliveryRequestId,
     hermesSessionKey: opts.hermesSessionKey,
+    displayBlockId: opts.displayBlockId,
+    workerRunId: opts.workerRunId,
     anchorMessageId: opts.anchorMessageId,
     taskId: opts.taskId,
     afterId: opts.afterId,

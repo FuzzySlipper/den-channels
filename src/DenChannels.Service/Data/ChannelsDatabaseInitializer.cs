@@ -70,6 +70,11 @@ public sealed class ChannelsDatabaseInitializer
         CancellationToken cancellationToken)
     {
         await ExecuteNonQueryAsync(connection, ChannelActivityEventsSchemaSql, cancellationToken);
+        await EnsureColumnAsync(connection, "channel_activity_events", "display_block_id", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_activity_events", "parent_hermes_session_key", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_activity_events", "parent_agent_identity", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_activity_events", "worker_run_id", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_activity_events", "worker_role", "TEXT", cancellationToken);
     }
 
     private static async Task EnsureAgentCommonsSeedAsync(SqliteConnection connection,
@@ -118,6 +123,7 @@ public sealed class ChannelsDatabaseInitializer
         await EnsureColumnAsync(connection, "channel_messages", "thread_root_message_id", "INTEGER", cancellationToken);
         await EnsureColumnAsync(connection, "channel_messages", "reply_to_message_id", "INTEGER", cancellationToken);
         await EnsureColumnAsync(connection, "channel_messages", "metadata_json", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_messages", "delivery_request_id", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_messages", "dedupe_key", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_messages", "created_at", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_messages", "edited_at", "TEXT", cancellationToken);
@@ -247,6 +253,7 @@ public sealed class ChannelsDatabaseInitializer
             thread_root_message_id INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
             reply_to_message_id    INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
             metadata_json          TEXT,
+            delivery_request_id    TEXT,
             dedupe_key             TEXT,
             created_at             TEXT NOT NULL DEFAULT (datetime('now')),
             edited_at              TEXT,
@@ -258,6 +265,9 @@ public sealed class ChannelsDatabaseInitializer
         CREATE INDEX IF NOT EXISTS idx_channel_messages_source
             ON channel_messages(source_kind, source_id)
             WHERE source_kind IS NOT NULL AND source_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_messages_delivery_request
+            ON channel_messages(delivery_request_id)
+            WHERE delivery_request_id IS NOT NULL;
         CREATE UNIQUE INDEX IF NOT EXISTS ux_channel_messages_dedupe
             ON channel_messages(channel_id, dedupe_key)
             WHERE dedupe_key IS NOT NULL;
@@ -306,6 +316,11 @@ public sealed class ChannelsDatabaseInitializer
             agent_identity        TEXT NOT NULL,
             delivery_request_id   TEXT,
             hermes_session_key    TEXT,
+            display_block_id      TEXT,
+            parent_hermes_session_key TEXT,
+            parent_agent_identity TEXT,
+            worker_run_id         TEXT,
+            worker_role           TEXT,
             task_id               INTEGER,
             thread_id             INTEGER,
             anchor_message_id     INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
@@ -357,6 +372,11 @@ public sealed class ChannelsDatabaseInitializer
             agent_identity        TEXT NOT NULL,
             delivery_request_id   TEXT,
             hermes_session_key    TEXT,
+            display_block_id      TEXT,
+            parent_hermes_session_key TEXT,
+            parent_agent_identity TEXT,
+            worker_run_id         TEXT,
+            worker_role           TEXT,
             task_id               INTEGER,
             thread_id             INTEGER,
             anchor_message_id     INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
@@ -436,9 +456,18 @@ public sealed class ChannelsDatabaseInitializer
         CREATE INDEX IF NOT EXISTS idx_channel_messages_source
             ON channel_messages(source_kind, source_id)
             WHERE source_kind IS NOT NULL AND source_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_messages_delivery_request
+            ON channel_messages(delivery_request_id)
+            WHERE delivery_request_id IS NOT NULL;
         CREATE UNIQUE INDEX IF NOT EXISTS ux_channel_messages_dedupe
             ON channel_messages(channel_id, dedupe_key)
             WHERE dedupe_key IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_display_block
+            ON channel_activity_events(display_block_id, sequence, id)
+            WHERE display_block_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_worker_run
+            ON channel_activity_events(worker_run_id, sequence, id)
+            WHERE worker_run_id IS NOT NULL;
         """;
 
     private const string RebuildChannelMessagesWithGatewayDeliverySourceKindSql = """
@@ -461,6 +490,7 @@ public sealed class ChannelsDatabaseInitializer
             thread_root_message_id INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
             reply_to_message_id    INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
             metadata_json          TEXT,
+            delivery_request_id    TEXT,
             dedupe_key             TEXT,
             created_at             TEXT NOT NULL DEFAULT (datetime('now')),
             edited_at              TEXT,
@@ -470,7 +500,7 @@ public sealed class ChannelsDatabaseInitializer
         INSERT INTO channel_messages__new(
             id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id,
             source_project_id, summary, deep_link, thread_root_message_id, reply_to_message_id,
-            metadata_json, dedupe_key, created_at, edited_at, deleted_at)
+            metadata_json, delivery_request_id, dedupe_key, created_at, edited_at, deleted_at)
         SELECT
             id,
             channel_id,
@@ -486,6 +516,7 @@ public sealed class ChannelsDatabaseInitializer
             thread_root_message_id,
             reply_to_message_id,
             metadata_json,
+            delivery_request_id,
             dedupe_key,
             COALESCE(created_at, datetime('now')),
             edited_at,

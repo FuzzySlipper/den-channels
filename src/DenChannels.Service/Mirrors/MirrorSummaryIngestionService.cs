@@ -92,6 +92,7 @@ public sealed class MirrorSummaryIngestionService
                     ThreadRootMessageId: null,
                     ReplyToMessageId: null,
                     MetadataJson: BuildMetadataJson(mirrorEvent),
+                    DeliveryRequestId: null,
                     DedupeKey: dedupeKey), cancellationToken));
             }
             catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
