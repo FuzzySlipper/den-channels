@@ -209,6 +209,24 @@ public sealed class DenWebChannelFirstLayoutTests
         Assert.Contains(".member-activity-working", css);
     }
 
+
+    [Fact]
+    public void ChannelChatPanel_GroupsDeliveryProgressSeparatelyFromFinalReplies()
+    {
+        var component = ReadClientSource("components", "ChannelChatPanel.tsx");
+        var css = ReadClientSource("styles", "index.css");
+
+        Assert.Contains("DeliveryProgressCards", component);
+        Assert.Contains("Agent delivery progress", component);
+        Assert.Contains("Agent working", component);
+        Assert.Contains("Delivery finished", component);
+        Assert.Contains("final message #", component);
+        Assert.Contains("channel-chat-delivery-progress", component);
+        Assert.Contains("channel-chat-activity-terminal", component);
+        Assert.Contains(".channel-chat-delivery-progress", css);
+        Assert.Contains(".channel-chat-activity-stage", css);
+    }
+
     [Fact]
     public void ChannelChatPanel_TreatsGatewayDeliveryAsAgentReplyEvidenceDuringCutover()
     {
@@ -216,6 +234,36 @@ public sealed class DenWebChannelFirstLayoutTests
 
         Assert.Contains("candidate.sourceKind === 'gateway_delivery'", component);
         Assert.Contains("candidate.sourceKind === 'external_adapter_message'", component);
+    }
+
+
+    [Fact]
+    public void MessagesView_IsFirstClassWorkspaceTabAndSeparatesHumanMessagesFromActivity()
+    {
+        Assert.True(ClientFileExists("components", "MessagesInbox.tsx"));
+        var filterBar = ReadClientSource("components", "FilterBar.tsx");
+        var app = ReadClientSource("App.tsx");
+        var component = ReadClientSource("components", "MessagesInbox.tsx");
+        var css = ReadClientSource("styles", "index.css");
+        var types = ReadClientSource("api", "types.ts");
+        var messageIntents = ReadClientSource("messageIntents.ts");
+
+        Assert.Contains("'messages'", filterBar);
+        Assert.Contains("onViewModeChange('messages')", filterBar);
+        Assert.Contains("Messages", filterBar);
+        Assert.Contains("MessagesInbox", app);
+        Assert.Contains("viewMode === 'messages'", app);
+        Assert.Contains("getMessages", component);
+        Assert.Contains("User-directed", component);
+        Assert.Contains("message.intent === 'notification'", component);
+        Assert.Contains("| 'notification'", types);
+        Assert.Contains("notification: 'Notification'", messageIntents);
+        Assert.Contains("project-level and task-attached messages", component);
+        Assert.Contains("separate from channel chat and agent activity breadcrumbs", component);
+        Assert.Contains("messages-inbox-user-chip", component);
+        Assert.Contains("messages-inbox-urgency-high", css);
+        Assert.DoesNotContain("listAgentStream", component);
+        Assert.DoesNotContain("channel_activity_events", component);
     }
 
     [Fact]

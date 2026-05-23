@@ -350,10 +350,13 @@ public sealed partial class ChannelsRepository
             ON CONFLICT(channel_id, member_type, member_identity)
             DO UPDATE SET
                 membership_status = CASE
+                    WHEN channel_memberships.membership_status IN ('muted', 'left', 'banned') THEN channel_memberships.membership_status
                     WHEN channel_memberships.settings_json LIKE '%"systemManaged":true%' THEN 'active'
                     ELSE channel_memberships.membership_status
                 END,
                 wake_policy = CASE
+                    WHEN channel_memberships.wake_policy = 'never' THEN channel_memberships.wake_policy
+                    WHEN channel_memberships.membership_status IN ('muted', 'left', 'banned') THEN channel_memberships.wake_policy
                     WHEN channel_memberships.settings_json LIKE '%"systemManaged":true%' THEN 'mentions_only'
                     ELSE channel_memberships.wake_policy
                 END,
@@ -369,6 +372,28 @@ public sealed partial class ChannelsRepository
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         await reader.ReadAsync(cancellationToken);
         return ReadMembership(reader);
+    }
+
+    public async Task<AgentCommonsBrakeResultDto> ApplyAgentCommonsBrakeAsync(string membershipStatus = "muted", string wakePolicy = "never",
+        CancellationToken cancellationToken = default)
+    {
+        var commons = await EnsureAgentCommonsChannelAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE channel_memberships
+            SET membership_status = $membershipStatus,
+                wake_policy = $wakePolicy,
+                updated_at = datetime('now')
+            WHERE channel_id = $channelId
+              AND member_type = 'agent'
+              AND membership_status = 'active';
+            """;
+        command.Parameters.AddWithValue("$channelId", commons.Id);
+        command.Parameters.AddWithValue("$membershipStatus", membershipStatus);
+        command.Parameters.AddWithValue("$wakePolicy", wakePolicy);
+        var updated = await command.ExecuteNonQueryAsync(cancellationToken);
+        return new AgentCommonsBrakeResultDto("applied", commons.Id, updated, membershipStatus, wakePolicy);
     }
 
     public async Task<IReadOnlyList<ChannelReactionSummaryDto>> ListReactionSummariesAsync(long channelId,
@@ -441,13 +466,15 @@ public sealed partial class ChannelsRepository
         await using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO channel_activity_events(
-                channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key, task_id, thread_id,
-                anchor_message_id, event_type, status, sequence, title, summary, preview_json, metadata_json,
-                display_block_id, parent_hermes_session_key, parent_agent_identity, worker_run_id, worker_role, dedupe_key)
+                channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key,
+                display_block_id, parent_hermes_session_key, parent_agent_identity, worker_run_id, worker_role,
+                task_id, thread_id, anchor_message_id, event_type, status, delivery_stage, terminal, sequence,
+                title, summary, preview_json, metadata_json, dedupe_key, final_channel_message_id)
             VALUES (
-                $channelId, $projectId, $agentIdentity, $deliveryRequestId, $hermesSessionKey, $taskId, $threadId,
-                $anchorMessageId, $eventType, $status, $sequence, $title, $summary, $previewJson, $metadataJson,
-                $displayBlockId, $parentHermesSessionKey, $parentAgentIdentity, $workerRunId, $workerRole, $dedupeKey)
+                $channelId, $projectId, $agentIdentity, $deliveryRequestId, $hermesSessionKey,
+                $displayBlockId, $parentHermesSessionKey, $parentAgentIdentity, $workerRunId, $workerRole,
+                $taskId, $threadId, $anchorMessageId, $eventType, $status, $deliveryStage, $terminal, $sequence,
+                $title, $summary, $previewJson, $metadataJson, $dedupeKey, $finalChannelMessageId)
             ON CONFLICT(channel_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET
                 project_id = COALESCE(excluded.project_id, channel_activity_events.project_id),
                 agent_identity = excluded.agent_identity,
@@ -463,17 +490,21 @@ public sealed partial class ChannelsRepository
                 anchor_message_id = COALESCE(excluded.anchor_message_id, channel_activity_events.anchor_message_id),
                 event_type = excluded.event_type,
                 status = excluded.status,
+                delivery_stage = excluded.delivery_stage,
+                terminal = excluded.terminal,
                 sequence = excluded.sequence,
                 title = COALESCE(excluded.title, channel_activity_events.title),
                 summary = COALESCE(excluded.summary, channel_activity_events.summary),
                 preview_json = COALESCE(excluded.preview_json, channel_activity_events.preview_json),
                 metadata_json = COALESCE(excluded.metadata_json, channel_activity_events.metadata_json),
+                final_channel_message_id = COALESCE(excluded.final_channel_message_id, channel_activity_events.final_channel_message_id),
                 update_version = channel_activity_events.update_version + 1,
                 updated_at = datetime('now')
             RETURNING id, channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key,
                 display_block_id, parent_hermes_session_key, parent_agent_identity, worker_run_id, worker_role,
-                task_id, thread_id, anchor_message_id, event_type, status, sequence, update_version, title, summary,
-                preview_json, metadata_json, dedupe_key, created_at, updated_at;
+                task_id, thread_id, anchor_message_id, event_type, status, delivery_stage, terminal, sequence,
+                update_version, title, summary, preview_json, metadata_json, dedupe_key, final_channel_message_id,
+                created_at, updated_at;
             """;
         AddActivityParameters(command, channelId, request);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -489,24 +520,31 @@ public sealed partial class ChannelsRepository
         command.CommandText = """
             UPDATE channel_activity_events
             SET status = COALESCE($status, status),
+                delivery_stage = COALESCE($deliveryStage, delivery_stage),
+                terminal = COALESCE($terminal, terminal),
                 title = COALESCE($title, title),
                 summary = COALESCE($summary, summary),
                 preview_json = COALESCE($previewJson, preview_json),
                 metadata_json = COALESCE($metadataJson, metadata_json),
+                final_channel_message_id = COALESCE($finalChannelMessageId, final_channel_message_id),
                 update_version = update_version + 1,
                 updated_at = datetime('now')
             WHERE id = $id
             RETURNING id, channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key,
                 display_block_id, parent_hermes_session_key, parent_agent_identity, worker_run_id, worker_role,
-                task_id, thread_id, anchor_message_id, event_type, status, sequence, update_version, title, summary,
-                preview_json, metadata_json, dedupe_key, created_at, updated_at;
+                task_id, thread_id, anchor_message_id, event_type, status, delivery_stage, terminal, sequence,
+                update_version, title, summary, preview_json, metadata_json, dedupe_key, final_channel_message_id,
+                created_at, updated_at;
             """;
         command.Parameters.AddWithValue("$id", activityEventId);
         command.Parameters.AddWithValue("$status", (object?)request.Status ?? DBNull.Value);
+        command.Parameters.AddWithValue("$deliveryStage", NormalizeDeliveryStage(request.DeliveryStage));
+        command.Parameters.AddWithValue("$terminal", request.Terminal.HasValue ? request.Terminal.Value ? 1 : 0 : DBNull.Value);
         command.Parameters.AddWithValue("$title", NormalizeActivityText(request.Title, 200));
         command.Parameters.AddWithValue("$summary", NormalizeActivityText(request.Summary, 1000));
         command.Parameters.AddWithValue("$previewJson", NormalizeActivityText(request.PreviewJson, 4000));
         command.Parameters.AddWithValue("$metadataJson", NormalizeActivityText(request.MetadataJson, 4000));
+        command.Parameters.AddWithValue("$finalChannelMessageId", (object?)request.FinalChannelMessageId ?? DBNull.Value);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadActivityEvent(reader) : null;
     }
@@ -522,8 +560,9 @@ public sealed partial class ChannelsRepository
         command.CommandText = """
             SELECT id, channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key,
                 display_block_id, parent_hermes_session_key, parent_agent_identity, worker_run_id, worker_role,
-                task_id, thread_id, anchor_message_id, event_type, status, sequence, update_version, title, summary,
-                preview_json, metadata_json, dedupe_key, created_at, updated_at
+                task_id, thread_id, anchor_message_id, event_type, status, delivery_stage, terminal, sequence,
+                update_version, title, summary, preview_json, metadata_json, dedupe_key, final_channel_message_id,
+                created_at, updated_at
             FROM channel_activity_events
             WHERE channel_id = $channelId
               AND ($deliveryRequestId IS NULL OR delivery_request_id = $deliveryRequestId)
@@ -595,12 +634,23 @@ public sealed partial class ChannelsRepository
         command.Parameters.AddWithValue("$anchorMessageId", (object?)request.AnchorMessageId ?? DBNull.Value);
         command.Parameters.AddWithValue("$eventType", request.EventType);
         command.Parameters.AddWithValue("$status", request.Status ?? "completed");
+        var deliveryStage = NormalizeDeliveryStage(request.DeliveryStage);
+        command.Parameters.AddWithValue("$deliveryStage", deliveryStage is DBNull ? "progress" : deliveryStage);
+        command.Parameters.AddWithValue("$terminal", request.Terminal == true ? 1 : 0);
         command.Parameters.AddWithValue("$sequence", request.Sequence ?? 0);
         command.Parameters.AddWithValue("$title", NormalizeActivityText(request.Title, 200));
         command.Parameters.AddWithValue("$summary", NormalizeActivityText(request.Summary, 1000));
         command.Parameters.AddWithValue("$previewJson", NormalizeActivityText(request.PreviewJson, 4000));
         command.Parameters.AddWithValue("$metadataJson", NormalizeActivityText(request.MetadataJson, 4000));
         command.Parameters.AddWithValue("$dedupeKey", (object?)request.DedupeKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$finalChannelMessageId", (object?)request.FinalChannelMessageId ?? DBNull.Value);
+    }
+
+    private static object NormalizeDeliveryStage(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return DBNull.Value;
+        return NormalizeActivityText(value, 80);
     }
 
     private static string DefaultMessageKind(string senderType) => senderType == "agent" ? "agent_text" : "human_text";
@@ -707,15 +757,18 @@ public sealed partial class ChannelsRepository
         GetNullableInt64(reader, 13),
         reader.GetString(14),
         reader.GetString(15),
-        reader.GetInt64(16),
-        reader.GetInt64(17),
-        GetNullableString(reader, 18),
-        GetNullableString(reader, 19),
+        reader.GetString(16),
+        reader.GetBoolean(17),
+        reader.GetInt64(18),
+        reader.GetInt64(19),
         GetNullableString(reader, 20),
         GetNullableString(reader, 21),
         GetNullableString(reader, 22),
-        reader.GetString(23),
-        reader.GetString(24));
+        GetNullableString(reader, 23),
+        GetNullableString(reader, 24),
+        GetNullableInt64(reader, 25),
+        reader.GetString(26),
+        reader.GetString(27));
 
     private static string? GetNullableString(SqliteDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);

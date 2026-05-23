@@ -11,7 +11,8 @@ export type MessageIntent =
   | 'review_feedback'
   | 'review_approval'
   | 'task_ready'
-  | 'task_blocked';
+  | 'task_blocked'
+  | 'notification';
 export type AgentStreamKind = 'ops' | 'message';
 export type AgentStreamDeliveryMode = 'record_only' | 'notify' | 'wake';
 export type DispatchStatus = 'pending' | 'approved' | 'rejected' | 'completed' | 'expired';
@@ -104,6 +105,7 @@ export interface ChannelMessage {
   metadataJson: string | null;
   deliveryRequestId: string | null;
   dedupeKey: string | null;
+  finalChannelMessageId: number | null;
   createdAt: string;
   editedAt: string | null;
   deletedAt: string | null;
@@ -133,6 +135,8 @@ export interface ChannelActivityEvent {
   anchorMessageId: number | null;
   eventType: string;
   status: string;
+  deliveryStage: string;
+  terminal: boolean;
   sequence: number;
   updateVersion: number;
   title: string | null;
@@ -140,6 +144,7 @@ export interface ChannelActivityEvent {
   previewJson: string | null;
   metadataJson: string | null;
   dedupeKey: string | null;
+  finalChannelMessageId: number | null;
   createdAt: string;
   updatedAt: string;
 }

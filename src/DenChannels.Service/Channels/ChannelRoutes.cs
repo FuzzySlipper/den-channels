@@ -53,6 +53,25 @@ public static class ChannelRoutes
             return Results.Ok(membership);
         });
 
+        api.MapPost("/agent-commons/brake", async (ChannelsRepository repository, AgentCommonsBrakeRequest request,
+            CancellationToken cancellationToken) =>
+        {
+            var membershipStatus = string.IsNullOrWhiteSpace(request.MembershipStatus) ? "muted" : request.MembershipStatus.Trim();
+            var wakePolicy = string.IsNullOrWhiteSpace(request.WakePolicy) ? "never" : request.WakePolicy.Trim();
+            if (membershipStatus is not ("active" or "muted" or "left" or "banned"))
+            {
+                return Results.BadRequest(new { code = "invalid_membership_status", message = "membershipStatus must be active, muted, left, or banned." });
+            }
+
+            if (wakePolicy is not ("never" or "mentions_only" or "direct_questions_only" or "substantive_digest" or "all_human_messages" or "all_messages_except_self"))
+            {
+                return Results.BadRequest(new { code = "invalid_wake_policy", message = "wakePolicy is not valid." });
+            }
+
+            var result = await repository.ApplyAgentCommonsBrakeAsync(membershipStatus, wakePolicy, cancellationToken);
+            return Results.Ok(result);
+        });
+
         api.MapPost("/channels/{channelId:long}/messages", async (ChannelsRepository repository, long channelId,
             PostChannelMessageRequest request, CancellationToken cancellationToken) =>
         {

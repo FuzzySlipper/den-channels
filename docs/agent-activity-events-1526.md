@@ -28,9 +28,10 @@ Activity records live in `channel_activity_events` with these durable associatio
 - optional spawned-worker context: `worker_run_id`, `worker_role`
 - optional Den `task_id` / `thread_id`
 - optional `anchor_message_id`
-- `event_type`, `status`, `sequence`, `update_version`
+- `event_type`, `status`, `delivery_stage`, `terminal`, `sequence`, `update_version`
 - bounded `title`, `summary`, `preview_json`, `metadata_json`
 - optional per-channel `dedupe_key`
+- optional `final_channel_message_id` linking terminal progress to the real visible final reply
 
 Supported initial event types:
 
@@ -55,6 +56,15 @@ Append/upsert an activity event:
 ```http
 POST /api/channels/{channelId}/activity-events
 ```
+
+Gateway-facing non-waking append/upsert seam (resolves `channelId` or a project default channel):
+
+```http
+POST /api/gateway/channel-activity-events?channelId=...
+POST /api/gateway/channel-activity-events?projectId=...
+```
+
+Use `terminal=false` and a non-final `deliveryStage` such as `assistant_interim`, `tool`, `status`, or `compression` for pre-tool text/status/progress. Reserve `terminal=true` for explicit terminal outcome breadcrumbs; the actual human-visible assistant answer remains a normal `channel_messages` row with the `gateway-delivery:<delivery_id>:final` dedupe key.
 
 Query channel activity events:
 

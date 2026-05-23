@@ -1512,6 +1512,7 @@ button.list-item {
 }
 
 .channel-chat-activity-status,
+.channel-chat-activity-stage,
 .channel-chat-activity-task,
 .channel-chat-activity-worker-chip {
   border: 1px solid var(--border);
@@ -1543,38 +1544,57 @@ button.list-item {
   color: var(--red);
 }
 
-.channel-chat-delivery-progress-list {
+.channel-chat-delivery-progress-list,
+.channel-chat-delivery-progress-cards {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin: 4px 0 8px;
+  margin: 4px 0 10px;
 }
 
-.channel-chat-delivery-progress-card {
-  border: 1px dashed rgba(125, 207, 255, 0.38);
-  border-radius: 8px;
-  padding: 8px;
-  background: rgba(125, 207, 255, 0.06);
+.channel-chat-delivery-progress-card,
+.channel-chat-delivery-progress {
+  border: 1px solid rgba(187, 154, 247, 0.32);
+  border-radius: 10px;
+  background: rgba(187, 154, 247, 0.08);
+  padding: 6px 8px;
   white-space: normal;
 }
 
-.channel-chat-delivery-progress-heading {
+.channel-chat-delivery-progress-terminal {
+  border-color: rgba(158, 206, 106, 0.32);
+  background: rgba(158, 206, 106, 0.06);
+}
+
+.channel-chat-delivery-progress-heading,
+.channel-chat-delivery-progress summary {
   display: flex;
-  justify-content: space-between;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
   color: var(--text-muted);
-  font-size: 11px;
-  margin-bottom: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  white-space: normal;
 }
 
 .channel-chat-delivery-progress-heading strong {
   color: var(--cyan);
 }
 
+.channel-chat-delivery-progress summary strong {
+  color: var(--purple);
+}
+
 .channel-chat-delivery-progress-heading span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.channel-chat-activity-terminal .channel-chat-activity-stage {
+  color: var(--green);
+  border-color: rgba(158, 206, 106, 0.45);
 }
 
 .channel-chat-delivery-status {
@@ -1775,7 +1795,7 @@ button.list-item {
 
 .focused-session-toolbar {
   display: grid;
-  grid-template-columns: minmax(180px, 0.35fr) auto minmax(280px, 1fr) auto;
+  grid-template-columns: minmax(180px, 0.35fr) auto minmax(280px, 1fr) auto auto;
   gap: 8px;
   align-items: center;
   padding: 8px 10px;
@@ -3129,4 +3149,146 @@ button.list-item {
   font-size: 11px;
   white-space: pre-wrap;
   overflow-x: auto;
+}
+
+/* First-class Den messages inbox */
+
+.messages-inbox {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.messages-inbox-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.messages-inbox-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.messages-inbox-toolbar input,
+.messages-inbox-toolbar select {
+  min-width: 130px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 7px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.messages-inbox-note,
+.messages-inbox-state {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.messages-inbox-error {
+  color: var(--red);
+}
+
+.messages-inbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+}
+
+.messages-inbox-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.messages-inbox-row-user-directed {
+  border-color: rgba(187, 154, 247, 0.45);
+  background: rgba(187, 154, 247, 0.07);
+}
+
+.messages-inbox-row-high {
+  border-color: rgba(247, 118, 142, 0.55);
+}
+
+.messages-inbox-main {
+  display: grid;
+  grid-template-columns: 76px minmax(100px, 180px) minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.messages-inbox-main:hover .messages-inbox-preview,
+.messages-inbox-main:focus .messages-inbox-preview {
+  color: var(--accent);
+}
+
+.messages-inbox-sender {
+  color: var(--blue);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messages-inbox-preview {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.messages-inbox-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.messages-inbox-user-chip,
+.messages-inbox-urgency,
+.messages-inbox-task-link {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+.messages-inbox-user-chip {
+  color: var(--purple);
+  border-color: rgba(187, 154, 247, 0.45);
+}
+
+.messages-inbox-urgency-high {
+  color: var(--red);
+  border-color: rgba(247, 118, 142, 0.55);
+}
+
+.messages-inbox-task-link {
+  color: var(--accent);
+  background: transparent;
+  cursor: pointer;
 }

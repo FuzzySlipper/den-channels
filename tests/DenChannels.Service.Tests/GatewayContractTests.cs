@@ -650,7 +650,8 @@ public sealed class GatewayContractTests : IDisposable
         Assert.Equal("hermes-reviewer", payload.MemberIdentity);
         Assert.Equal("direct_questions_only", payload.WakePolicy);
         Assert.Equal(channel.Id, payload.ChannelId);
-        Assert.StartsWith($"direct-agent-message:{channel.Id}:", payload.RequestId);
+        Assert.StartsWith($"direct-agent-message:{channel.Id}:hermes-reviewer:", payload.RequestId);
+        Assert.DoesNotContain($"direct-agent-message:{channel.Id}:1:", payload.RequestId);
         Assert.Equal($"/api/gateway/messages/{payload.MessageId}", payload.GatewayMessageUrl);
         Assert.Contains($"/api/gateway/events?channelId={channel.Id}", payload.GatewayEventsUrl);
         Assert.Contains("claim/completion/suppression", payload.EvidenceSummary);

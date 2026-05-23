@@ -46,11 +46,14 @@ export interface ActivityDisplayModel {
   parentAgentIdentity: string | null;
   parentHermesSessionKey: string | null;
   status: string;
+  deliveryStage: string;
+  terminal: boolean;
   title: string;
   preview: string | null;
   count: number | null;
   taskId: number | null;
   anchorMessageId: number | null;
+  finalChannelMessageId: number | null;
   createdAt: string;
 }
 
@@ -74,11 +77,14 @@ export function toActivityDisplayModel(event: ChannelActivityEvent): ActivityDis
     parentAgentIdentity: event.parentAgentIdentity,
     parentHermesSessionKey: event.parentHermesSessionKey,
     status: event.status || event.eventType,
+    deliveryStage: event.deliveryStage || 'progress',
+    terminal: Boolean(event.terminal),
     title,
     preview: summarizePreview(preview, event.summary),
     count,
     taskId: event.taskId,
     anchorMessageId: event.anchorMessageId,
+    finalChannelMessageId: event.finalChannelMessageId,
     createdAt: event.createdAt,
   };
 }
@@ -155,21 +161,35 @@ export function activityMatchesChannelMessage(event: ChannelActivityEvent, messa
   return event.deliveryRequestId === messageDeliveryRequestId || event.displayBlockId === messageDeliveryRequestId;
 }
 
-export function channelMessageDeliveryRequestId(message: ChannelMessage): string | null {
+export function channelMessageDeliveryRequestId(
+  message: Pick<ChannelMessage, 'metadataJson' | 'sourceKind' | 'sourceId' | 'dedupeKey'> & Partial<Pick<ChannelMessage, 'deliveryRequestId'>>,
+): string | null {
   const firstClass = firstString(message.deliveryRequestId);
   if (firstClass) return firstClass;
 
   const metadata = parseJsonObject(message.metadataJson);
-  const metadataDeliveryRequestId = firstString(
+  const metadataDeliveryRequestId = firstIdentifier(
     metadata.deliveryRequestId,
     metadata.delivery_request_id,
     metadata.channelMessageDeliveryRequestId,
     metadata.channel_message_delivery_request_id,
+    metadata.deliveryId,
+    metadata.delivery_id,
+    metadata.requestId,
+    metadata.request_id,
   );
   if (metadataDeliveryRequestId) return metadataDeliveryRequestId;
 
   const dedupeKey = firstString(message.dedupeKey);
-  return dedupeKey ? legacyDeliveryRequestIdFromDedupeKey(dedupeKey) : null;
+  const dedupeDeliveryRequestId = dedupeKey ? legacyDeliveryRequestIdFromDedupeKey(dedupeKey) : null;
+  if (dedupeDeliveryRequestId) return dedupeDeliveryRequestId;
+
+  if (message.sourceKind === 'gateway_delivery' || message.sourceKind === 'external_adapter_message') {
+    const sourceId = firstString(message.sourceId);
+    if (sourceId) return sourceId;
+  }
+
+  return null;
 }
 
 export interface MentionSuggestion {
@@ -242,6 +262,14 @@ function firstString(...values: unknown[]): string | null {
   return null;
 }
 
+function firstIdentifier(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return null;
+}
+
 function firstNumber(...values: unknown[]): number | null {
   for (const value of values) {
     if (typeof value === 'number' && Number.isFinite(value) && value > 1) return value;
@@ -288,7 +316,7 @@ function humanizeEventType(value: string): string {
 
 function activityFinalChannelMessageId(event: ChannelActivityEvent): number | null {
   const metadata = parseJsonObject(event.metadataJson);
-  return firstPositiveInteger(metadata.finalChannelMessageId, metadata.final_channel_message_id);
+  return firstPositiveInteger(event.finalChannelMessageId, metadata.finalChannelMessageId, metadata.final_channel_message_id);
 }
 
 function legacyDeliveryRequestIdFromDedupeKey(dedupeKey: string): string | null {

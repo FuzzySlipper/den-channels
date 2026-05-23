@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, FormEvent, KeyboardEvent } from 'react';
+import type { ChangeEvent, FormEvent, KeyboardEvent, UIEvent } from 'react';
 import type { Channel, ChannelActivityEvent, ChannelMessage, ChannelReactionSummary, GatewayDirectAgentMessage, GatewayMember, GatewayMemberships, GatewayTestWake } from '../api/types';
 import {
   ensureAgentCommonsChannel,
@@ -39,11 +39,13 @@ const MEMBERSHIP_STATUS_OPTIONS = [
 ];
 
 const QUICK_REACTIONS = ['✅', '👀', '👍', '🫡', '❓'];
+const SCROLL_BOTTOM_PIN_THRESHOLD_PX = 48;
 
 interface Props {
   projectId: string | null;
   spaceName?: string | null;
   panelSize: ChannelChatPanelSize;
+  scrollResetKey?: string | null;
   onPanelSizeChange: (size: ChannelChatPanelSize) => void;
 }
 
@@ -67,6 +69,10 @@ function channelLabel(channel: Channel | null, projectId: string | null): string
   if (channel) return `#${channel.slug}`;
   if (projectId) return `#project-${projectId}`;
   return '#agent-commons';
+}
+
+function isScrollElementPinnedToBottom(element: HTMLElement): boolean {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= SCROLL_BOTTOM_PIN_THRESHOLD_PX;
 }
 
 async function resolveAgentCommonsChannel(): Promise<Channel> {
@@ -254,14 +260,16 @@ function ActivityTimeline({ events, compact = false }: { events: ChannelActivity
         </div>
       )}
       {displayEvents.map(event => (
-        <div key={event.id} className={`channel-chat-activity-row channel-chat-activity-${activityStatusClass(event.status)}`}>
+        <div key={event.id} className={`channel-chat-activity-row channel-chat-activity-${activityStatusClass(event.status)} ${event.terminal ? 'channel-chat-activity-terminal' : ''}`}>
           <span className="message-time">{formatTimeAgo(event.createdAt)}</span>
           <span className="channel-chat-activity-agent">{event.agentIdentity}</span>
           <span className="channel-chat-activity-main">
             {activityWorkerChip(event)}
             <strong>{event.title}{event.count ? ` ×${event.count}` : ''}</strong>
             <span className="channel-chat-activity-status">{event.status}</span>
+            <span className="channel-chat-activity-stage">{event.terminal ? 'terminal' : event.deliveryStage}</span>
             {event.taskId && <span className="channel-chat-activity-task">task #{event.taskId}</span>}
+            {event.finalChannelMessageId && <span className="channel-chat-activity-task">final message #{event.finalChannelMessageId}</span>}
             {event.preview && <span className="channel-chat-activity-preview">{event.preview}</span>}
           </span>
         </div>
@@ -273,16 +281,25 @@ function ActivityTimeline({ events, compact = false }: { events: ChannelActivity
 function DeliveryProgressCards({ blocks }: { blocks: Array<{ displayBlockId: string; events: ChannelActivityEvent[] }> }) {
   if (blocks.length === 0) return null;
   return (
-    <div className="channel-chat-delivery-progress-list" aria-label="In-progress delivery activity">
-      {blocks.map(block => (
-        <div key={block.displayBlockId} className="channel-chat-delivery-progress-card">
-          <div className="channel-chat-delivery-progress-heading">
-            <strong>Delivery in progress</strong>
-            <span>{block.displayBlockId}</span>
-          </div>
-          <ActivityTimeline events={block.events} compact />
-        </div>
-      ))}
+    <div className="channel-chat-delivery-progress-list" aria-label="Agent delivery progress">
+      {blocks.map(block => {
+        const group = sortActivityEvents(block.events);
+        const terminal = group.some(event => event.terminal);
+        const latest = group[group.length - 1];
+        const model = latest ? toActivityDisplayModel(latest) : null;
+        return (
+          <details key={block.displayBlockId} className={`channel-chat-delivery-progress ${terminal ? 'channel-chat-delivery-progress-terminal' : ''}`} open={!terminal}>
+            <summary>
+              <span>{terminal ? 'Delivery finished' : 'Agent working'}</span>
+              {latest && <strong>{latest.agentIdentity}</strong>}
+              <span>{block.displayBlockId}</span>
+              <span>{group.length} event{group.length === 1 ? '' : 's'}</span>
+              {model?.finalChannelMessageId && <span>final message #{model.finalChannelMessageId}</span>}
+            </summary>
+            <ActivityTimeline events={group} compact />
+          </details>
+        );
+      })}
     </div>
   );
 }
@@ -313,14 +330,18 @@ function activityStatusClass(status: string): string {
   return status.toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
 }
 
-export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeChange }: Props) {
+export function ChannelChatPanel({ projectId, spaceName, panelSize, scrollResetKey, onPanelSizeChange }: Props) {
   const [draft, setDraft] = useState('');
   const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
   const [senderIdentity, setSenderIdentity] = useState(readStoredSenderIdentity);
   const [selectedChannelId, setSelectedChannelId] = useState<number | null>(null);
   const [sendMode, setSendMode] = useState<ChannelSendMode>('channel');
   const [autoScroll, setAutoScroll] = useState(true);
+  const scrollbackRef = useRef<HTMLDivElement | null>(null);
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
+  const isScrollPinnedToBottomRef = useRef(true);
+  const previousAutoScrollKeyRef = useRef<string | null>(null);
+  const pendingAutoScrollSnapKeyRef = useRef<string | null>(null);
   const previousProjectIdRef = useRef<string | null>(projectId);
   const pendingProjectDefaultSelectionRef = useRef<string | null>(null);
   const [targetMemberIdentity, setTargetMemberIdentity] = useState('');
@@ -525,6 +546,10 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
     persistSenderIdentity(value);
   }, []);
 
+  const handleScrollbackScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
+    isScrollPinnedToBottomRef.current = isScrollElementPinnedToBottom(event.currentTarget);
+  }, []);
+
   const insertMention = useCallback((identity: string) => {
     if (!mentionQuery) return;
     setDraft(current => insertMentionToken(current, mentionQuery, identity));
@@ -690,9 +715,28 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
           : `Message ${channelLabel(activeChannel, projectId)}`;
 
   useEffect(() => {
+    const autoScrollKey = `${scrollResetKey ?? projectId ?? 'aggregate'}:${activeChannel?.id ?? 'none'}`;
+    if (previousAutoScrollKeyRef.current !== autoScrollKey) {
+      previousAutoScrollKeyRef.current = autoScrollKey;
+      pendingAutoScrollSnapKeyRef.current = autoScrollKey;
+      isScrollPinnedToBottomRef.current = true;
+    }
+
     if (!autoScroll) return;
-    scrollAnchorRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
-  }, [autoScroll, sortedMessages.length, activityEvents?.length]);
+
+    const shouldSnapToBottom = activeChannel !== null && pendingAutoScrollSnapKeyRef.current === autoScrollKey;
+    if (!shouldSnapToBottom && !isScrollPinnedToBottomRef.current) return;
+
+    scrollAnchorRef.current?.scrollIntoView({
+      block: 'end',
+      behavior: shouldSnapToBottom ? 'auto' : 'smooth',
+    });
+    isScrollPinnedToBottomRef.current = true;
+
+    if (shouldSnapToBottom && !messagesLoading && !activityLoading) {
+      pendingAutoScrollSnapKeyRef.current = null;
+    }
+  }, [activeChannel, activeChannel?.id, activityEvents?.length, activityLoading, autoScroll, messagesLoading, projectId, scrollResetKey, sortedMessages.length]);
 
   return (
     <section className={`panel channel-chat-panel channel-chat-panel-size-${panelSize}`} aria-label="Project channel chat">
@@ -765,7 +809,7 @@ export function ChannelChatPanel({ projectId, spaceName, panelSize, onPanelSizeC
       </div>
 
       <div className="channel-chat-body-region">
-        <div className="channel-chat-scrollback" aria-live="polite">
+        <div className="channel-chat-scrollback" aria-live="polite" ref={scrollbackRef} onScroll={handleScrollbackScroll}>
           {disabledReason ? (
             <div className="channel-chat-state channel-chat-state-muted">{disabledReason}</div>
           ) : (messagesLoading || activityLoading) && sortedMessages.length === 0 && unanchoredActivityEvents.length === 0 && deliveryProgressBlocks.length === 0 ? (

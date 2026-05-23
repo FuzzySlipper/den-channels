@@ -281,6 +281,51 @@ public sealed class ChannelApiTests : IDisposable
     }
 
     [Fact]
+    public async Task AgentCommons_AutoEnsureDoesNotOverrideMutedNeverBrake()
+    {
+        using var client = _factory.CreateClient();
+        var commons = await PutJsonAsync<ChannelPayload>(client, "/api/agent-commons", new { });
+        await PutJsonAsync<MembershipPayload>(client, $"/api/agent-commons/memberships/den-mcp-runner", new { });
+        var braked = await PutJsonAsync<MembershipPayload>(client, $"/api/channels/{commons.Id}/memberships", new
+        {
+            memberType = "agent",
+            memberIdentity = "den-mcp-runner",
+            membershipStatus = "muted",
+            wakePolicy = "never"
+        });
+        Assert.Equal("muted", braked.MembershipStatus);
+        Assert.Equal("never", braked.WakePolicy);
+
+        var ensuredAgain = await PutJsonAsync<MembershipPayload>(client, "/api/agent-commons/memberships/den-mcp-runner", new { });
+
+        Assert.Equal("muted", ensuredAgain.MembershipStatus);
+        Assert.Equal("never", ensuredAgain.WakePolicy);
+    }
+
+    [Fact]
+    public async Task AgentCommons_BrakeMutesAllActiveAgentMemberships()
+    {
+        using var client = _factory.CreateClient();
+        await PutJsonAsync<MembershipPayload>(client, "/api/agent-commons/memberships/den-mcp-runner", new { });
+        await PutJsonAsync<MembershipPayload>(client, "/api/agent-commons/memberships/reviewer", new { });
+
+        var brake = await PostJsonAsync<AgentCommonsBrakePayload>(client, "/api/agent-commons/brake", new
+        {
+            membershipStatus = "muted",
+            wakePolicy = "never",
+            requestedBy = "test"
+        });
+
+        Assert.Equal("applied", brake.Status);
+        Assert.True(brake.UpdatedCount >= 2);
+        var memberships = await client.GetFromJsonAsync<GatewayMembershipsPayload>(
+            $"/api/gateway/memberships?channelId={brake.ChannelId}");
+        Assert.NotNull(memberships);
+        Assert.Contains(memberships.Members, member => member.MemberIdentity == "den-mcp-runner" && member.MembershipStatus == "muted" && member.WakePolicy == "never");
+        Assert.Contains(memberships.Members, member => member.MemberIdentity == "reviewer" && member.MembershipStatus == "muted" && member.WakePolicy == "never");
+    }
+
+    [Fact]
     public async Task ActivityEventEndpoints_AppendUpdateQueryWithoutCreatingMessages()
     {
         using var client = _factory.CreateClient();
@@ -315,6 +360,8 @@ public sealed class ChannelApiTests : IDisposable
             anchorMessageId = parentMessage.Id,
             eventType = "tool_call_started",
             status = "started",
+            deliveryStage = "tool",
+            terminal = false,
             sequence = 1,
             title = "terminal",
             summary = "dotnet test",
@@ -329,6 +376,8 @@ public sealed class ChannelApiTests : IDisposable
         Assert.Equal("den-mcp-runner", coderStarted.ParentAgentIdentity);
         Assert.Equal("coder-1567", coderStarted.WorkerRunId);
         Assert.Equal("coder", coderStarted.WorkerRole);
+        Assert.Equal("tool", coderStarted.DeliveryStage);
+        Assert.False(coderStarted.Terminal);
         Assert.DoesNotContain("***", coderStarted.PreviewJson);
         Assert.DoesNotContain("very-secret-token", coderStarted.MetadataJson);
         Assert.Contains("[REDACTED]", coderStarted.PreviewJson);
@@ -341,6 +390,8 @@ public sealed class ChannelApiTests : IDisposable
             hermesSessionKey = "den-channels:1567:coder",
             eventType = "tool_call_completed",
             status = "completed",
+            deliveryStage = "tool",
+            terminal = false,
             sequence = 1,
             summary = "dotnet test passed",
             dedupeKey = "activity:coder-1567:1"
@@ -382,6 +433,8 @@ public sealed class ChannelApiTests : IDisposable
             taskId = 1529,
             eventType = "tool_call_started",
             status = "started",
+            deliveryStage = "tool",
+            terminal = false,
             sequence = 2,
             summary = "other task should not leak into task filter",
             dedupeKey = "activity:delivery-1529:1"
@@ -396,9 +449,13 @@ public sealed class ChannelApiTests : IDisposable
         var updated = await PatchJsonAsync<ActivityEventPayload>(client, $"/api/channel-activity-events/{coderStarted.Id}", new
         {
             status = "failed",
+            deliveryStage = "failure",
+            terminal = true,
             summary = "dotnet test failed before fix"
         });
         Assert.Equal("failed", updated.Status);
+        Assert.Equal("failure", updated.DeliveryStage);
+        Assert.True(updated.Terminal);
         Assert.Contains("failed", updated.Summary);
 
         var byDelivery = await client.GetFromJsonAsync<List<ActivityEventPayload>>(
@@ -431,6 +488,41 @@ public sealed class ChannelApiTests : IDisposable
         var onlyMessage = Assert.Single(messages);
         Assert.Equal(parentMessage.Id, onlyMessage.Id);
         Assert.Equal("parent-1567", onlyMessage.DeliveryRequestId);
+    }
+
+
+    [Fact]
+    public async Task GatewayActivityEndpoint_RecordsNonWakingProgressWithoutCreatingMessages()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+
+        var recorded = await PostJsonAsync<GatewayActivityResultPayload>(client,
+            $"/api/gateway/channel-activity-events?channelId={channel.Id}", new
+            {
+                projectId = "den-channels",
+                agentIdentity = "sysadmin",
+                deliveryRequestId = "delivery-1546",
+                eventType = "lifecycle_status",
+                status = "interim",
+                deliveryStage = "assistant_interim",
+                terminal = false,
+                sequence = 1,
+                summary = "I will inspect task context before the final answer",
+                dedupeKey = "activity:delivery-1546:interim:1"
+            });
+
+        Assert.Equal("recorded", recorded.Status);
+        Assert.Equal("assistant_interim", recorded.ActivityEvent.DeliveryStage);
+        Assert.False(recorded.ActivityEvent.Terminal);
+        Assert.Equal("delivery-1546", recorded.ActivityEvent.DeliveryRequestId);
+
+        var messages = await client.GetFromJsonAsync<List<MessagePayload>>($"/api/channels/{channel.Id}/messages?afterId=0&limit=10");
+        Assert.NotNull(messages);
+        Assert.Empty(messages);
     }
 
     public void Dispose()
@@ -478,6 +570,8 @@ public sealed class ChannelApiTests : IDisposable
     private sealed record MembershipPayload(long Id, long ChannelId, string MemberType, string MemberIdentity,
         string MembershipStatus, string WakePolicy);
 
+    private sealed record AgentCommonsBrakePayload(string Status, long ChannelId, int UpdatedCount, string MembershipStatus, string WakePolicy);
+
     private sealed record GatewayMembershipsPayload(
         long ChannelId,
         string ChannelSlug,
@@ -503,8 +597,11 @@ public sealed class ChannelApiTests : IDisposable
     private sealed record ReactionSummaryPayload(long ChannelMessageId, string ReactionKey, int Count,
         string[] Reactors);
 
+    private sealed record GatewayActivityResultPayload(string Status, ActivityEventPayload ActivityEvent);
+
     private sealed record ActivityEventPayload(long Id, long ChannelId, string? ProjectId, string AgentIdentity,
         string? DeliveryRequestId, string? HermesSessionKey, string? DisplayBlockId, string? ParentHermesSessionKey,
         string? ParentAgentIdentity, string? WorkerRunId, string? WorkerRole, long? AnchorMessageId, string EventType, string Status,
-        long Sequence, long UpdateVersion, string? Summary, string? PreviewJson, string? MetadataJson);
+        string DeliveryStage, bool Terminal, long Sequence, long UpdateVersion, string? Summary, string? PreviewJson,
+        string? MetadataJson, long? FinalChannelMessageId);
 }

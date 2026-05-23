@@ -30,6 +30,8 @@ function activity(overrides: Partial<ChannelActivityEvent>): ChannelActivityEven
     anchorMessageId: null,
     eventType: 'tool_call_completed',
     status: 'completed',
+    deliveryStage: 'progress',
+    terminal: false,
     sequence: 1,
     updateVersion: 1,
     title: null,
@@ -37,36 +39,40 @@ function activity(overrides: Partial<ChannelActivityEvent>): ChannelActivityEven
     previewJson: null,
     metadataJson: null,
     dedupeKey: null,
+    finalChannelMessageId: null,
     createdAt: '2026-05-19T00:00:00Z',
     updatedAt: '2026-05-19T00:00:00Z',
     ...overrides,
   };
 }
 
-function message(overrides: Partial<ChannelMessage>): ChannelMessage {
-  return {
-    id: 100,
+function channelMessage(overrides: Partial<ChannelMessage>): ChannelMessage {
+  const base: ChannelMessage = {
+    id: 42,
     channelId: 10,
     senderType: 'agent',
     senderIdentity: 'den-mcp-runner',
-    body: 'done',
+    body: 'final answer',
     messageKind: 'agent_text',
     sourceKind: 'gateway_delivery',
-    sourceId: 'dr-parent',
+    sourceId: '228',
     sourceProjectId: 'den-channels',
     summary: null,
     deepLink: null,
     threadRootMessageId: null,
     replyToMessageId: null,
     metadataJson: null,
-    deliveryRequestId: 'dr-parent',
-    dedupeKey: null,
-    createdAt: '2026-05-19T00:01:00Z',
+    deliveryRequestId: null,
+    dedupeKey: 'gateway-delivery:228:final',
+    finalChannelMessageId: null,
+    createdAt: '2026-05-19T00:00:00Z',
     editedAt: null,
     deletedAt: null,
-    ...overrides,
   };
+  return { ...base, ...overrides };
 }
+
+const message = channelMessage;
 
 describe('parseMessageBodySegments', () => {
   it('turns details/summary artifacts into disclosure segments without raw tag clutter', () => {
@@ -77,6 +83,25 @@ describe('parseMessageBodySegments', () => {
       { type: 'details', summary: 'What I would propose', body: '1. Take #1308\n2. Store findings' },
       { type: 'text', text: '\nAfter' },
     ]);
+  });
+});
+
+describe('activity/message delivery matching', () => {
+  it('resolves delivery ids from final gateway messages without terminalizing anything in the UI', () => {
+    expect(channelMessageDeliveryRequestId(channelMessage({}))).toBe('228');
+    expect(channelMessageDeliveryRequestId(channelMessage({
+      sourceId: null,
+      dedupeKey: null,
+      metadataJson: JSON.stringify({ delivery_request_id: 229 }),
+    }))).toBe('229');
+  });
+
+  it('matches unanchored activity to the visible final message by delivery id', () => {
+    const message = channelMessage({ id: 398, sourceId: '228', dedupeKey: 'gateway-delivery:228:final' });
+
+    expect(activityMatchesChannelMessage(activity({ deliveryRequestId: '228', anchorMessageId: null }), message)).toBe(true);
+    expect(activityMatchesChannelMessage(activity({ deliveryRequestId: '999', finalChannelMessageId: 398 }), message)).toBe(true);
+    expect(activityMatchesChannelMessage(activity({ deliveryRequestId: '999', anchorMessageId: null }), message)).toBe(false);
   });
 });
 
@@ -93,6 +118,21 @@ describe('toActivityDisplayModel', () => {
     expect(model.count).toBe(2);
     expect(model.preview).toBe('Loaded den-mcp reference');
     expect(model.taskId).toBe(1528);
+    expect(model.deliveryStage).toBe('progress');
+    expect(model.terminal).toBe(false);
+  });
+
+  it('surfaces terminal delivery metadata separately from progress rows', () => {
+    const model = toActivityDisplayModel(activity({
+      status: 'completed',
+      deliveryStage: 'final',
+      terminal: true,
+      finalChannelMessageId: 4242,
+    }));
+
+    expect(model.deliveryStage).toBe('final');
+    expect(model.terminal).toBe(true);
+    expect(model.finalChannelMessageId).toBe(4242);
   });
 
   it('truncates long terminal previews for compact timeline rows', () => {

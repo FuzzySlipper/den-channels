@@ -6,8 +6,9 @@ export const MESSAGE_INTENT_OPTIONS: Array<{ value: MessageIntent; label: string
   { value: 'review_approval', label: 'Review Approval' },
   { value: 'review_request', label: 'Review Request' },
   { value: 'question', label: 'Question' },
-  { value: 'task_blocked', label: 'Task Blocked' },
   { value: 'task_ready', label: 'Task Ready' },
+  { value: 'task_blocked', label: 'Task Blocked' },
+  { value: 'notification', label: 'Notification' },
   { value: 'status_update', label: 'Status Update' },
   { value: 'note', label: 'Note' },
   { value: 'answer', label: 'Answer' },
@@ -26,6 +27,7 @@ const INTENT_LABELS: Record<MessageIntent, string> = {
   review_approval: 'Approved',
   task_ready: 'Ready',
   task_blocked: 'Blocked',
+  notification: 'Notification',
 };
 
 export function messageIntentLabel(intent: MessageIntent): string {

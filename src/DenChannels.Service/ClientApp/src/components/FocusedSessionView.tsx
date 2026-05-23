@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 import type { Channel, ChannelMessage, DesktopSessionEvent, DesktopSessionSnapshot, GatewayMember, GatewayMemberships } from '../api/types';
 import {
@@ -268,6 +268,7 @@ export function FocusedSessionView({ projectId, spaceName }: Props) {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<Error | null>(null);
+  const transcriptRef = useRef<HTMLElement | null>(null);
   const normalizedSenderIdentity = senderIdentity.trim();
 
   const fetchChannels = useCallback(async () => {
@@ -463,6 +464,12 @@ export function FocusedSessionView({ projectId, spaceName }: Props) {
     refreshEvents();
   }, [refreshChannels, refreshEvents, refreshMemberships, refreshMessages, refreshSnapshots]);
 
+  const snapTranscriptToBottom = useCallback(() => {
+    const transcript = transcriptRef.current;
+    if (!transcript) return;
+    transcript.scrollTo({ top: transcript.scrollHeight, behavior: 'auto' });
+  }, []);
+
   const handleSubmit = useCallback(async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const body = draft.trim();
@@ -535,12 +542,20 @@ export function FocusedSessionView({ projectId, spaceName }: Props) {
           )}
         </select>
         <button type="button" className="focused-session-refresh" onClick={refreshAll}>Refresh</button>
+        <button
+          type="button"
+          className="focused-session-refresh focused-session-bottom"
+          onClick={snapTranscriptToBottom}
+          title="Snap the connected transcript to the newest messages"
+        >
+          Bottom
+        </button>
       </div>
 
       {topError && <div className="focused-session-error">{topError.message}</div>}
 
       <div className="focused-session-grid">
-        <main className="focused-session-transcript" aria-label="Connected transcript">
+        <main ref={transcriptRef} className="focused-session-transcript" aria-label="Connected transcript">
           <div className="focused-session-section-header">
             <h3>Connected transcript</h3>
             <span>{messagesLoading ? 'loading…' : `${sortedMessages.length} channel messages`}</span>
