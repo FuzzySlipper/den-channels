@@ -16,6 +16,18 @@ Related work:
 
 All coupling to Den core happens through explicit HTTP/event contracts. MCP tools can wrap or administer these surfaces later, but the service-to-service integration should be HTTP/event based.
 
+## Communication-surface naming
+
+This contract uses the task #1555 vocabulary from Core's `docs/communication-api-surface-naming.md` and Den document `den-core/den-communication-surfaces-concept-map`:
+
+- `channel_message` means a visible Den Channels transcript row written through `POST /api/channels/{channelId}/messages` or the Gateway compatibility seam.
+- `direct_agent_message` means the wakeable Gateway/Channels request written through `POST /api/gateway/direct-agent-messages`; its backing transcript row has `sourceKind=wake_event`.
+- `gateway_delivery_final_message` means the true terminal visible reply for a Gateway delivery; it is a `channel_message` with `sourceKind=gateway_delivery`, a `deliveryRequestId`, and a final dedupe key shaped `gateway-delivery:{delivery_request_id}:final`.
+- `channel_activity_event` / `delivery_activity_event` means non-waking progress/activity written through `POST /api/gateway/channel-activity-events` or `POST /api/channels/{channelId}/activity-events`.
+- Core `project_message` / `task_message`, `user_notification`, `agent_stream_entry`, and worker/review packets remain Core-owned records; Channels may mirror or link them, but does not become their source of truth.
+
+New docs should avoid unqualified "message" when the surface is not already obvious from the route/DTO namespace.
+
 ## Current `den-channels` side
 
 The standalone service now owns:

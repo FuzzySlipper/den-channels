@@ -111,7 +111,11 @@ public sealed record GatewayEventItemDto(
     string Body,
     string CreatedAt);
 
-/// <summary>Request to post a Gateway-generated system or mirror-summary message.</summary>
+/// <summary>
+/// Compatibility request for Gateway-generated channel messages.
+/// With sourceKind=gateway_delivery and a final gateway-delivery dedupe key this is the gateway_delivery_final_message surface;
+/// interim delivery progress must use channel activity events instead.
+/// </summary>
 public sealed record PostGatewaySystemMessageRequest(
     long? ChannelId,
     string? ProjectId,

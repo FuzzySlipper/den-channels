@@ -64,7 +64,9 @@ POST /api/gateway/channel-activity-events?channelId=...
 POST /api/gateway/channel-activity-events?projectId=...
 ```
 
-Use `terminal=false` and a non-final `deliveryStage` such as `assistant_interim`, `tool`, `status`, or `compression` for pre-tool text/status/progress. Reserve `terminal=true` for explicit terminal outcome breadcrumbs; the actual human-visible assistant answer remains a normal `channel_messages` row with the `gateway-delivery:<delivery_id>:final` dedupe key.
+Use `terminal=false` and a non-final `deliveryStage` such as `assistant_interim`, `tool`, `status`, or `compression` for pre-tool text/status/progress. Reserve `terminal=true` for explicit terminal outcome breadcrumbs; the actual human-visible assistant answer remains a normal `channel_message` row with the `gateway-delivery:<delivery_id>:final` dedupe key.
+
+Task #1555 naming alignment: docs and adapters may call this surface `channel_activity_event` or `delivery_activity_event`, but must not call it a channel message. Final visible delivery replies should be named `gateway_delivery_final_message` (or equivalent wording) when referring to the terminal transcript artifact.
 
 Query channel activity events:
 

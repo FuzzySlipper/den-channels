@@ -185,6 +185,10 @@ public static class GatewayRoutes
 
         // -----------------------------------------------------------------------
         // POST /api/gateway/system-messages
+        // Compatibility route for Gateway-generated channel messages. For
+        // sourceKind=gateway_delivery + gateway-delivery:{id}:final this writes
+        // the gateway_delivery_final_message surface; interim progress belongs
+        // in channel-activity-events.
         // -----------------------------------------------------------------------
         gw.MapPost("/system-messages", async (
             ChannelsRepository repository,
