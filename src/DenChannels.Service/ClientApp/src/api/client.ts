@@ -39,6 +39,8 @@ import type {
   GatewayMemberships,
   GatewayTestWake,
   GatewayDirectAgentMessage,
+  AgentsOverviewResponse,
+  AgentDetailResponse,
 } from './types';
 
 const denCoreApiBase = normalizeApiBase(import.meta.env.VITE_DEN_CORE_API_BASE, '/den-core-api');
@@ -762,4 +764,39 @@ export function approveDispatch(dispatchId: number, decidedBy: string): Promise<
 
 export function rejectDispatch(dispatchId: number, decidedBy: string): Promise<DispatchEntry> {
   return post(`/api/dispatch/${dispatchId}/reject`, { decided_by: decidedBy });
+}
+
+// Agents Overview API (#1694 / #1695)
+
+export interface ListAgentsOverviewOpts {
+  projectId?: string;
+  channelId?: string;
+  scope?: string;
+  agentIdentity?: string;
+  activityLimit?: number;
+  includeLeft?: boolean;
+  includeGateway?: boolean;
+}
+
+export function listAgentsOverview(opts: ListAgentsOverviewOpts = {}): Promise<AgentsOverviewResponse> {
+  const q = buildQuery({
+    projectId: opts.projectId,
+    channelId: opts.channelId,
+    scope: opts.scope,
+    agentIdentity: opts.agentIdentity,
+    activityLimit: opts.activityLimit,
+    includeLeft: opts.includeLeft,
+    includeGateway: opts.includeGateway,
+  });
+  return getChannels(`/agents/overview${q}`);
+}
+
+export function getAgentDetail(agentIdentity: string, opts: { projectId?: string; channelId?: string; activityLimit?: number; deliveryLimit?: number } = {}): Promise<AgentDetailResponse> {
+  const q = buildQuery({
+    projectId: opts.projectId,
+    channelId: opts.channelId,
+    activityLimit: opts.activityLimit,
+    deliveryLimit: opts.deliveryLimit,
+  });
+  return getChannels(`/agents/${encodeURIComponent(agentIdentity)}/overview${q}`);
 }

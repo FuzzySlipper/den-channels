@@ -29,6 +29,7 @@ import { DispatchDetail } from './components/DispatchDetail';
 import { ChannelChatPanel } from './components/ChannelChatPanel';
 import type { ChannelChatPanelSize } from './components/ChannelChatPanel';
 import { FocusedSessionView } from './components/FocusedSessionView';
+import { AgentsOverviewView } from './components/AgentsOverviewView';
 import { agentStreamEntryVisibility } from './subagentRuns';
 import { documentSelectionAction } from './documentEditor';
 import type { GitFocus } from './git';
@@ -192,7 +193,9 @@ export default function App() {
             ? 'Sessions'
             : viewMode === 'agent-stream'
               ? 'Agent Stream'
-              : 'Librarian';
+              : viewMode === 'agents'
+                ? 'Agents'
+                : 'Librarian';
   const mainCount = viewMode === 'tasks'
     ? `(${taskCount}${filterLabel}${sortLabel})`
     : viewMode === 'documents'
@@ -498,6 +501,11 @@ export default function App() {
               <FocusedSessionView
                 projectId={!isAggregateSpace && !isGlobal ? effectiveSpaceId : null}
                 spaceName={activeSpace?.name ?? effectiveSpaceId}
+              />
+            ) : viewMode === 'agents' ? (
+              <AgentsOverviewView
+                projectId={!isAggregateSpace && !isGlobal ? effectiveSpaceId : null}
+                isAggregate={isAggregateSpace}
               />
             ) : (
               <LibrarianView
