@@ -59,9 +59,9 @@ interface WakeProgress {
 }
 
 const PANEL_SIZE_OPTIONS: Array<{ value: ChannelChatPanelSize; label: string }> = [
-  { value: 'small', label: 'Small' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'large', label: 'Large' },
+  { value: 'small', label: '25%' },
+  { value: 'medium', label: '50%' },
+  { value: 'large', label: '80%' },
 ];
 
 function channelLabel(channel: Channel | null, projectId: string | null): string {

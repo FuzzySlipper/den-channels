@@ -1,3 +1,6 @@
+/// <reference types="node" />
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ChannelActivityEvent, ChannelMessage } from '../api/types';
 import {
@@ -83,6 +86,20 @@ describe('parseMessageBodySegments', () => {
       { type: 'details', summary: 'What I would propose', body: '1. Take #1308\n2. Store findings' },
       { type: 'text', text: '\nAfter' },
     ]);
+  });
+});
+
+describe('channel chat panel sizing contract', () => {
+  const css = readFileSync(resolve(process.cwd(), 'src/styles/index.css'), 'utf8');
+
+  it('keeps size controls as viewport-relative chat expansion presets', () => {
+    expect(css).toContain('.dashboard-channel-size-small {\n  grid-template-rows: minmax(0, 1fr) minmax(200px, 25vh);');
+    expect(css).toContain('.dashboard-channel-size-medium {\n  grid-template-rows: minmax(0, 1fr) minmax(200px, 50vh);');
+    expect(css).toContain('.dashboard-channel-size-large {\n  grid-template-rows: minmax(0, 1fr) minmax(200px, 80vh);');
+    expect(css).toContain('@media (max-width: 900px) {\n  .dashboard-channel-size-large {\n    grid-template-rows: minmax(0, 1fr) minmax(200px, 55vh);');
+    expect(css).not.toMatch(/\.dashboard-channel-size-small \{\s*grid-template-rows: minmax\(0, 1fr\) 230px;/);
+    expect(css).not.toMatch(/\.dashboard-channel-size-medium \{\s*grid-template-rows: minmax\(0, 1fr\) 300px;/);
+    expect(css).not.toMatch(/\.dashboard-channel-size-large \{\s*grid-template-rows: minmax\(0, 1fr\) 420px;/);
   });
 });
 

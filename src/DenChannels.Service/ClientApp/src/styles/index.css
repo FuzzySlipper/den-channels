@@ -41,15 +41,15 @@ html, body, #root {
 }
 
 .dashboard-channel-size-small {
-  grid-template-rows: minmax(0, 1fr) 230px;
+  grid-template-rows: minmax(0, 1fr) minmax(200px, 25vh);
 }
 
 .dashboard-channel-size-medium {
-  grid-template-rows: minmax(0, 1fr) 300px;
+  grid-template-rows: minmax(0, 1fr) minmax(200px, 50vh);
 }
 
 .dashboard-channel-size-large {
-  grid-template-rows: minmax(0, 1fr) 420px;
+  grid-template-rows: minmax(0, 1fr) minmax(200px, 80vh);
 }
 
 .dashboard-workspace {
@@ -1018,7 +1018,7 @@ button.list-item {
 
 @media (max-width: 900px) {
   .dashboard-channel-size-large {
-    grid-template-rows: minmax(0, 1fr) 360px;
+    grid-template-rows: minmax(0, 1fr) minmax(200px, 55vh);
   }
 
   .channel-chat-header {
