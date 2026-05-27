@@ -41,6 +41,11 @@ function deliveryStateClass(state: string | null | undefined): string {
   return '';
 }
 
+function sourceIsHealthy(status: string | null | undefined): boolean {
+  const normalized = status?.toLowerCase();
+  return normalized === 'available' || normalized === 'ready' || normalized === 'ok';
+}
+
 function renderWakePolicy(memberships: ChannelMembershipOverviewDto[] | null): string {
   if (!memberships || memberships.length === 0) return '—';
   const policies = new Set(memberships.map(m => m.wakePolicy));
@@ -115,10 +120,10 @@ export function AgentsOverviewView({ projectId, isAggregate }: Props) {
   // Source health warnings banner
   const healthWarnings = useMemo(() => {
     const warnings: string[] = [];
-    if (sourceHealth?.gateway && sourceHealth.gateway.status !== 'available') {
+    if (sourceHealth?.gateway && !sourceIsHealthy(sourceHealth.gateway.status)) {
       warnings.push(`Gateway: ${sourceHealth.gateway.warning ?? sourceHealth.gateway.status}`);
     }
-    if (sourceHealth?.channels && sourceHealth.channels.status !== 'available') {
+    if (sourceHealth?.channels && !sourceIsHealthy(sourceHealth.channels.status)) {
       warnings.push(`Channels: ${sourceHealth.channels.warning ?? sourceHealth.channels.status}`);
     }
     return warnings;
@@ -264,10 +269,10 @@ export function AgentsOverviewView({ projectId, isAggregate }: Props) {
 function renderHealthWarnings(sourceHealth: SourceHealthDto | null): string[] {
   const warnings: string[] = [];
   if (!sourceHealth) return warnings;
-  if (sourceHealth.gateway && sourceHealth.gateway.status !== 'available') {
+  if (sourceHealth.gateway && !sourceIsHealthy(sourceHealth.gateway.status)) {
     warnings.push(`Gateway: ${sourceHealth.gateway.warning ?? sourceHealth.gateway.status}`);
   }
-  if (sourceHealth.channels && sourceHealth.channels.status !== 'available') {
+  if (sourceHealth.channels && !sourceIsHealthy(sourceHealth.channels.status)) {
     warnings.push(`Channels: ${sourceHealth.channels.warning ?? sourceHealth.channels.status}`);
   }
   return warnings;
