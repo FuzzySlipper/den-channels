@@ -775,4 +775,172 @@ public sealed partial class ChannelsRepository
 
     private static long? GetNullableInt64(SqliteDataReader reader, int ordinal) =>
         reader.IsDBNull(ordinal) ? null : reader.GetInt64(ordinal);
+
+    // =========================================================================
+    // Agents Overview read queries
+    // =========================================================================
+
+    /// <summary>
+    /// List channels with optional project/channel filter. Returns channels with their membership counts.
+    /// </summary>
+    public async Task<IReadOnlyList<ChannelDto>> ListChannelsForOverviewAsync(
+        string? projectId = null, long? channelId = null, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, slug, display_name, kind, project_id, space_id, created_by, visibility, settings_json, created_at, updated_at, archived_at
+            FROM channels
+            WHERE ($projectId IS NULL OR project_id = $projectId)
+              AND ($channelId IS NULL OR id = $channelId)
+            ORDER BY updated_at DESC, id DESC;
+            """;
+        command.Parameters.AddWithValue("$projectId", (object?)projectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$channelId", (object?)channelId ?? DBNull.Value);
+        var rows = new List<ChannelDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadChannel(reader));
+        return rows;
+    }
+
+    /// <summary>
+    /// List memberships across channels, optionally filtered by member identity and project scope.
+    /// </summary>
+    public async Task<IReadOnlyList<ChannelMembershipDto>> ListMembershipsForOverviewAsync(
+        string? projectId = null, long? channelId = null, string? agentIdentity = null, bool includeLeft = false,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT m.id, m.channel_id, m.member_type, m.member_identity, m.membership_status, m.wake_policy,
+                   m.can_send, m.can_react, m.can_invite, m.cooldown_seconds, m.max_auto_replies_per_window,
+                   m.settings_json, m.created_at, m.updated_at
+            FROM channel_memberships m
+            JOIN channels c ON c.id = m.channel_id
+            WHERE m.member_type = 'agent'
+              AND ($projectId IS NULL OR c.project_id = $projectId)
+              AND ($channelId IS NULL OR m.channel_id = $channelId)
+              AND ($agentIdentity IS NULL OR m.member_identity = $agentIdentity)
+              AND ($includeLeft = 1 OR m.membership_status != 'left')
+            ORDER BY m.member_identity, m.channel_id;
+            """;
+        command.Parameters.AddWithValue("$projectId", (object?)projectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$channelId", (object?)channelId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$agentIdentity", (object?)agentIdentity ?? DBNull.Value);
+        command.Parameters.AddWithValue("$includeLeft", includeLeft ? 1 : 0);
+        var rows = new List<ChannelMembershipDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadMembership(reader));
+        return rows;
+    }
+
+    /// <summary>
+    /// List recent activity events across multi-channel scope, optionally filtered.
+    /// Returns most recent events bounded by the per-agent limit.
+    /// </summary>
+    public async Task<IReadOnlyList<ChannelActivityEventDto>> ListRecentActivityForOverviewAsync(
+        string? projectId = null, long? channelId = null, string? agentIdentity = null,
+        int perAgentLimit = 3, CancellationToken cancellationToken = default)
+    {
+        var clampedLimit = Math.Clamp(perAgentLimit, 1, 100);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT a.id, a.channel_id, a.project_id, a.agent_identity, a.delivery_request_id, a.hermes_session_key,
+                   a.display_block_id, a.parent_hermes_session_key, a.parent_agent_identity, a.worker_run_id, a.worker_role,
+                   a.task_id, a.thread_id, a.anchor_message_id, a.event_type, a.status, a.delivery_stage, a.terminal,
+                   a.sequence, a.update_version, a.title, a.summary, a.preview_json, a.metadata_json, a.dedupe_key,
+                   a.final_channel_message_id, a.created_at, a.updated_at
+            FROM channel_activity_events a
+            JOIN channels c ON c.id = a.channel_id
+            WHERE ($projectId IS NULL OR c.project_id = $projectId)
+              AND ($channelId IS NULL OR a.channel_id = $channelId)
+              AND ($agentIdentity IS NULL OR a.agent_identity = $agentIdentity)
+            ORDER BY a.agent_identity, a.created_at DESC, a.id DESC;
+            """;
+        command.Parameters.AddWithValue("$projectId", (object?)projectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$channelId", (object?)channelId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$agentIdentity", (object?)agentIdentity ?? DBNull.Value);
+        var rows = new List<ChannelActivityEventDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadActivityEvent(reader));
+
+        // Group by agent identity and apply per-agent limit
+        return rows
+            .GroupBy(a => a.AgentIdentity)
+            .SelectMany(g => g.Take(clampedLimit))
+            .ToList();
+    }
+
+    /// <summary>
+    /// List recent activity events for a single agent detail view with per-agent pagination.
+    /// </summary>
+    public async Task<IReadOnlyList<ChannelActivityEventDto>> ListRecentActivityForDetailAsync(
+        string agentIdentity, string? projectId = null, long? channelId = null,
+        int activityLimit = 50, CancellationToken cancellationToken = default)
+    {
+        var clampedLimit = Math.Clamp(activityLimit, 1, 200);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT a.id, a.channel_id, a.project_id, a.agent_identity, a.delivery_request_id, a.hermes_session_key,
+                   a.display_block_id, a.parent_hermes_session_key, a.parent_agent_identity, a.worker_run_id, a.worker_role,
+                   a.task_id, a.thread_id, a.anchor_message_id, a.event_type, a.status, a.delivery_stage, a.terminal,
+                   a.sequence, a.update_version, a.title, a.summary, a.preview_json, a.metadata_json, a.dedupe_key,
+                   a.final_channel_message_id, a.created_at, a.updated_at
+            FROM channel_activity_events a
+            JOIN channels c ON c.id = a.channel_id
+            WHERE a.agent_identity = $agentIdentity
+              AND ($projectId IS NULL OR c.project_id = $projectId)
+              AND ($channelId IS NULL OR a.channel_id = $channelId)
+            ORDER BY a.created_at DESC, a.id DESC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$agentIdentity", agentIdentity);
+        command.Parameters.AddWithValue("$projectId", (object?)projectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$channelId", (object?)channelId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$limit", clampedLimit);
+        var rows = new List<ChannelActivityEventDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadActivityEvent(reader));
+        return rows;
+    }
+
+    /// <summary>
+    /// List distinct task IDs associated with activity events for a given agent.
+    /// </summary>
+    public async Task<IReadOnlyList<ChannelActivityEventDto>> ListTaskActivityForDetailAsync(
+        string agentIdentity, string? projectId = null, long? channelId = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT a.id, a.channel_id, a.project_id, a.agent_identity, a.delivery_request_id, a.hermes_session_key,
+                   a.display_block_id, a.parent_hermes_session_key, a.parent_agent_identity, a.worker_run_id, a.worker_role,
+                   a.task_id, a.thread_id, a.anchor_message_id, a.event_type, a.status, a.delivery_stage, a.terminal,
+                   a.sequence, a.update_version, a.title, a.summary, a.preview_json, a.metadata_json, a.dedupe_key,
+                   a.final_channel_message_id, a.created_at, a.updated_at
+            FROM channel_activity_events a
+            JOIN channels c ON c.id = a.channel_id
+            WHERE a.agent_identity = $agentIdentity
+              AND a.task_id IS NOT NULL
+              AND ($projectId IS NULL OR c.project_id = $projectId)
+              AND ($channelId IS NULL OR a.channel_id = $channelId)
+            ORDER BY a.created_at DESC, a.id DESC;
+            """;
+        command.Parameters.AddWithValue("$agentIdentity", agentIdentity);
+        command.Parameters.AddWithValue("$projectId", (object?)projectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$channelId", (object?)channelId ?? DBNull.Value);
+        var rows = new List<ChannelActivityEventDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadActivityEvent(reader));
+        return rows;
+    }
 }

@@ -1,4 +1,5 @@
 using DenChannels.Service;
+using DenChannels.Service.AgentsOverview;
 using DenChannels.Service.Channels;
 using DenChannels.Service.Configuration;
 using DenChannels.Service.Data;
@@ -23,6 +24,11 @@ builder.Services.AddSingleton<ChannelsRepository>();
 builder.Services.AddHttpClient<IDenCoreProjectClient, DenCoreProjectClient>();
 builder.Services.AddSingleton<ProjectChannelSyncService>();
 builder.Services.AddSingleton<MirrorSummaryIngestionService>();
+builder.Services.AddHttpClient<GatewayStateClient>(client =>
+{
+    // Base address is set per-request in the client; this just registers DI
+});
+builder.Services.AddSingleton<AgentsOverviewService>();
 
 var app = builder.Build();
 
@@ -73,6 +79,7 @@ app.MapProjectChannelSyncRoutes();
 app.MapMirrorSummaryRoutes();
 app.MapDenCoreApiProxy();
 app.MapGatewayRoutes();
+app.MapAgentsOverviewRoutes();
 
 // Keep API misses machine-readable. The SPA fallback is only for browser routes.
 app.MapFallback((HttpContext context, IWebHostEnvironment environment) =>
