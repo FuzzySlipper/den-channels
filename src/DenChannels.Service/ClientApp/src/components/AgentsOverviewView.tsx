@@ -463,8 +463,8 @@ function AgentDetailOverlay({
               <h3>Current / Recent Delivery Requests ({agent.currentDeliveries.length})</h3>
             </div>
             <div className="agents-delivery-list">
-              {agent.currentDeliveries.map(d => (
-                <div key={d.deliveryRequestId ?? Math.random()} className="agents-delivery-card">
+              {agent.currentDeliveries.map((d, index) => (
+                <div key={d.deliveryRequestId ?? `current-${index}-${d.createdAt ?? ''}`} className="agents-delivery-card">
                   <div className="agents-delivery-header">
                     <span className={`agents-delivery-badge ${deliveryStateClass(d.state)}`}>
                       {d.state ?? d.status ?? '—'}
@@ -491,8 +491,8 @@ function AgentDetailOverlay({
               <h3>Recent Deliveries ({agent.recentDeliveries.length})</h3>
             </div>
             <div className="agents-delivery-list">
-              {agent.recentDeliveries.map(d => (
-                <div key={d.deliveryRequestId ?? Math.random()} className="agents-delivery-card">
+              {agent.recentDeliveries.map((d, index) => (
+                <div key={d.deliveryRequestId ?? `recent-${index}-${d.createdAt ?? ''}`} className="agents-delivery-card">
                   <div className="agents-delivery-header">
                     <span className={`agents-delivery-badge ${deliveryStateClass(d.state)}`}>
                       {d.state ?? d.status ?? '—'}
