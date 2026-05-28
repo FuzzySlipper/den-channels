@@ -41,6 +41,8 @@ import type {
   GatewayDirectAgentMessage,
   AgentsOverviewResponse,
   AgentDetailResponse,
+  DocumentDiscussion,
+  DiscussionComment,
 } from './types';
 
 const denCoreApiBase = normalizeApiBase(import.meta.env.VITE_DEN_CORE_API_BASE, '/den-core-api');
@@ -799,4 +801,32 @@ export function getAgentDetail(agentIdentity: string, opts: { projectId?: string
     deliveryLimit: opts.deliveryLimit,
   });
   return getChannels(`/agents/${encodeURIComponent(agentIdentity)}/overview${q}`);
+}
+
+// =========================================================================
+// Document Discussion (#1680)
+// =========================================================================
+
+export function getDocumentDiscussion(projectId: string, slug: string): Promise<DocumentDiscussion | null> {
+  return fetch(coreApiUrl(`/api/projects/${esc(projectId)}/documents/${esc(slug)}/discussion`))
+    .then(res => {
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`GET discussion: ${res.status}`);
+      return res.json();
+    });
+}
+
+export interface PostDiscussionCommentRequest {
+  author_identity: string;
+  body_markdown: string;
+  parent_comment_id?: number | null;
+  comment_kind?: string;
+}
+
+export function postDocumentDiscussionComment(
+  projectId: string,
+  slug: string,
+  request: PostDiscussionCommentRequest,
+): Promise<DiscussionComment> {
+  return post(`/api/projects/${esc(projectId)}/documents/${esc(slug)}/discussion/comments`, request);
 }

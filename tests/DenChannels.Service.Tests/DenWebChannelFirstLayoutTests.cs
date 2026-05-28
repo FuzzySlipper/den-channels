@@ -148,9 +148,9 @@ public sealed class DenWebChannelFirstLayoutTests
         Assert.Contains("aria-label=\"Channel panel size\"", component);
         Assert.Contains("channel-chat-size-controls", component);
         Assert.Contains("channel-chat-size-button", component);
-        Assert.Contains("Small", component);
-        Assert.Contains("Medium", component);
-        Assert.Contains("Large", component);
+        Assert.Contains("25%", component);
+        Assert.Contains("50%", component);
+        Assert.Contains("80%", component);
 
         Assert.Contains(".dashboard-channel-size-small", css);
         Assert.Contains(".dashboard-channel-size-medium", css);
@@ -361,6 +361,64 @@ public sealed class DenWebChannelFirstLayoutTests
         // TaskDetail/SubagentRunDetail still use these for drill-in overlays.
         Assert.Contains("listSubagentRuns", client);
         Assert.Contains("getSubagentRun", client);
+    }
+
+    [Fact]
+    public void DocumentDetail_HasDiscussionTabSeparateFromContentBody()
+    {
+        var detail = ReadClientSource("components", "DocumentDetail.tsx");
+        var discussion = ReadClientSource("components", "DocumentDiscussion.tsx");
+
+        Assert.Contains("detail-tab", detail);
+        Assert.Contains("detail-tab-active", detail);
+        Assert.Contains("panelTab === 'content'", detail);
+        Assert.Contains("panelTab === 'discussion'", detail);
+        Assert.Contains("<DocumentDiscussion summary={summary} />", detail);
+
+        Assert.Contains("discussion-panel", discussion);
+        Assert.Contains("discussion-comments-list", discussion);
+        Assert.Contains("discussion-composer", discussion);
+
+        // Discussion is separate from Markdown content - discussion tab blocks wrap discussion content separately
+        Assert.Contains("panelTab === 'discussion'", detail);
+        // The DocumentMarkdownContent function (markdown body rendering) does not contain discussion references
+        var mdParts = detail.Split(new[] { "function DocumentMarkdownContent" }, StringSplitOptions.None);
+        Assert.True(mdParts.Length >= 2);
+        Assert.DoesNotContain("discussion", mdParts[1].Substring(0, Math.Min(800, mdParts[1].Length)));
+    }
+
+    [Fact]
+    public void DocumentDiscussion_UsesCoreApiRoutes_AndHandlesMissingDiscussion()
+    {
+        var client = ReadClientSource("api", "client.ts");
+        var discussion = ReadClientSource("components", "DocumentDiscussion.tsx");
+
+        Assert.Contains("getDocumentDiscussion", client);
+        Assert.Contains("postDocumentDiscussionComment", client);
+
+        Assert.Contains("getDocumentDiscussion", discussion);
+        Assert.Contains("postDocumentDiscussionComment", discussion);
+
+        // 404 handling
+        Assert.Contains("res.status === 404", client);
+        Assert.Contains("return null", client.Substring(client.IndexOf("getDocumentDiscussion"), 500));
+
+        // Empty state
+        Assert.Contains("No discussion comments yet", discussion);
+        Assert.Contains("separate from the canonical document content", discussion);
+    }
+
+    [Fact]
+    public void DocumentDiscussion_DoesNotInjectIntoChannelOrMessageRendering()
+    {
+        var app = ReadClientSource("App.tsx");
+        var channelChat = ReadClientSource("components", "ChannelChatPanel.tsx");
+        var messagesInbox = ReadClientSource("components", "MessagesInbox.tsx");
+
+        Assert.DoesNotContain("DocumentDiscussion", app);
+        Assert.DoesNotContain("DocumentDiscussion", channelChat);
+        Assert.DoesNotContain("DocumentDiscussion", messagesInbox);
+        Assert.DoesNotContain("discussion", messagesInbox, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ReadClientSource(params string[] relativeParts) =>

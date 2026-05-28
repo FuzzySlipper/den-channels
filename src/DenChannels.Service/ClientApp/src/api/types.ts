@@ -1065,3 +1065,28 @@ export interface TaskAssociationDto {
   activityCount: number;
   latestActivityAt: string | null;
 }
+
+// =========================================================================
+// Document Discussion types (#1680)
+// =========================================================================
+
+export interface DiscussionComment {
+  id: number;
+  thread_id: number;
+  parent_comment_id: number | null;
+  author_identity: string;
+  body_markdown: string;
+  comment_kind: string;
+  status: string;
+  created_at: string;
+  edited_at: string | null;
+}
+
+export interface DocumentDiscussion {
+  thread: {
+    id: number;
+    title: string;
+    status: string;
+  } | null;
+  comments: DiscussionComment[];
+}

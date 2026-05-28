@@ -3,6 +3,7 @@ import type { DocumentSummary, Document } from '../api/types';
 import { getDocument, saveDocument } from '../api/client';
 import { isDocumentEditorSaveShortcut } from '../documentEditor';
 import { documentSummaryFromReference, splitDocumentReferenceText } from '../documentRefs';
+import { DocumentDiscussion } from './DocumentDiscussion';
 
 interface Props {
   summary: DocumentSummary;
@@ -23,6 +24,7 @@ export function DocumentDetail({ summary, onClose, onSaved, onOpenDocument, onDi
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [panelTab, setPanelTab] = useState<'content' | 'discussion'>('content');
 
   const displayed = doc ?? summary;
   const tags = displayed.tags ?? [];
@@ -195,54 +197,85 @@ export function DocumentDetail({ summary, onClose, onSaved, onOpenDocument, onDi
           </dl>
         </div>
 
-        {loadError && <div className="detail-error" role="alert">{loadError}</div>}
-        {saveError && <div className="detail-error" role="alert">Save failed: {saveError}</div>}
-        {pendingSwitch && dirty && (
-          <div className="detail-info document-switch-guard" role="status">
-            <div>
-              Switching to <strong>{pendingSwitch.title}</strong> would discard unsaved edits to this document.
+        <div className="detail-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            className={`detail-tab${panelTab === 'content' ? ' detail-tab-active' : ''}`}
+            onClick={() => setPanelTab('content')}
+            aria-selected={panelTab === 'content'}
+          >
+            Content
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className={`detail-tab${panelTab === 'discussion' ? ' detail-tab-active' : ''}`}
+            onClick={() => setPanelTab('discussion')}
+            aria-selected={panelTab === 'discussion'}
+          >
+            Discussion
+          </button>
+        </div>
+
+        {panelTab === 'content' && (
+          <>
+            {loadError && <div className="detail-error" role="alert">{loadError}</div>}
+            {saveError && <div className="detail-error" role="alert">Save failed: {saveError}</div>}
+            {pendingSwitch && dirty && (
+              <div className="detail-info document-switch-guard" role="status">
+                <div>
+                  Switching to <strong>{pendingSwitch.title}</strong> would discard unsaved edits to this document.
+                </div>
+                <div className="document-switch-actions">
+                  <button
+                    className="detail-action detail-action-primary"
+                    onClick={() => void handleSaveAndSwitch()}
+                    disabled={!dirty || saving}
+                  >
+                    Save & switch
+                  </button>
+                  <button className="detail-action" onClick={handleDiscardAndSwitch} disabled={saving}>Discard & switch</button>
+                  <button className="detail-action" onClick={onCancelSwitch} disabled={saving}>Keep editing</button>
+                </div>
+              </div>
+            )}
+            {isEditing && dirty && (
+              <div className="detail-info" role="status">
+                You have unsaved changes. Save persists Markdown through the Den document API; Cancel discards the draft. Ctrl+S / Cmd+S also saves while editing.
+              </div>
+            )}
+
+            <div className="detail-section">
+              <div className="detail-section-header">
+                <h3>Markdown Content</h3>
+                {isEditing && <span className="detail-subtle">{draft.length} characters</span>}
+              </div>
+              {loading ? (
+                <div className="loading">Loading document...</div>
+              ) : doc && isEditing ? (
+                <textarea
+                  className="document-editor"
+                  value={draft}
+                  onChange={e => setDraft(e.target.value)}
+                  disabled={saving}
+                  spellCheck={false}
+                  aria-label={`Markdown content for ${doc.title}`}
+                />
+              ) : doc ? (
+                <DocumentMarkdownContent content={doc.content} onOpenDocument={onOpenDocument} />
+              ) : (
+                <div className="empty">No document content available.</div>
+              )}
             </div>
-            <div className="document-switch-actions">
-              <button
-                className="detail-action detail-action-primary"
-                onClick={() => void handleSaveAndSwitch()}
-                disabled={!dirty || saving}
-              >
-                Save & switch
-              </button>
-              <button className="detail-action" onClick={handleDiscardAndSwitch} disabled={saving}>Discard & switch</button>
-              <button className="detail-action" onClick={onCancelSwitch} disabled={saving}>Keep editing</button>
-            </div>
-          </div>
-        )}
-        {isEditing && dirty && (
-          <div className="detail-info" role="status">
-            You have unsaved changes. Save persists Markdown through the Den document API; Cancel discards the draft. Ctrl+S / Cmd+S also saves while editing.
-          </div>
+          </>
         )}
 
-        <div className="detail-section">
-          <div className="detail-section-header">
-            <h3>Markdown Content</h3>
-            {isEditing && <span className="detail-subtle">{draft.length} characters</span>}
+        {panelTab === 'discussion' && (
+          <div className="detail-section discussion-container">
+            <DocumentDiscussion summary={summary} />
           </div>
-          {loading ? (
-            <div className="loading">Loading document...</div>
-          ) : doc && isEditing ? (
-            <textarea
-              className="document-editor"
-              value={draft}
-              onChange={e => setDraft(e.target.value)}
-              disabled={saving}
-              spellCheck={false}
-              aria-label={`Markdown content for ${doc.title}`}
-            />
-          ) : doc ? (
-            <DocumentMarkdownContent content={doc.content} onOpenDocument={onOpenDocument} />
-          ) : (
-            <div className="empty">No document content available.</div>
-          )}
-        </div>
+        )}
       </div>
     </div>
   );

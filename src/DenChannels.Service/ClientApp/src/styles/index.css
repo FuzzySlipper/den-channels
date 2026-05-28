@@ -3904,3 +3904,218 @@ button.list-item {
 .agents-event-completed { border-color: rgba(158, 206, 106, 0.45); color: var(--green); }
 .agents-event-failed { border-color: rgba(247, 118, 142, 0.45); color: var(--red); }
 .agents-event-delivered { border-color: rgba(187, 154, 247, 0.45); color: var(--purple); }
+
+/* =========================================================================
+   Document detail tabs (#1680)
+   ========================================================================= */
+
+.detail-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+
+.detail-tab {
+  appearance: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 14px;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.detail-tab:hover {
+  color: var(--text);
+}
+
+.detail-tab-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* =========================================================================
+   Document Discussion panel (#1680)
+   ========================================================================= */
+
+.discussion-container {
+  display: flex;
+  flex-direction: column;
+}
+
+.discussion-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.discussion-info {
+  border: 1px solid #2d3a5a;
+  background: #151e2e;
+  color: var(--accent);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.discussion-empty {
+  padding: 16px 0;
+  text-align: center;
+}
+
+.discussion-comments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.discussion-comment {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  background: var(--bg);
+}
+
+.discussion-reply {
+  margin-left: 20px;
+  border-color: var(--bg-selected);
+}
+
+.discussion-comment-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.discussion-comment-author {
+  font-weight: 600;
+  color: var(--text-bright);
+  font-size: 12px;
+}
+
+.discussion-comment-time {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.discussion-comment-body {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.discussion-comment-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.discussion-reply-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.discussion-reply-button:hover {
+  color: var(--accent);
+}
+
+.discussion-composer {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  margin-top: auto;
+}
+
+.discussion-post-error {
+  margin-bottom: 8px;
+}
+
+.discussion-reply-context {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  padding: 4px 8px;
+  background: var(--bg);
+  border-radius: 3px;
+}
+
+.discussion-reply-cancel {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  margin-left: auto;
+}
+
+.discussion-reply-cancel:hover {
+  color: var(--red);
+}
+
+.discussion-composer-row {
+  margin-bottom: 6px;
+}
+
+.discussion-composer-author {
+  width: 100%;
+  max-width: 240px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.discussion-composer-input {
+  width: 100%;
+  resize: vertical;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+
+.discussion-composer-input:focus {
+  border-color: var(--accent-dim);
+  outline: none;
+}
+
+.discussion-composer-input:disabled {
+  opacity: 0.7;
+}
+
+.discussion-composer-actions {
+  display: flex;
+  gap: 6px;
+}
