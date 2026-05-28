@@ -13,7 +13,7 @@ REMOTE_APP_DIR="${REMOTE_APP_DIR:-$REMOTE_SERVICE_ROOT/app}"
 REMOTE_STAGE_DIR="${REMOTE_STAGE_DIR:-/tmp/den-channels-live-publish}"
 REMOTE_SERVICE_USER="${REMOTE_SERVICE_USER:-den-channels}"
 REMOTE_SERVICE_GROUP="${REMOTE_SERVICE_GROUP:-den-channels}"
-SMOKE_BASE_URL="${SMOKE_BASE_URL:-http://192.168.1.10:18080}"
+SMOKE_BASE_URL="${SMOKE_BASE_URL:-http://127.0.0.1:18081}"
 SKIP_RESTART=0
 SKIP_SMOKE=0
 DRY_RUN=0
@@ -24,9 +24,10 @@ usage() {
   cat <<'EOF_USAGE'
 Usage: scripts/deploy-live-server.sh [options]
 
-Build and publish DenChannels.Service, stage it atomically into the live
-/data/services/den-channels app tree, restart den-channels.service, and run a
-small Den Web/Core-proxy smoke test.
+Build and publish DenChannels.Service (backend API only), stage it atomically
+into the /data/services/den-channels app tree, restart den-channels.service,
+and run backend smoke checks (health, API miss). The embedded ClientApp UI was
+retired in task #1708; Den Web (den-web.service) owns the public UI at :18080.
 
 Modes:
   local   Run on den-srv from /data/dev/den-channels and install directly.
@@ -57,7 +58,7 @@ Live defaults:
   REMOTE_SERVICE_ROOT=/data/services/den-channels
   REMOTE_APP_DIR=/data/services/den-channels/app
   SERVICE_NAME=den-channels.service
-  SMOKE_BASE_URL=http://192.168.1.10:18080
+  SMOKE_BASE_URL=http://127.0.0.1:18081 (override for remote smoke via den-web proxy)
 EOF_USAGE
 }
 
@@ -175,29 +176,6 @@ EOF
   fi
 }
 
-preflight_workspace() {
-  local client_app="$REPO_ROOT/src/DenChannels.Service/ClientApp"
-  local first_offender=""
-
-  if [[ -d "$client_app/node_modules" ]]; then
-    first_offender="$(find "$client_app/node_modules" -mindepth 1 \( -user root -o -group root \) -print -quit 2>/dev/null || true)"
-    if [[ -n "$first_offender" ]]; then
-      cat >&2 <<EOF
-Deploy preflight failed: frontend dependencies under ClientApp/node_modules are root-owned.
-
-Example offending path:
-  $first_offender
-
-The frontend build writes incremental artifacts under ClientApp/node_modules/.tmp,
-so ownership drift there can break dotnet publish.
-
-One-time fix:
-  sudo chown -R $(id -un):$(id -gn) "$client_app/node_modules"
-EOF
-      exit 1
-    fi
-  fi
-}
 
 initialize_publish_dir() {
   if [[ -n "$PUBLISH_DIR" ]]; then
@@ -249,7 +227,7 @@ publish_server() {
       -o "$PUBLISH_DIR/"
 
   [[ -x "$PUBLISH_DIR/DenChannels.Service" ]] || { echo "Publish output missing DenChannels.Service executable" >&2; exit 1; }
-  [[ -f "$PUBLISH_DIR/wwwroot/index.html" ]] || { echo "Publish output missing wwwroot/index.html" >&2; exit 1; }
+  # wwwroot/index.html serves as a minimal moved-page; no longer an SPA entry.
 }
 
 sudo_local() {
@@ -278,10 +256,7 @@ if [[ ! -f "$publish_stage/DenChannels.Service" ]]; then
   echo "Remote stage is missing DenChannels.Service: $publish_stage" >&2
   exit 1
 fi
-if [[ ! -f "$publish_stage/wwwroot/index.html" ]]; then
-  echo "Remote stage is missing Den Web index.html: $publish_stage/wwwroot/index.html" >&2
-  exit 1
-fi
+# wwwroot/index.html is a minimal moved-page; not a required artifact for remote deploy.
 
 sudo -n install -d -o "$REMOTE_SERVICE_USER" -g "$REMOTE_SERVICE_GROUP" -m 0750 "$REMOTE_SERVICE_ROOT"
 sudo -n rm -rf "$new_app"
@@ -389,9 +364,11 @@ smoke_http() {
 
   curl --retry 15 --retry-delay 1 --retry-connrefused -fsS "$SMOKE_BASE_URL/health/live" -o "$tmpdir/live.json"
   curl --retry 15 --retry-delay 1 --retry-connrefused -fsS "$SMOKE_BASE_URL/health/ready" -o "$tmpdir/ready.json"
+
+  # Root route returns a minimal moved-page (HTML), not SPA assets.
   curl --retry 15 --retry-delay 1 --retry-connrefused -fsS "$SMOKE_BASE_URL/" -o "$tmpdir/index.html"
-  grep -qi '<!doctype html\|<html' "$tmpdir/index.html" || { rm -rf "$tmpdir"; echo "Root route did not return HTML" >&2; exit 1; }
-  grep -q '/assets/' "$tmpdir/index.html" || { rm -rf "$tmpdir"; echo "Root HTML did not reference built assets" >&2; exit 1; }
+  grep -qi 'Den Channels' "$tmpdir/index.html" || { rm -rf "$tmpdir"; echo "Root route did not contain Den Channels header" >&2; exit 1; }
+  grep -q '192.168.1.10:18080' "$tmpdir/index.html" || { rm -rf "$tmpdir"; echo "Root HTML did not link to Den Web" >&2; exit 1; }
 
   projects="$(curl -fsS "$SMOKE_BASE_URL/den-core-api/api/projects")"
   python3 -c 'import json,sys; data=json.load(sys.stdin); assert isinstance(data, list)' <<<"$projects"
@@ -421,7 +398,6 @@ main() {
   fi
 
   preflight_privilege
-  preflight_workspace
   initialize_publish_dir
   initialize_build_artifacts_dir
   trap cleanup EXIT

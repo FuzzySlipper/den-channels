@@ -1,6 +1,11 @@
 # Den Channels
 
-Standalone .NET service for Den channel data and channel-facing APIs.
+Standalone .NET service for Den channel data and channel-facing backend APIs.
+
+**Primary frontend**: Den Web at [http://192.168.1.10:18080/](http://192.168.1.10:18080/) (`den-web` repo).
+The embedded Channel Chat ClientApp was retired in task #1708. All frontend product
+work now lives in `den-web`. This repo owns channel backend APIs, membership,
+messages, and activity state — not the public SPA.
 
 Den Channels owns channel-specific, high-volume conversational/activity data (channels, messages, memberships, reactions, read cursors, mirror summaries, and future wake-policy inputs). Den core/den-mcp remains the source of truth for canonical workflow data such as projects, tasks, task messages, reviews, worker runs, documents, and identity/auth contracts.
 
@@ -21,7 +26,12 @@ This repo currently contains the service skeleton for Den task #1320:
 - `/api/gateway/memberships?channelId={id}|projectId={projectId}` — Gateway-facing participant/wake-policy snapshot for channel routing.
 - `/api/gateway/test-wakes` — controlled synthetic wake-event recorder for an active agent membership; it records Channels-owned evidence only and returns Gateway message/events URLs for downstream delivery/claim/complete/fail follow-up.
 
-The Den Web channel chat panel exposes the same boundary: it lists project/space channels, shows channel participants/active agent bindings, lets a tester join an agent membership with a bounded wake policy, posts direct agent-targeted channel messages, and records low-risk test wakes through the Gateway API. Channels stores the message/membership rows; Gateway/bridge consumers remain responsible for real transport, delivery state, claims, completions, failures, and suppression decisions. UI rendering intentionally avoids raw membership settings/secrets and only derives safe labels such as profile/binding names from settings previews.
+The Den Web channel chat panel (in the `den-web` repo) exposes the same boundary:
+it lists project/space channels, shows channel participants/active agent bindings, lets a tester
+join an agent membership with a bounded wake policy, posts direct agent-targeted channel messages,
+and records low-risk test wakes through the Gateway API. Channels stores the message/membership
+rows; Gateway/bridge consumers remain responsible for real transport, delivery state, claims,
+completions, failures, and suppression decisions.
 
 - `/api/project-channel-sync/projects/{projectId}` — ensure one project default channel from Den core/stub metadata.
 - `/api/project-channel-sync` — backfill default channels from Den core/stub project list or explicit project payload.
@@ -80,13 +90,20 @@ Use the deploy helper from this repo root:
 scripts/deploy-live-server.sh --remote
 ```
 
-The script publishes `DenChannels.Service` for `linux-x64`, builds the bundled Den Web Vite app via the project publish target, uploads to `den-srv`, swaps `/data/services/den-channels/app` atomically through `/data/services/den-channels/app.new`, restarts `den-channels.service`, and smoke-tests:
+The script publishes `DenChannels.Service` for `linux-x64`, uploads to `den-srv`,
+swaps `/data/services/den-channels/app` atomically through `/data/services/den-channels/app.new`,
+restarts `den-channels.service`, and smoke-tests the backend on its internal URL:
 
 - `/health/live`
 - `/health/ready`
-- `/`
+- `/` (moved-page referencing Den Web)
 - `/den-core-api/api/projects`
 - `/api/not-a-route` as non-HTML 404
+
+The default `SMOKE_BASE_URL=http://127.0.0.1:18081` targets the den-channels backend
+directly on the loopback interface. For smoke through the den-web reverse proxy,
+set `SMOKE_BASE_URL=http://192.168.1.10:18080`. Den Web (den-web.service) owns the
+public 0.0.0.0:18080 listener; this script does not rebuild or deploy the frontend.
 
 Useful overrides/options:
 
@@ -97,7 +114,8 @@ scripts/deploy-live-server.sh --skip-restart
 scripts/deploy-live-server.sh --skip-smoke
 ```
 
-Live defaults are `/data/services/den-channels`, `den-channels.service`, and `http://192.168.1.10:18080`.
+Live defaults are `/data/services/den-channels`, `den-channels.service`, and
+`SMOKE_BASE_URL=http://127.0.0.1:18081` (pointing at the backend, not the public URL).
 
 ## Run locally
 

@@ -10,9 +10,7 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.4" />
   </ItemGroup>
 
-  <Target Name="BuildDenWebClient" BeforeTargets="Publish" Condition="'$(SkipDenWebClientBuild)' != 'true'">
-    <Exec WorkingDirectory="ClientApp" Command="npm ci --include=dev" />
-    <Exec WorkingDirectory="ClientApp" Command="npm run build" />
-  </Target>
-
+  <!-- ClientApp/ embedded UI retired as of task #1708.
+       Den Web (den-web.service) now owns the primary UI at http://0.0.0.0:18080.
+       den-channels serves only backend APIs on 127.0.0.1:18081 behind the Den Web reverse proxy. -->
 </Project>

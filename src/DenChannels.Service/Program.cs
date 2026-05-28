@@ -32,9 +32,9 @@ builder.Services.AddSingleton<AgentsOverviewService>();
 
 var app = builder.Build();
 
-// Den Web: static operator UI now lives with den-channels instead of the MCP adapter.
-// If wwwroot/index.html is present, / serves the SPA. In source-only test runs the
-// service metadata endpoint below still answers /.
+// den-channels no longer owns the SPA. Static wwwroot files serve a minimal
+// moved-page referencing Den Web at http://192.168.1.10:18080.
+// API misses return JSON; public root paths serve the static page.
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
@@ -81,7 +81,7 @@ app.MapDenCoreApiProxy();
 app.MapGatewayRoutes();
 app.MapAgentsOverviewRoutes();
 
-// Keep API misses machine-readable. The SPA fallback is only for browser routes.
+// API misses: machine-readable JSON. Root/public paths: serve the moved-page.
 app.MapFallback((HttpContext context, IWebHostEnvironment environment) =>
 {
     if (context.Request.Path.StartsWithSegments("/api") ||
@@ -94,7 +94,7 @@ app.MapFallback((HttpContext context, IWebHostEnvironment environment) =>
     var index = environment.WebRootFileProvider.GetFileInfo("index.html");
     return index.Exists
         ? Results.File(index.CreateReadStream(), "text/html; charset=utf-8")
-        : Results.NotFound(new { error = "web_frontend_not_built" });
+        : Results.NotFound(new { error = "static_page_not_found" });
 });
 
 app.Run();

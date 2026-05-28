@@ -107,7 +107,6 @@ Focused validation commands:
 
 ```bash
 dotnet test DenChannels.slnx --filter ChannelApiTests
-cd src/DenChannels.Service/ClientApp && npm run test:rendering
 ```
 
 ## Message-to-delivery linkage
