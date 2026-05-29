@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DenChannels.Service.Channels;
+using DenChannels.Service.AgentsOverview;
 
 namespace DenChannels.Service.Gateway;
 
@@ -36,7 +37,8 @@ public static class GatewayRoutes
                 "POST /api/gateway/system-messages",
                 "POST /api/gateway/channel-activity-events",
                 "POST /api/gateway/direct-agent-messages",
-                "POST /api/gateway/test-wakes"
+                "POST /api/gateway/test-wakes",
+                "GET /api/gateway/assignments/{assignmentId}/trace"
             ])));
 
         // -----------------------------------------------------------------------
@@ -500,6 +502,23 @@ public static class GatewayRoutes
                 EvidenceSummary: "Synthetic wake_event recorded in Den Channels; Gateway/bridge delivery, claim, complete, or fail evidence appears as follow-up channel/gateway events."));
         });
 
+        // -----------------------------------------------------------------------
+        // GET /api/gateway/assignments/{assignmentId}/trace
+        // Assignment trace aggregate: composes Core worker-pool state, Channels
+        // messages/activity, and Gateway delivery evidence for Den Web #1729/#1737.
+        // -----------------------------------------------------------------------
+        gw.MapGet("/assignments/{assignmentId}/trace", (
+            ChannelsRepository repository,
+            IWorkerPoolStateClient workerPoolClient,
+            string assignmentId,
+            string? projectId,
+            long? channelId,
+            CancellationToken cancellationToken) =>
+        {
+            return HandleAssignmentTraceAsync(
+                repository, workerPoolClient, assignmentId, projectId, channelId, cancellationToken);
+        });
+
         return gw;
     }
 
@@ -574,5 +593,248 @@ public static class GatewayRoutes
             parts.Add($"{label}: {text}");
     }
 
+    // -------------------------------------------------------------------------
+    // Assignment trace helpers
+    // -------------------------------------------------------------------------
+
+    private static AssignmentCoreStateDto? ComposeCoreState(WorkerPoolAssignmentTraceCoreDto? coreTrace)
+    {
+        if (coreTrace is null) return null;
+
+        var assignment = coreTrace.Assignment;
+        var responsesByCheckpoint = coreTrace.Responses
+            .GroupBy(r => r.CheckpointId)
+            .ToDictionary(g => g.Key, g => g.OrderBy(r => r.CreatedAt).FirstOrDefault());
+
+        var checkpoints = coreTrace.Checkpoints
+            .OrderBy(c => c.CreatedAt)
+            .Select((checkpoint, index) =>
+            {
+                responsesByCheckpoint.TryGetValue(checkpoint.Id, out var response);
+                return new AssignmentCheckpointDto(
+                    Sequence: index + 1,
+                    CheckpointRequestAt: checkpoint.CreatedAt?.ToString("O"),
+                    CheckpointResponseAt: response?.CreatedAt?.ToString("O"),
+                    Status: checkpoint.CheckpointType,
+                    SnapshotPreview: PreviewPayload(checkpoint.Payload),
+                    Error: IsFailureCheckpoint(checkpoint.CheckpointType) ? PreviewPayload(checkpoint.Payload) : null);
+            })
+            .ToList();
+
+        var isQuarantined = string.Equals(assignment.State, "quarantined", StringComparison.OrdinalIgnoreCase);
+        var cleanupRecorded = !string.IsNullOrWhiteSpace(assignment.CleanupEvidence);
+        var released = !string.IsNullOrWhiteSpace(assignment.ReleasedAt);
+        var terminal = string.Equals(assignment.State, "completed", StringComparison.OrdinalIgnoreCase)
+                       || string.Equals(assignment.State, "failed", StringComparison.OrdinalIgnoreCase)
+                       || string.Equals(assignment.State, "blocked", StringComparison.OrdinalIgnoreCase)
+                       || isQuarantined;
+
+        return new AssignmentCoreStateDto(
+            Phase: assignment.State,
+            AssignedAt: assignment.CreatedAt?.ToString("O"),
+            AssignedAgent: assignment.WorkerIdentity,
+            LeaseAcquiredAt: assignment.AcquiredAt,
+            LeaseExpiresAt: null,
+            Checkpoints: checkpoints.Count > 0 ? checkpoints : null,
+            FinalStatus: terminal ? assignment.State : null,
+            FinalStatusAt: terminal ? (assignment.ReleasedAt ?? assignment.UpdatedAt?.ToString("O")) : null,
+            CleanupState: cleanupRecorded ? "recorded" : null,
+            CleanupTriggeredAt: assignment.CleanupRecordedAt,
+            CleanupCompletedAt: assignment.CleanupRecordedAt,
+            ReleaseState: isQuarantined ? "quarantined" : released ? "released" : null,
+            Quarantined: isQuarantined,
+            QuarantinedAt: isQuarantined ? (assignment.ReleasedAt ?? assignment.UpdatedAt?.ToString("O")) : null);
+    }
+
+    private static bool IsFailureCheckpoint(string checkpointType) =>
+        checkpointType.Contains("fail", StringComparison.OrdinalIgnoreCase)
+        || checkpointType.Contains("error", StringComparison.OrdinalIgnoreCase);
+
+    private static string? PreviewPayload(string? payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload)) return null;
+        var normalized = payload.Replace("\r", " ").Replace("\n", " ").Trim();
+        return normalized.Length <= 240 ? normalized : normalized[..237] + "...";
+    }
+
+    private static AssignmentGatewayEvidenceDto? ExtractGatewayEvidence(
+        IReadOnlyList<ChannelMessageDto> messages, long channelId)
+    {
+        // Find the first message with delivery request ID and extract metadata.
+        var msgWithDelivery = messages.FirstOrDefault(m => !string.IsNullOrWhiteSpace(m.DeliveryRequestId));
+        if (msgWithDelivery is null)
+            return null;
+
+        string? deliveryStatus = null;
+        string? claimStatus = null;
+        string? completionStatus = null;
+        string? suppressionStatus = null;
+
+        if (!string.IsNullOrWhiteSpace(msgWithDelivery.MetadataJson))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(msgWithDelivery.MetadataJson);
+                deliveryStatus = TryGetString(doc.RootElement, "deliveryStatus");
+                claimStatus = TryGetString(doc.RootElement, "claimStatus");
+                completionStatus = TryGetString(doc.RootElement, "completionStatus");
+                suppressionStatus = TryGetString(doc.RootElement, "suppressionStatus");
+            }
+            catch (JsonException)
+            {
+                // Malformed metadata — ignore, keep nulls
+            }
+        }
+
+        var gatewayMessageUrl = $"/api/gateway/messages/{msgWithDelivery.Id}";
+        var gatewayEventsUrl = $"/api/gateway/events?channelId={channelId}&afterId={Math.Max(0, msgWithDelivery.Id - 1)}&limit=10";
+
+        var evidenceParts = new List<string>();
+        evidenceParts.Add($"deliveryRequestId: {msgWithDelivery.DeliveryRequestId}");
+        if (deliveryStatus is not null) evidenceParts.Add($"delivery: {deliveryStatus}");
+        if (claimStatus is not null) evidenceParts.Add($"claim: {claimStatus}");
+        if (completionStatus is not null) evidenceParts.Add($"completion: {completionStatus}");
+        if (suppressionStatus is not null) evidenceParts.Add($"suppression: {suppressionStatus}");
+
+        return new AssignmentGatewayEvidenceDto(
+            DeliveryRequestId: msgWithDelivery.DeliveryRequestId,
+            DeliveryStatus: deliveryStatus,
+            ClaimStatus: claimStatus,
+            CompletionStatus: completionStatus,
+            SuppressionStatus: suppressionStatus,
+            RequestedAt: msgWithDelivery.CreatedAt,
+            DeliveredAt: null,
+            ClaimedAt: null,
+            CompletedAt: null,
+            EvidenceSummary: string.Join(" · ", evidenceParts),
+            GatewayMessageUrl: gatewayMessageUrl,
+            GatewayEventsUrl: gatewayEventsUrl);
+    }
+
+    private static string? TryGetString(JsonElement element, string propertyName)
+    {
+        return element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+    }
+
     private sealed record GatewayErrorDto(string Code, string Detail);
+
+    // -------------------------------------------------------------------------
+    // Assignment trace aggregate handler (shared between Gateway and Channel routes)
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Handles GET /api/gateway/assignments/{assignmentId}/trace and the
+    /// Den Web alias at /api/assignments/{assignmentId}/trace.
+    /// Composes Core worker-pool evidence, Channels messages/activity, and
+    /// Gateway delivery evidence into a single trace response.
+    /// </summary>
+    public static async Task<IResult> HandleAssignmentTraceAsync(
+        ChannelsRepository repository,
+        IWorkerPoolStateClient workerPoolClient,
+        string assignmentId,
+        string? projectId,
+        long? channelId,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(projectId) && channelId is null)
+            return Results.BadRequest(new GatewayErrorDto("missing_parameter",
+                "Provide projectId or channelId."));
+
+        // Resolve channel for scoped database queries.
+        var channel = await ResolveChannelAsync(repository, channelId, projectId, cancellationToken);
+        if (channel is null)
+            return Results.NotFound(new GatewayErrorDto("channel_not_found",
+                "No channel found for the given projectId/channelId."));
+
+        var resolvedChannelId = channel.Id;
+        var resolvedProjectId = projectId ?? channel.ProjectId ?? string.Empty;
+
+        // -----------------------------------------------------------------------
+        // 1. Core worker-pool evidence
+        // -----------------------------------------------------------------------
+        var coreTrace = await workerPoolClient.FetchAssignmentTraceAsync(assignmentId, cancellationToken);
+        var coreStateDto = ComposeCoreState(coreTrace);
+        var coreAssignment = coreTrace?.Assignment;
+        var coreAvailability = coreTrace is null
+            ? TraceSourceAvailability.CoreUnavailable
+            : TraceSourceAvailability.Available;
+
+        // -----------------------------------------------------------------------
+        // 2. Channel messages tagged with this assignment
+        // -----------------------------------------------------------------------
+        var channelMessages = await repository.ListMessagesAsync(
+            resolvedChannelId, null, assignmentId, 200, cancellationToken);
+
+        string messagesAvailability = channelMessages.Count > 0
+            ? TraceSourceAvailability.Available
+            : TraceSourceAvailability.NoAssignmentMessages;
+
+        // -----------------------------------------------------------------------
+        // 3. Activity events tagged with this assignment
+        // -----------------------------------------------------------------------
+        var activityEvents = await repository.ListActivityEventsAsync(
+            resolvedChannelId, assignmentId: assignmentId, limit: 200, cancellationToken: cancellationToken);
+
+        string activityAvailability = activityEvents.Count > 0
+            ? TraceSourceAvailability.Available
+            : TraceSourceAvailability.NoActivityEvents;
+
+        // -----------------------------------------------------------------------
+        // 4. Gateway delivery evidence from message metadata
+        // -----------------------------------------------------------------------
+        var gatewayEvidence = ExtractGatewayEvidence(channelMessages, resolvedChannelId);
+
+        string gatewayAvailability = gatewayEvidence is not null
+            ? TraceSourceAvailability.Available
+            : channelMessages.Count > 0
+                ? TraceSourceAvailability.DeliveryMissing
+                : TraceSourceAvailability.NoAssignmentMessages;
+
+        // -----------------------------------------------------------------------
+        // 5. Summary
+        // -----------------------------------------------------------------------
+        var summaryParts = new List<string>();
+        summaryParts.Add($"Assignment {assignmentId}");
+
+        if (coreAssignment is not null)
+            summaryParts.Add($"member: {coreAssignment.WorkerIdentity}");
+
+        if (coreStateDto?.Phase is not null)
+            summaryParts.Add($"phase: {coreStateDto.Phase}");
+
+        if (channelMessages.Count > 0)
+            summaryParts.Add($"{channelMessages.Count} message(s)");
+        else
+            summaryParts.Add("no messages");
+
+        if (activityEvents.Count > 0)
+            summaryParts.Add($"{activityEvents.Count} activity event(s)");
+
+        var taskId = coreAssignment?.TaskId is not null
+            ? coreAssignment.TaskId.Value
+            : (long?)null;
+
+        var summary = string.Join(" · ", summaryParts);
+
+        return Results.Ok(new AssignmentTraceResponse(
+            AssignmentId: assignmentId,
+            ProjectId: coreAssignment?.ProjectId ?? resolvedProjectId,
+            ProjectName: null,
+            TaskId: taskId,
+            TaskTitle: null,
+            AgentIdentity: coreAssignment?.WorkerIdentity,
+            WorkerRunId: coreAssignment?.RunId,
+            WorkerRole: coreAssignment?.Role,
+            CoreAvailability: coreAvailability,
+            GatewayAvailability: gatewayAvailability,
+            MessagesAvailability: messagesAvailability,
+            ActivityAvailability: activityAvailability,
+            CoreState: coreStateDto,
+            GatewayEvidence: gatewayEvidence,
+            ChannelMessages: channelMessages.Cast<object>().ToList(),
+            ActivityEvents: activityEvents.Cast<object>().ToList(),
+            Summary: summary));
+    }
 }

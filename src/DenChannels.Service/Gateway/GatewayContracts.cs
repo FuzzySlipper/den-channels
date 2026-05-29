@@ -141,3 +141,86 @@ public sealed record PostGatewaySystemMessageRequest(
     string? MetadataJson,
     string? DeliveryRequestId,
     string? DedupeKey);
+
+// =========================================================================
+// Assignment trace aggregate (task #1737)
+// =========================================================================
+
+/// <summary>
+/// Source availability signals for assignment trace sections.
+/// </summary>
+public static class TraceSourceAvailability
+{
+    public const string Available = "available";
+    public const string CoreUnavailable = "core_unavailable";
+    public const string GatewayUnavailable = "gateway_unavailable";
+    public const string NoAssignmentMessages = "no_assignment_messages";
+    public const string NoActivityEvents = "no_activity_events";
+    public const string DeliveryMissing = "delivery_missing";
+    public const string Pending = "pending";
+}
+
+/// <summary>
+/// Aggregated assignment trace response composed from Core worker-pool state,
+/// Channels messages, and Gateway evidence (task #1737).
+/// Den Web consumer: https://github.com/nousresearch/den-web/blob/main/src/api/gateway/types.ts
+/// </summary>
+public sealed record AssignmentTraceResponse(
+    string AssignmentId,
+    string? ProjectId,
+    string? ProjectName,
+    long? TaskId,
+    string? TaskTitle,
+    string? AgentIdentity,
+    string? WorkerRunId,
+    string? WorkerRole,
+    string CoreAvailability,
+    string GatewayAvailability,
+    string MessagesAvailability,
+    string ActivityAvailability,
+    AssignmentCoreStateDto? CoreState,
+    AssignmentGatewayEvidenceDto? GatewayEvidence,
+    IReadOnlyList<object> ChannelMessages,
+    IReadOnlyList<object> ActivityEvents,
+    string? Summary);
+
+/// <summary>Core worker-pool assignment state projected for trace display.</summary>
+public sealed record AssignmentCoreStateDto(
+    string? Phase,
+    string? AssignedAt,
+    string? AssignedAgent,
+    string? LeaseAcquiredAt,
+    string? LeaseExpiresAt,
+    IReadOnlyList<AssignmentCheckpointDto>? Checkpoints,
+    string? FinalStatus,
+    string? FinalStatusAt,
+    string? CleanupState,
+    string? CleanupTriggeredAt,
+    string? CleanupCompletedAt,
+    string? ReleaseState,
+    bool Quarantined,
+    string? QuarantinedAt);
+
+/// <summary>A single checkpoint in the assignment lifecycle.</summary>
+public sealed record AssignmentCheckpointDto(
+    int Sequence,
+    string? CheckpointRequestAt,
+    string? CheckpointResponseAt,
+    string? Status,
+    string? SnapshotPreview,
+    string? Error);
+
+/// <summary>Gateway delivery evidence for the assignment trace.</summary>
+public sealed record AssignmentGatewayEvidenceDto(
+    string? DeliveryRequestId,
+    string? DeliveryStatus,
+    string? ClaimStatus,
+    string? CompletionStatus,
+    string? SuppressionStatus,
+    string? RequestedAt,
+    string? DeliveredAt,
+    string? ClaimedAt,
+    string? CompletedAt,
+    string? EvidenceSummary,
+    string? GatewayMessageUrl,
+    string? GatewayEventsUrl);

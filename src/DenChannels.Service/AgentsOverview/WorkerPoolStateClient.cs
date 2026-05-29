@@ -53,7 +53,53 @@ public interface IWorkerPoolStateClient
         string? projectId = null,
         string? agentIdentity = null,
         CancellationToken cancellationToken = default);
+
+    Task<WorkerPoolAssignmentTraceCoreDto?> FetchAssignmentTraceAsync(
+        string assignmentId,
+        CancellationToken cancellationToken = default);
 }
+
+/// <summary>
+/// Full Core worker-pool assignment evidence used by the Den Web assignment trace.
+/// </summary>
+public sealed record WorkerPoolAssignmentTraceCoreDto(
+    WorkerPoolAssignmentDetailDto Assignment,
+    IReadOnlyList<WorkerPoolCheckpointDetailDto> Checkpoints,
+    IReadOnlyList<WorkerPoolCheckpointResponseDetailDto> Responses);
+
+public sealed record WorkerPoolAssignmentDetailDto(
+    int Id,
+    string WorkerIdentity,
+    string RunId,
+    string ProjectId,
+    int? TaskId,
+    string Role,
+    string AssignedBy,
+    string State,
+    int? LatestCheckpointId,
+    string? CleanupEvidence,
+    string? CleanupRecordedAt,
+    string? AcquiredAt,
+    string? ReleasedAt,
+    DateTime? CreatedAt,
+    DateTime? UpdatedAt);
+
+public sealed record WorkerPoolCheckpointDetailDto(
+    int Id,
+    int AssignmentId,
+    string RunId,
+    string CheckpointType,
+    string Payload,
+    DateTime? CreatedAt);
+
+public sealed record WorkerPoolCheckpointResponseDetailDto(
+    int Id,
+    int CheckpointId,
+    int AssignmentId,
+    string RunId,
+    string ResponseType,
+    string Payload,
+    DateTime? CreatedAt);
 
 /// <summary>
 /// HTTP client for Core-owned worker-pool state. It uses only read endpoints
@@ -168,6 +214,103 @@ public sealed class WorkerPoolStateClient : IWorkerPoolStateClient
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         return await JsonSerializer.DeserializeAsync<T>(stream, JsonOptions, cancellationToken);
     }
+
+    /// <summary>
+    /// Fetch full Core assignment/checkpoint/response evidence for a single assignment.
+    /// Returns null on transport, timeout, disabled client, 404, or malformed JSON.
+    /// </summary>
+    public async Task<WorkerPoolAssignmentTraceCoreDto?> FetchAssignmentTraceAsync(
+        string assignmentId,
+        CancellationToken cancellationToken = default)
+    {
+        if (_workerPoolOptions.Disabled)
+        {
+            _logger.LogDebug("Worker-pool client is disabled via configuration; skipping assignment trace fetch.");
+            return null;
+        }
+
+        if (!int.TryParse(assignmentId, out var numericAssignmentId))
+            return null;
+
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(TimeSpan.FromSeconds(_workerPoolOptions.TimeoutSeconds));
+
+            _httpClient.BaseAddress ??= new Uri(_workerPoolOptions.BaseUrl);
+
+            var assignment = await GetJsonAsync<CoreWorkerAssignment>(
+                $"/api/worker-pool/assignments/{numericAssignmentId}", cts.Token);
+            if (assignment is null)
+                return null;
+
+            var checkpointsResponse = await GetJsonAsync<CoreWorkerCheckpointListResponse>(
+                $"/api/worker-pool/checkpoints?assignmentId={numericAssignmentId}&runId={Uri.EscapeDataString(assignment.RunId)}&limit=200",
+                cts.Token);
+            var responsesResponse = await GetJsonAsync<CoreWorkerCheckpointResponseListResponse>(
+                $"/api/worker-pool/responses/by-run/{Uri.EscapeDataString(assignment.RunId)}?limit=200",
+                cts.Token);
+
+            return new WorkerPoolAssignmentTraceCoreDto(
+                ToAssignmentDetail(assignment),
+                checkpointsResponse?.Checkpoints.Select(ToCheckpointDetail).ToList() ?? [],
+                responsesResponse?.Responses.Select(ToResponseDetail).ToList() ?? []);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("Core worker-pool assignment trace request timed out after {Timeout}s.", _workerPoolOptions.TimeoutSeconds);
+            return null;
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(ex, "Core worker-pool assignment trace request failed (HTTP transport error).");
+            return null;
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Core worker-pool assignment trace response could not be deserialized.");
+            return null;
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogWarning(ex, "Core worker-pool client is misconfigured for assignment trace.");
+            return null;
+        }
+    }
+
+    private static WorkerPoolAssignmentDetailDto ToAssignmentDetail(CoreWorkerAssignment assignment) => new(
+        assignment.Id,
+        assignment.WorkerIdentity,
+        assignment.RunId,
+        assignment.ProjectId,
+        assignment.TaskId,
+        assignment.Role,
+        assignment.AssignedBy,
+        assignment.State,
+        assignment.LatestCheckpointId,
+        assignment.CleanupEvidence,
+        assignment.CleanupRecordedAt,
+        assignment.AcquiredAt,
+        assignment.ReleasedAt,
+        assignment.CreatedAt,
+        assignment.UpdatedAt);
+
+    private static WorkerPoolCheckpointDetailDto ToCheckpointDetail(CoreWorkerCheckpoint checkpoint) => new(
+        checkpoint.Id,
+        checkpoint.AssignmentId,
+        checkpoint.RunId,
+        checkpoint.CheckpointType,
+        checkpoint.Payload,
+        checkpoint.CreatedAt);
+
+    private static WorkerPoolCheckpointResponseDetailDto ToResponseDetail(CoreWorkerCheckpointResponse response) => new(
+        response.Id,
+        response.CheckpointId,
+        response.AssignmentId,
+        response.RunId,
+        response.ResponseType,
+        response.Payload,
+        response.CreatedAt);
 
     private static WorkerPoolMemberStateDto ToWorkerPoolMemberState(
         CoreWorkerPoolMember member,
@@ -298,6 +441,14 @@ public sealed class WorkerPoolStateClient : IWorkerPoolStateClient
         [property: JsonPropertyName("assignments")] IReadOnlyList<CoreWorkerAssignment> Assignments,
         [property: JsonPropertyName("count")] int Count);
 
+    private sealed record CoreWorkerCheckpointListResponse(
+        [property: JsonPropertyName("checkpoints")] IReadOnlyList<CoreWorkerCheckpoint> Checkpoints,
+        [property: JsonPropertyName("count")] int Count);
+
+    private sealed record CoreWorkerCheckpointResponseListResponse(
+        [property: JsonPropertyName("responses")] IReadOnlyList<CoreWorkerCheckpointResponse> Responses,
+        [property: JsonPropertyName("count")] int Count);
+
     private sealed record CoreWorkerPoolMember(
         [property: JsonPropertyName("worker_identity")] string WorkerIdentity,
         [property: JsonPropertyName("display_name")] string? DisplayName,
@@ -324,4 +475,21 @@ public sealed class WorkerPoolStateClient : IWorkerPoolStateClient
         [property: JsonPropertyName("released_at")] string? ReleasedAt,
         [property: JsonPropertyName("created_at")] DateTime? CreatedAt,
         [property: JsonPropertyName("updated_at")] DateTime? UpdatedAt);
+
+    private sealed record CoreWorkerCheckpoint(
+        [property: JsonPropertyName("id")] int Id,
+        [property: JsonPropertyName("assignment_id")] int AssignmentId,
+        [property: JsonPropertyName("run_id")] string RunId,
+        [property: JsonPropertyName("checkpoint_type")] string CheckpointType,
+        [property: JsonPropertyName("payload")] string Payload,
+        [property: JsonPropertyName("created_at")] DateTime? CreatedAt);
+
+    private sealed record CoreWorkerCheckpointResponse(
+        [property: JsonPropertyName("id")] int Id,
+        [property: JsonPropertyName("checkpoint_id")] int CheckpointId,
+        [property: JsonPropertyName("assignment_id")] int AssignmentId,
+        [property: JsonPropertyName("run_id")] string RunId,
+        [property: JsonPropertyName("response_type")] string ResponseType,
+        [property: JsonPropertyName("payload")] string Payload,
+        [property: JsonPropertyName("created_at")] DateTime? CreatedAt);
 }

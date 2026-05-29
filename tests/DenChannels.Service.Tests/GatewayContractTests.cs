@@ -972,4 +972,250 @@ public sealed class GatewayContractTests : IDisposable
             };
         }
     }
+
+    // =========================================================================
+    // Assignment trace aggregate tests (#1737)
+    // =========================================================================
+
+    [Fact]
+    public async Task AssignmentTrace_ReturnsMessagesAndActivity_WhenAvailable()
+    {
+        // Arrange: create a channel and post a message with assignment metadata
+        var channel = await EnsureDefaultChannelAsync("trace-test-proj-1");
+        var assignmentId = "test-assignment-001";
+
+        // Post a direct-agent-style message with AssignmentId and DeliveryRequestId
+        var metadataJson = "{\"deliveryStatus\":\"recorded_pending_claim\",\"claimStatus\":\"unclaimed\",\"completionStatus\":\"pending\",\"suppressionStatus\":\"not_suppressed\"}";
+        var msg = await PostMessageAsync(channel.Id, new
+        {
+            senderType = "user",
+            senderIdentity = "test-user",
+            body = "Assignment trace test message",
+            messageKind = "human_text",
+            sourceKind = "wake_event",
+            sourceId = $"test-wake:{assignmentId}",
+            sourceProjectId = "trace-test-proj-1",
+            assignmentId,
+            deliveryRequestId = $"delivery:{assignmentId}",
+            metadataJson
+        });
+
+        // Act
+        var trace = await _client.GetFromJsonAsync<AssignmentTracePayload>(
+            $"/api/gateway/assignments/{assignmentId}/trace?projectId=trace-test-proj-1");
+
+        // Assert
+        Assert.NotNull(trace);
+        Assert.Equal(assignmentId, trace.AssignmentId);
+        Assert.Equal("trace-test-proj-1", trace.ProjectId);
+        Assert.NotEmpty(trace.ChannelMessages);
+        Assert.Equal("available", trace.MessagesAvailability);
+
+        // Should have the posted message
+        var traceMsg = Assert.Single(trace.ChannelMessages);
+        Assert.Equal(msg.Body, traceMsg.Body);
+
+        // Gateway evidence should be extracted from metadata
+        Assert.NotNull(trace.GatewayEvidence);
+        Assert.Equal($"delivery:{assignmentId}", trace.GatewayEvidence.DeliveryRequestId);
+        Assert.Equal("recorded_pending_claim", trace.GatewayEvidence.DeliveryStatus);
+        Assert.Equal("unclaimed", trace.GatewayEvidence.ClaimStatus);
+        Assert.Equal("pending", trace.GatewayEvidence.CompletionStatus);
+        Assert.Contains("delivery:", trace.GatewayEvidence.EvidenceSummary ?? "");
+
+        // Core is unavailable in test environment
+        Assert.Equal("core_unavailable", trace.CoreAvailability);
+        Assert.Null(trace.CoreState);
+
+        // Summary should be present
+        Assert.NotNull(trace.Summary);
+        Assert.Contains(assignmentId, trace.Summary);
+        Assert.Contains("message(s)", trace.Summary);
+    }
+
+    [Fact]
+    public async Task AssignmentTrace_ReturnsNoAssignmentMessages_WhenNoMatchingMessages()
+    {
+        // Arrange
+        await EnsureDefaultChannelAsync("trace-test-proj-empty");
+
+        // Act
+        var trace = await _client.GetFromJsonAsync<AssignmentTracePayload>(
+            "/api/gateway/assignments/nonexistent-42/trace?projectId=trace-test-proj-empty");
+
+        // Assert
+        Assert.NotNull(trace);
+        Assert.Equal("nonexistent-42", trace.AssignmentId);
+        Assert.Equal("no_assignment_messages", trace.MessagesAvailability);
+        Assert.Equal("no_activity_events", trace.ActivityAvailability);
+        Assert.Empty(trace.ChannelMessages);
+        Assert.Empty(trace.ActivityEvents);
+        Assert.Null(trace.GatewayEvidence);
+        Assert.Equal("no_assignment_messages", trace.GatewayAvailability);
+        Assert.NotNull(trace.Summary);
+        Assert.Contains("no messages", trace.Summary);
+    }
+
+    [Fact]
+    public async Task AssignmentTrace_ReturnsBadRequest_WhenMissingProjectIdAndChannelId()
+    {
+        using var response = await _client.GetAsync("/api/gateway/assignments/test-1/trace");
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AssignmentTrace_WorksViaDenWebAliasPath()
+    {
+        // The Den Web path alias should also work
+        var channel = await EnsureDefaultChannelAsync("trace-alias-proj");
+        var assignmentId = "alias-test-002";
+        await PostMessageAsync(channel.Id, new
+        {
+            senderType = "user",
+            senderIdentity = "test-user",
+            body = "Alias path test",
+            messageKind = "human_text",
+            assignmentId
+        });
+
+        var trace = await _client.GetFromJsonAsync<AssignmentTracePayload>(
+            $"/api/assignments/{assignmentId}/trace?projectId=trace-alias-proj");
+
+        Assert.NotNull(trace);
+        Assert.Equal(assignmentId, trace.AssignmentId);
+        Assert.NotEmpty(trace.ChannelMessages);
+    }
+
+    [Fact]
+    public async Task AssignmentTrace_DeliveryMissing_WhenMessagesExistWithoutDeliveryRequestId()
+    {
+        var channel = await EnsureDefaultChannelAsync("trace-no-delivery-proj");
+        var assignmentId = "no-delivery-assignment";
+        await PostMessageAsync(channel.Id, new
+        {
+            senderType = "user",
+            senderIdentity = "test-user",
+            body = "Message without delivery tracking",
+            messageKind = "human_text",
+            assignmentId
+            // No deliveryRequestId
+        });
+
+        var trace = await _client.GetFromJsonAsync<AssignmentTracePayload>(
+            $"/api/gateway/assignments/{assignmentId}/trace?projectId=trace-no-delivery-proj");
+
+        Assert.NotNull(trace);
+        Assert.Equal("available", trace.MessagesAvailability);
+        Assert.Equal("delivery_missing", trace.GatewayAvailability);
+        Assert.Null(trace.GatewayEvidence);
+    }
+
+    // ---- Assignment trace local payload records ----
+
+    private sealed record AssignmentTracePayload(
+        string AssignmentId,
+        string? ProjectId,
+        string? ProjectName,
+        long? TaskId,
+        string? TaskTitle,
+        string? AgentIdentity,
+        string? WorkerRunId,
+        string? WorkerRole,
+        string CoreAvailability,
+        string GatewayAvailability,
+        string MessagesAvailability,
+        string ActivityAvailability,
+        AssignmentCoreStatePayload? CoreState,
+        AssignmentGatewayEvidencePayload? GatewayEvidence,
+        List<MessagePayload> ChannelMessages,
+        List<ActivityEventPayload> ActivityEvents,
+        string? Summary);
+
+    private sealed record AssignmentCoreStatePayload(
+        string? Phase,
+        string? AssignedAt,
+        string? AssignedAgent,
+        string? LeaseAcquiredAt,
+        string? LeaseExpiresAt,
+        List<AssignmentCheckpointPayload>? Checkpoints,
+        string? FinalStatus,
+        string? FinalStatusAt,
+        string? CleanupState,
+        string? CleanupTriggeredAt,
+        string? CleanupCompletedAt,
+        string? ReleaseState,
+        bool Quarantined,
+        string? QuarantinedAt);
+
+    private sealed record AssignmentCheckpointPayload(
+        int Sequence,
+        string? CheckpointRequestAt,
+        string? CheckpointResponseAt,
+        string? Status,
+        string? SnapshotPreview,
+        string? Error);
+
+    private sealed record AssignmentGatewayEvidencePayload(
+        string? DeliveryRequestId,
+        string? DeliveryStatus,
+        string? ClaimStatus,
+        string? CompletionStatus,
+        string? SuppressionStatus,
+        string? RequestedAt,
+        string? DeliveredAt,
+        string? ClaimedAt,
+        string? CompletedAt,
+        string? EvidenceSummary,
+        string? GatewayMessageUrl,
+        string? GatewayEventsUrl);
+
+    private sealed record MessagePayload(
+        long Id,
+        long ChannelId,
+        string SenderType,
+        string SenderIdentity,
+        string Body,
+        string MessageKind,
+        string? SourceKind,
+        string? SourceId,
+        string? SourceProjectId,
+        string? Summary,
+        string? DeepLink,
+        string? DeliveryRequestId,
+        string? DedupeKey,
+        string? AssignmentId,
+        string? CheckpointType,
+        string? CheckpointHandle,
+        string CreatedAt,
+        string? EditedAt,
+        string? DeletedAt);
+
+    private sealed record ActivityEventPayload(
+        long Id,
+        long ChannelId,
+        string? ProjectId,
+        string AgentIdentity,
+        string? DeliveryRequestId,
+        string? HermesSessionKey,
+        string? DisplayBlockId,
+        string? WorkerRunId,
+        string? WorkerRole,
+        long? TaskId,
+        string? AssignmentId,
+        string? CheckpointType,
+        string? CheckpointHandle,
+        string EventType,
+        string Status,
+        string DeliveryStage,
+        bool Terminal,
+        long Sequence,
+        long UpdateVersion,
+        string? Title,
+        string? Summary,
+        string? PreviewJson,
+        string? MetadataJson,
+        string? DedupeKey,
+        long? FinalChannelMessageId,
+        string CreatedAt,
+        string UpdatedAt);
 }

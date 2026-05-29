@@ -450,6 +450,70 @@ public sealed class WorkerPoolOverviewTests : IDisposable
     }
 
     [Fact]
+    public async Task WorkerPoolStateClient_FetchAssignmentTrace_ComposesAssignmentCheckpointsAndResponses()
+    {
+        using var httpClient = new HttpClient(new WorkerPoolCoreStubHandler(req =>
+        {
+            if (req.RequestUri?.PathAndQuery == "/api/worker-pool/assignments/42")
+                return """
+                {
+                  "id": 42,
+                  "worker_identity": "core-worker",
+                  "run_id": "run-42",
+                  "project_id": "den-channels",
+                  "task_id": 1737,
+                  "role": "coder",
+                  "assigned_by": "den-mcp-runner",
+                  "state": "completed",
+                  "latest_checkpoint_id": 101,
+                  "cleanup_evidence": "{\"scratch_cleanup\":true}",
+                  "cleanup_recorded_at": "2026-05-29 13:52:46",
+                  "acquired_at": "2026-05-29 13:50:00",
+                  "released_at": "2026-05-29 13:53:00",
+                  "created_at": "2026-05-29T13:50:00Z",
+                  "updated_at": "2026-05-29T13:53:00Z"
+                }
+                """;
+            if (req.RequestUri?.PathAndQuery == "/api/worker-pool/checkpoints?assignmentId=42&runId=run-42&limit=200")
+                return """
+                {
+                  "checkpoints": [
+                    { "id": 100, "assignment_id": 42, "run_id": "run-42", "checkpoint_type": "progress", "payload": "{\"type\":\"ack\"}", "created_at": "2026-05-29T13:51:00Z" },
+                    { "id": 101, "assignment_id": 42, "run_id": "run-42", "checkpoint_type": "completion", "payload": "{\"status\":\"completed\"}", "created_at": "2026-05-29T13:52:00Z" }
+                  ],
+                  "count": 2
+                }
+                """;
+            if (req.RequestUri?.PathAndQuery == "/api/worker-pool/responses/by-run/run-42?limit=200")
+                return """
+                {
+                  "responses": [
+                    { "id": 200, "checkpoint_id": 100, "assignment_id": 42, "run_id": "run-42", "response_type": "ack", "payload": "{\"verdict\":\"approved\"}", "created_at": "2026-05-29T13:51:10Z" }
+                  ],
+                  "count": 1
+                }
+                """;
+            return null;
+        }));
+        var options = Options.Create(new DenChannelsOptions
+        {
+            WorkerPool = new WorkerPoolOptions { Disabled = false, BaseUrl = "http://core.invalid" }
+        });
+        var client = new WorkerPoolStateClient(httpClient, options, NullLogger<WorkerPoolStateClient>.Instance);
+
+        var trace = await client.FetchAssignmentTraceAsync("42");
+
+        Assert.NotNull(trace);
+        Assert.Equal(42, trace.Assignment.Id);
+        Assert.Equal("completed", trace.Assignment.State);
+        Assert.Equal("run-42", trace.Assignment.RunId);
+        Assert.Equal(2, trace.Checkpoints.Count);
+        Assert.Equal("progress", trace.Checkpoints[0].CheckpointType);
+        Assert.Single(trace.Responses);
+        Assert.Equal(100, trace.Responses[0].CheckpointId);
+    }
+
+    [Fact]
     public async Task WorkerPoolStateClient_UsesCoreCleanupPendingProjectionForTerminalUnreleasedAssignment()
     {
         using var httpClient = new HttpClient(new WorkerPoolCoreStubHandler(req =>

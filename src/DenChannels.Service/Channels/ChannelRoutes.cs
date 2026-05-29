@@ -8,6 +8,24 @@ public static class ChannelRoutes
     {
         var api = endpoints.MapGroup("/api");
 
+        // -----------------------------------------------------------------------
+        // GET /api/assignments/{assignmentId}/trace
+        // Alias for Gateway assignment trace. Den Web #1729 calls this path;
+        // the canonical implementation lives in GatewayRoutes under /api/gateway.
+        // -----------------------------------------------------------------------
+        api.MapGet("/assignments/{assignmentId}/trace", async (
+            ChannelsRepository repository,
+            AgentsOverview.IWorkerPoolStateClient workerPoolClient,
+            string assignmentId,
+            string? projectId,
+            long? channelId,
+            CancellationToken cancellationToken) =>
+        {
+            // Delegate to the same handler
+            return await Gateway.GatewayRoutes.HandleAssignmentTraceAsync(
+                repository, workerPoolClient, assignmentId, projectId, channelId, cancellationToken);
+        });
+
         api.MapGet("/channels", async (ChannelsRepository repository, string? projectId, string? kind, int? limit,
             CancellationToken cancellationToken) => Results.Ok(await repository.ListChannelsAsync(
                 projectId, kind, limit ?? 100, cancellationToken)));
