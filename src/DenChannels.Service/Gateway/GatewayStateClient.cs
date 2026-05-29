@@ -92,18 +92,31 @@ public sealed class GatewayStateClient
         }
 
         var boundedTimeoutMs = Math.Clamp(timeoutMs ?? 1500, 0, 5000);
+        if (boundedTimeoutMs == 0)
+        {
+            return DirectAgentDeliveryObservation.Timeout(
+                $"Direct agent wake_event recorded; no time allotted for Gateway {target} wait.");
+        }
+
         var deadline = DateTimeOffset.UtcNow.AddMilliseconds(boundedTimeoutMs);
         DirectAgentDeliveryObservation latest = DirectAgentDeliveryObservation.RecordedPending();
 
         do
         {
-            var state = await FetchGatewayStateAsync(projectId, memberIdentity, cancellationToken);
+            using var perAttemptCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var remainingForAttempt = deadline - DateTimeOffset.UtcNow;
+            if (remainingForAttempt <= TimeSpan.Zero)
+                break;
+            perAttemptCts.CancelAfter(remainingForAttempt);
+
+            var state = await FetchGatewayStateAsync(projectId, memberIdentity, perAttemptCts.Token);
             latest = GatewayDirectAgentDeliveryStatus.FromGatewayState(state, requestId);
             if (latest.GatewayUnavailable || GatewayDirectAgentDeliveryStatus.MeetsWaitTarget(latest, target))
+            {
+                if (latest.GatewayUnavailable && DateTimeOffset.UtcNow >= deadline)
+                    break;
                 return latest;
-
-            if (boundedTimeoutMs == 0)
-                break;
+            }
 
             var remaining = deadline - DateTimeOffset.UtcNow;
             if (remaining <= TimeSpan.Zero)

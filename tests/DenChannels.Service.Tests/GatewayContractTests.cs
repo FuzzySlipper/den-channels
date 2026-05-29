@@ -1,9 +1,13 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using DenChannels.Service.AgentsOverview;
+using DenChannels.Service.Configuration;
 using DenChannels.Service.Gateway;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace DenChannels.Service.Tests;
 
@@ -712,6 +716,53 @@ public sealed class GatewayContractTests : IDisposable
         Assert.Equal("pending", observation.CompletionStatus);
     }
 
+    [Fact]
+    public async Task GatewayDirectAgentStatus_WaitHonorsCallerTimeoutForSlowGateway()
+    {
+        using var httpClient = new HttpClient(new SlowGatewayHandler(TimeSpan.FromSeconds(5)));
+        var options = Options.Create(new DenChannelsOptions
+        {
+            Gateway = new GatewayOptions
+            {
+                BaseUrl = "http://gateway.invalid",
+                TimeoutSeconds = 5
+            }
+        });
+        var client = new GatewayStateClient(httpClient, options, NullLogger<GatewayStateClient>.Instance);
+        var stopwatch = Stopwatch.StartNew();
+
+        var observation = await client.WaitForDirectAgentDeliveryStatusAsync(
+            "voxelforge",
+            "voxelforge-runner",
+            "direct-agent-message:16:voxelforge-runner:5",
+            "claim",
+            100,
+            CancellationToken.None);
+
+        stopwatch.Stop();
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1), $"Elapsed {stopwatch.Elapsed} exceeded caller timeout bound.");
+        Assert.Equal("recorded_but_not_claimed_yet", observation.DeliveryStatus);
+        Assert.True(observation.TimedOut);
+    }
+
+    [Fact]
+    public void GatewayDirectAgentStatus_TerminalStatesSatisfyAckWait()
+    {
+        var failed = GatewayDirectAgentDeliveryStatus.FromGatewayState(
+            BuildGatewayState("direct-agent-message:16:voxelforge-runner:6", "failed", 46, 10),
+            "direct-agent-message:16:voxelforge-runner:6");
+        var expired = GatewayDirectAgentDeliveryStatus.FromGatewayState(
+            BuildGatewayState("direct-agent-message:16:voxelforge-runner:7", "expired", 47, null),
+            "direct-agent-message:16:voxelforge-runner:7");
+        var suppressed = GatewayDirectAgentDeliveryStatus.FromGatewayState(
+            BuildGatewayState("direct-agent-message:16:voxelforge-runner:8", "suppressed", 48, null),
+            "direct-agent-message:16:voxelforge-runner:8");
+
+        Assert.True(GatewayDirectAgentDeliveryStatus.MeetsWaitTarget(failed, "ack"));
+        Assert.True(GatewayDirectAgentDeliveryStatus.MeetsWaitTarget(expired, "ack"));
+        Assert.True(GatewayDirectAgentDeliveryStatus.MeetsWaitTarget(suppressed, "ack"));
+    }
+
     // -------------------------------------------------------------------------
     // Existing APIs still work
     // -------------------------------------------------------------------------
@@ -905,4 +956,20 @@ public sealed class GatewayContractTests : IDisposable
         string? Summary,
         string Body,
         string CreatedAt);
+
+    private sealed class SlowGatewayHandler(TimeSpan delay) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            await Task.Delay(delay, cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(BuildGatewayState(
+                    "direct-agent-message:16:voxelforge-runner:5",
+                    "delivering",
+                    45,
+                    9))
+            };
+        }
+    }
 }

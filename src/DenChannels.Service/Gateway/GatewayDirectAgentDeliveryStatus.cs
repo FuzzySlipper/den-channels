@@ -114,7 +114,7 @@ public static class GatewayDirectAgentDeliveryStatus
         {
             "none" => true,
             "claim" => observation.ClaimStatus == "claimed" || IsTerminal(observation.CompletionStatus) || observation.DeliveryStatus is "claimed" or "received" or "acknowledged" or "completed",
-            "ack" => observation.DeliveryStatus is "acknowledged" or "completed" || observation.CompletionStatus == "completed",
+            "ack" => observation.DeliveryStatus is "acknowledged" or "completed" || IsTerminal(observation.CompletionStatus),
             "completion" => IsTerminal(observation.CompletionStatus),
             _ => false
         };
