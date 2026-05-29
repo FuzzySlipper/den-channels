@@ -500,7 +500,6 @@ public sealed class AgentsOverviewService
         IReadOnlyList<GatewayDeliveryDto>? gatewayDeliveries,
         IReadOnlyList<ChannelActivityEventDto> activityEvents)
     {
-        var liveDeliveryIds = FindLiveDeliveryIds(activityEvents);
         var deliveries = (gatewayDeliveries ?? []).ToList();
 
         // Check activity first: any non-terminal activity means agent is actively working

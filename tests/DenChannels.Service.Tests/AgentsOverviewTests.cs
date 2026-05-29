@@ -857,11 +857,11 @@ public sealed class AgentsOverviewTests : IDisposable
     }
 
     [Fact]
-    public async Task AgentsOverview_StaleDebtFlag_AppearsWithOldStuckDeliveries()
+    public async Task AgentsOverview_RecentActivityWithoutGateway_ShowsActiveWorkState()
     {
         // Integration test: with Gateway disabled, we use includeGateway=false to simulate
         // an agent that has activity without Gateway. The agent should still have correct workState.
-        // For full Gateway integration, we test via pure unit tests above.
+        // Full stale-debt flag/count behavior is covered by pure unit tests above.
 
         var channel = await EnsureDefaultChannelAsync("ao-stale-proj");
         await UpsertMembershipAsync(channel.Id, new
