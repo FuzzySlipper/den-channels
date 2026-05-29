@@ -660,55 +660,90 @@ public static class GatewayRoutes
     private static AssignmentGatewayEvidenceDto? ExtractGatewayEvidence(
         IReadOnlyList<ChannelMessageDto> messages, long channelId)
     {
-        // Find the first message with delivery request ID and extract metadata.
-        var msgWithDelivery = messages.FirstOrDefault(m => !string.IsNullOrWhiteSpace(m.DeliveryRequestId));
-        if (msgWithDelivery is null)
-            return null;
-
-        string? deliveryStatus = null;
-        string? claimStatus = null;
-        string? completionStatus = null;
-        string? suppressionStatus = null;
-
-        if (!string.IsNullOrWhiteSpace(msgWithDelivery.MetadataJson))
+        // Direct-agent wake messages may not have a formal delivery_request_id yet,
+        // but their metadata contains the Gateway requestId and status fields. Treat
+        // that as Gateway evidence so Den Web can distinguish "recorded pending"
+        // from true delivery_missing.
+        foreach (var message in messages)
         {
-            try
+            var metadata = TryReadGatewayMetadata(message.MetadataJson);
+            var deliveryRequestId = !string.IsNullOrWhiteSpace(message.DeliveryRequestId)
+                ? message.DeliveryRequestId
+                : metadata.RequestId;
+            if (string.IsNullOrWhiteSpace(deliveryRequestId)
+                && metadata.DeliveryStatus is null
+                && metadata.ClaimStatus is null
+                && metadata.CompletionStatus is null
+                && metadata.SuppressionStatus is null)
             {
-                using var doc = JsonDocument.Parse(msgWithDelivery.MetadataJson);
-                deliveryStatus = TryGetString(doc.RootElement, "deliveryStatus");
-                claimStatus = TryGetString(doc.RootElement, "claimStatus");
-                completionStatus = TryGetString(doc.RootElement, "completionStatus");
-                suppressionStatus = TryGetString(doc.RootElement, "suppressionStatus");
+                continue;
             }
-            catch (JsonException)
-            {
-                // Malformed metadata — ignore, keep nulls
-            }
+
+            var gatewayMessageUrl = $"/api/gateway/messages/{message.Id}";
+            var gatewayEventsUrl = metadata.GatewayEventsUrl
+                                   ?? $"/api/gateway/events?channelId={channelId}&afterId={Math.Max(0, message.Id - 1)}&limit=10";
+
+            var evidenceParts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(deliveryRequestId)) evidenceParts.Add($"deliveryRequestId: {deliveryRequestId}");
+            if (metadata.DeliveryStatus is not null) evidenceParts.Add($"delivery: {metadata.DeliveryStatus}");
+            if (metadata.ClaimStatus is not null) evidenceParts.Add($"claim: {metadata.ClaimStatus}");
+            if (metadata.CompletionStatus is not null) evidenceParts.Add($"completion: {metadata.CompletionStatus}");
+            if (metadata.SuppressionStatus is not null) evidenceParts.Add($"suppression: {metadata.SuppressionStatus}");
+
+            return new AssignmentGatewayEvidenceDto(
+                DeliveryRequestId: deliveryRequestId,
+                DeliveryStatus: metadata.DeliveryStatus,
+                ClaimStatus: metadata.ClaimStatus,
+                CompletionStatus: metadata.CompletionStatus,
+                SuppressionStatus: metadata.SuppressionStatus,
+                RequestedAt: message.CreatedAt,
+                DeliveredAt: null,
+                ClaimedAt: null,
+                CompletedAt: null,
+                EvidenceSummary: evidenceParts.Count > 0 ? string.Join(" · ", evidenceParts) : null,
+                GatewayMessageUrl: gatewayMessageUrl,
+                GatewayEventsUrl: gatewayEventsUrl);
         }
 
-        var gatewayMessageUrl = $"/api/gateway/messages/{msgWithDelivery.Id}";
-        var gatewayEventsUrl = $"/api/gateway/events?channelId={channelId}&afterId={Math.Max(0, msgWithDelivery.Id - 1)}&limit=10";
+        return null;
+    }
 
-        var evidenceParts = new List<string>();
-        evidenceParts.Add($"deliveryRequestId: {msgWithDelivery.DeliveryRequestId}");
-        if (deliveryStatus is not null) evidenceParts.Add($"delivery: {deliveryStatus}");
-        if (claimStatus is not null) evidenceParts.Add($"claim: {claimStatus}");
-        if (completionStatus is not null) evidenceParts.Add($"completion: {completionStatus}");
-        if (suppressionStatus is not null) evidenceParts.Add($"suppression: {suppressionStatus}");
+    private sealed record GatewayMetadata(
+        string? RequestId,
+        string? DeliveryStatus,
+        string? ClaimStatus,
+        string? CompletionStatus,
+        string? SuppressionStatus,
+        string? GatewayEventsUrl);
 
-        return new AssignmentGatewayEvidenceDto(
-            DeliveryRequestId: msgWithDelivery.DeliveryRequestId,
-            DeliveryStatus: deliveryStatus,
-            ClaimStatus: claimStatus,
-            CompletionStatus: completionStatus,
-            SuppressionStatus: suppressionStatus,
-            RequestedAt: msgWithDelivery.CreatedAt,
-            DeliveredAt: null,
-            ClaimedAt: null,
-            CompletedAt: null,
-            EvidenceSummary: string.Join(" · ", evidenceParts),
-            GatewayMessageUrl: gatewayMessageUrl,
-            GatewayEventsUrl: gatewayEventsUrl);
+    private static GatewayMetadata TryReadGatewayMetadata(string? metadataJson)
+    {
+        if (string.IsNullOrWhiteSpace(metadataJson))
+            return new GatewayMetadata(null, null, null, null, null, null);
+
+        try
+        {
+            using var doc = JsonDocument.Parse(metadataJson);
+            var root = doc.RootElement;
+            string? gatewayEventsUrl = null;
+            if (root.TryGetProperty("evidence", out var evidence)
+                && evidence.ValueKind == JsonValueKind.Object)
+            {
+                gatewayEventsUrl = TryGetString(evidence, "gatewayEventsUrl");
+            }
+
+            return new GatewayMetadata(
+                TryGetString(root, "requestId"),
+                TryGetString(root, "deliveryStatus"),
+                TryGetString(root, "claimStatus"),
+                TryGetString(root, "completionStatus"),
+                TryGetString(root, "suppressionStatus"),
+                gatewayEventsUrl);
+        }
+        catch (JsonException)
+        {
+            return new GatewayMetadata(null, null, null, null, null, null);
+        }
     }
 
     private static string? TryGetString(JsonElement element, string propertyName)

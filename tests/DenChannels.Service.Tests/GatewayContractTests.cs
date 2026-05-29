@@ -1110,6 +1110,43 @@ public sealed class GatewayContractTests : IDisposable
         Assert.Null(trace.GatewayEvidence);
     }
 
+    [Fact]
+    public async Task AssignmentTrace_UsesDirectAgentMetadataRequestId_WhenDeliveryRequestIdMissing()
+    {
+        var channel = await EnsureDefaultChannelAsync("trace-direct-agent-metadata-proj");
+        var assignmentId = "direct-agent-metadata-assignment";
+        var requestId = $"direct-agent-message:{channel.Id}:worker:{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+        await PostMessageAsync(channel.Id, new
+        {
+            senderType = "user",
+            senderIdentity = "test-user",
+            body = "Direct-agent wake metadata without deliveryRequestId",
+            messageKind = "human_text",
+            assignmentId,
+            metadataJson = $$"""
+            {
+              "requestId": "{{requestId}}",
+              "deliveryStatus": "recorded_pending_claim",
+              "claimStatus": "unclaimed",
+              "completionStatus": "pending",
+              "suppressionStatus": "not_suppressed",
+              "evidence": { "gatewayEventsUrl": "/api/gateway/events?channelId={{channel.Id}}&afterId=0&limit=50" }
+            }
+            """
+        });
+
+        var trace = await _client.GetFromJsonAsync<AssignmentTracePayload>(
+            $"/api/gateway/assignments/{assignmentId}/trace?projectId=trace-direct-agent-metadata-proj");
+
+        Assert.NotNull(trace);
+        Assert.Equal("available", trace.MessagesAvailability);
+        Assert.Equal("available", trace.GatewayAvailability);
+        Assert.NotNull(trace.GatewayEvidence);
+        Assert.Equal(requestId, trace.GatewayEvidence.DeliveryRequestId);
+        Assert.Equal("recorded_pending_claim", trace.GatewayEvidence.DeliveryStatus);
+        Assert.Equal($"/api/gateway/events?channelId={channel.Id}&afterId=0&limit=50", trace.GatewayEvidence.GatewayEventsUrl);
+    }
+
     // ---- Assignment trace local payload records ----
 
     private sealed record AssignmentTracePayload(
