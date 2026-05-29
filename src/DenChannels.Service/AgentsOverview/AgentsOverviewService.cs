@@ -12,13 +12,16 @@ public sealed class AgentsOverviewService
 {
     private readonly ChannelsRepository _repository;
     private readonly GatewayStateClient _gatewayClient;
+    private readonly IWorkerPoolStateClient _workerPoolClient;
     private readonly ILogger<AgentsOverviewService> _logger;
 
     public AgentsOverviewService(ChannelsRepository repository, GatewayStateClient gatewayClient,
+        IWorkerPoolStateClient workerPoolClient,
         ILogger<AgentsOverviewService> logger)
     {
         _repository = repository;
         _gatewayClient = gatewayClient;
+        _workerPoolClient = workerPoolClient;
         _logger = logger;
     }
 
@@ -43,6 +46,14 @@ public sealed class AgentsOverviewService
                 ? new SourceServiceStatusDto("available")
                 : new SourceServiceStatusDto("unavailable", "Gateway state endpoint did not respond. Only Channels data is available.");
         }
+
+        // 1b. Fetch Worker-pool state (best-effort, always fetched independently)
+        WorkerPoolStateDto? workerPoolState = null;
+        SourceServiceStatusDto? workerPoolHealth = null;
+        workerPoolState = await _workerPoolClient.FetchWorkersAsync(effectiveProjectId, agentIdentity, cancellationToken);
+        workerPoolHealth = workerPoolState is not null
+            ? new SourceServiceStatusDto("available")
+            : new SourceServiceStatusDto("unavailable", "Core worker-pool endpoint did not respond. Workers shown without pool assignment state.");
 
         var channelsHealth = new SourceServiceStatusDto("available");
 
@@ -93,6 +104,14 @@ public sealed class AgentsOverviewService
             .GroupBy(a => a.AgentIdentity!)
             .ToDictionary(g => g.Key, g => g.ToList());
 
+        // 9b. Build Worker-pool member lookup
+        var workerPoolMembers = (workerPoolState?.Members ?? [])
+            .Where(m => !string.IsNullOrWhiteSpace(m.MemberIdentity))
+            .ToList();
+        var workerPoolByIdentity = workerPoolMembers
+            .GroupBy(m => m.MemberIdentity!)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
         // 10. Collect all unique agent identities
         var allAgentIdentities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var m in allMemberships)
@@ -103,6 +122,11 @@ public sealed class AgentsOverviewService
         {
             if (!string.IsNullOrWhiteSpace(g.AgentIdentity))
                 allAgentIdentities.Add(g.AgentIdentity);
+        }
+        foreach (var w in workerPoolMembers)
+        {
+            if (!string.IsNullOrWhiteSpace(w.MemberIdentity))
+                allAgentIdentities.Add(w.MemberIdentity);
         }
 
         // 11. Build overview items
@@ -265,16 +289,37 @@ public sealed class AgentsOverviewService
                 bindingOverviews.Count > 0 ? $"/api/gateway/agent-overview/gateway-state" : null,
                 activityEvents.Count > 0 ? $"/api/channels?agentIdentity={encodedIdentity}&activity=true" : null);
 
+            // Compose worker-pool state (if available)
+            WorkerPoolMemberDto? workerPoolStateDto = null;
+            WorkerPoolAssignmentDto? workerPoolAssignmentDto = null;
+            AssignmentTraceHandlesDto? traceHandles = null;
+            if (workerPoolByIdentity.TryGetValue(identity, out var workerPoolMember))
+            {
+                (workerPoolStateDto, workerPoolAssignmentDto, traceHandles) = ComposeWorkerPoolProjection(
+                    workerPoolMember,
+                    scopedDeliveries,
+                    memberships,
+                    channelId,
+                    flags);
+            }
+            else if (workerPoolState is not null)
+            {
+                flags.Add("worker_pool_orphaned");
+            }
+
             items.Add(new AgentOverviewItem(
                 identity, operatorStatus, workState, severity, summaries,
                 flags, links,
                 membershipOverviews.Count > 0 ? membershipOverviews : null,
                 bindingOverviews.Count > 0 ? bindingOverviews : null,
                 deliverySummaries.Count > 0 ? deliverySummaries : null,
-                recentActivityDtos.Count > 0 ? recentActivityDtos : null));
+                recentActivityDtos.Count > 0 ? recentActivityDtos : null,
+                WorkerPoolState: workerPoolStateDto,
+                CurrentAssignment: workerPoolAssignmentDto,
+                AssignmentTrace: traceHandles));
         }
 
-        var sourceHealth = new SourceHealthDto(channelsHealth, gatewayHealth);
+        var sourceHealth = new SourceHealthDto(channelsHealth, gatewayHealth, workerPoolHealth);
 
         return new AgentsOverviewResponse(items, items.Count, sourceHealth);
     }
@@ -296,6 +341,14 @@ public sealed class AgentsOverviewService
             : new SourceServiceStatusDto("unavailable", "Gateway state endpoint did not respond.");
 
         var channelsHealth = new SourceServiceStatusDto("available");
+
+        // 1b. Fetch Worker-pool state (best-effort)
+        WorkerPoolStateDto? workerPoolState = null;
+        SourceServiceStatusDto? workerPoolHealth = null;
+        workerPoolState = await _workerPoolClient.FetchWorkersAsync(projectId, agentIdentity, cancellationToken);
+        workerPoolHealth = workerPoolState is not null
+            ? new SourceServiceStatusDto("available")
+            : new SourceServiceStatusDto("unavailable", "Core worker-pool endpoint did not respond.");
 
         // 2. Fetch memberships for this agent
         var memberships = await _repository.ListMembershipsForOverviewAsync(
@@ -458,7 +511,31 @@ public sealed class AgentsOverviewService
             detailSeverity,
             staleDebtCountDetail);
 
-        var sourceHealth = new SourceHealthDto(channelsHealth, gatewayHealth);
+        var sourceHealth = new SourceHealthDto(channelsHealth, gatewayHealth, workerPoolHealth);
+
+        // Compose worker-pool state for this agent
+        WorkerPoolMemberDto? detailWorkerPoolState = null;
+        WorkerPoolAssignmentDto? detailWorkerPoolAssignment = null;
+        AssignmentTraceHandlesDto? detailTraceHandles = null;
+        if (workerPoolState?.Members is not null)
+        {
+            var workerPoolMember = workerPoolState.Members
+                .FirstOrDefault(m => string.Equals(m.MemberIdentity, agentIdentity, StringComparison.OrdinalIgnoreCase));
+
+            if (workerPoolMember is not null)
+            {
+                (detailWorkerPoolState, detailWorkerPoolAssignment, detailTraceHandles) = ComposeWorkerPoolProjection(
+                    workerPoolMember,
+                    scopedDetailDeliveries,
+                    memberships,
+                    channelId,
+                    flags);
+            }
+            else
+            {
+                flags.Add("worker_pool_orphaned");
+            }
+        }
 
         return new AgentDetailResponse(
             agentIdentity,
@@ -470,12 +547,105 @@ public sealed class AgentsOverviewService
             taskAssociations.Count > 0 ? taskAssociations : null,
             summary,
             flags,
-            sourceHealth);
+            sourceHealth,
+            WorkerPoolState: detailWorkerPoolState,
+            CurrentAssignment: detailWorkerPoolAssignment,
+            AssignmentTrace: detailTraceHandles);
     }
 
     // =========================================================================
     // Helpers
     // =========================================================================
+
+    private static (WorkerPoolMemberDto Member, WorkerPoolAssignmentDto? Assignment, AssignmentTraceHandlesDto? Trace)
+        ComposeWorkerPoolProjection(
+            WorkerPoolMemberStateDto workerPoolMember,
+            IReadOnlyList<GatewayDeliveryDto> scopedDeliveries,
+            IReadOnlyList<ChannelMembershipDto> memberships,
+            long? channelId,
+            List<string> flags)
+    {
+        var currentAssignment = workerPoolMember.CurrentAssignment;
+        var workerPoolAssignmentDto = currentAssignment is not null
+            ? new WorkerPoolAssignmentDto(
+                currentAssignment.AssignmentId,
+                currentAssignment.TaskId,
+                currentAssignment.ProjectId,
+                currentAssignment.LeaseOwner,
+                currentAssignment.LeaseExpiresAt,
+                currentAssignment.Phase,
+                currentAssignment.CheckpointType,
+                currentAssignment.CheckpointHandle,
+                currentAssignment.LastCheckpointAt)
+            : null;
+
+        var workerPoolStateDto = new WorkerPoolMemberDto(
+            workerPoolMember.MemberIdentity,
+            workerPoolMember.Role,
+            workerPoolMember.ToolProfile,
+            workerPoolMember.Availability,
+            workerPoolMember.LastActivityAt,
+            workerPoolAssignmentDto,
+            workerPoolMember.Flags);
+
+        AddWorkerPoolFlags(workerPoolMember, scopedDeliveries, flags);
+
+        var traceChannelId = channelId ?? memberships.FirstOrDefault()?.ChannelId;
+        var traceHandles = new AssignmentTraceHandlesDto(
+            currentAssignment?.AssignmentId,
+            traceChannelId,
+            RepresentativeMessageId: null,
+            ActivityHandle: currentAssignment?.AssignmentId is not null
+                ? $"/api/assignments/{currentAssignment.AssignmentId}/transcript"
+                : null,
+            DeliveryHandle: scopedDeliveries.FirstOrDefault(d => !d.Terminal)?.DeliveryId);
+
+        return (workerPoolStateDto, workerPoolAssignmentDto, traceHandles);
+    }
+
+    private static void AddWorkerPoolFlags(
+        WorkerPoolMemberStateDto workerPoolMember,
+        IReadOnlyList<GatewayDeliveryDto> scopedDeliveries,
+        List<string> flags)
+    {
+        var availability = workerPoolMember.Availability ?? string.Empty;
+        if (string.Equals(availability, "leased", StringComparison.OrdinalIgnoreCase))
+            AddFlag(flags, "worker_pool_leased");
+        else if (string.Equals(availability, "quarantined", StringComparison.OrdinalIgnoreCase))
+            AddFlag(flags, "worker_pool_quarantined");
+        else if (string.Equals(availability, "draining", StringComparison.OrdinalIgnoreCase))
+            AddFlag(flags, "worker_pool_draining");
+        else if (string.Equals(availability, "offline", StringComparison.OrdinalIgnoreCase))
+            AddFlag(flags, "worker_pool_offline");
+
+        if (workerPoolMember.Flags is not null)
+        {
+            foreach (var flag in workerPoolMember.Flags)
+                AddFlag(flags, flag);
+        }
+
+        // Source disagreement is a visible mismatch between Core lease state and
+        // Gateway delivery evidence; absence of Gateway delivery evidence alone is
+        // not enough to call disagreement.
+        if (string.Equals(availability, "leased", StringComparison.OrdinalIgnoreCase) &&
+            scopedDeliveries.Count > 0 &&
+            scopedDeliveries.All(d => d.Terminal))
+        {
+            AddFlag(flags, "source_disagreement");
+        }
+
+        if (workerPoolMember.CurrentAssignment?.Phase is not null &&
+            string.Equals(workerPoolMember.CurrentAssignment.Phase, "cleanup_pending", StringComparison.OrdinalIgnoreCase))
+        {
+            AddFlag(flags, "cleanup_pending");
+        }
+    }
+
+    private static void AddFlag(List<string> flags, string flag)
+    {
+        if (!flags.Contains(flag, StringComparer.OrdinalIgnoreCase))
+            flags.Add(flag);
+    }
 
     /// <summary>
     /// Find delivery request IDs that have recent non-terminal activity events,

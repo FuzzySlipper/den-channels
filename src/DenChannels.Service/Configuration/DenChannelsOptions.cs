@@ -10,6 +10,8 @@ public sealed class DenChannelsOptions
 
     public GatewayOptions Gateway { get; init; } = new();
 
+    public WorkerPoolOptions WorkerPool { get; init; } = new();
+
     public ServiceAuthOptions ServiceAuth { get; init; } = new();
 }
 
@@ -79,4 +81,23 @@ public sealed class ServiceAuthOptions
     /// Prefer environment/user-secrets for the value; do not commit real tokens.
     /// </summary>
     public string? ServiceToken { get; init; }
+}
+
+public sealed class WorkerPoolOptions
+{
+    /// <summary>
+    /// Base URL for the Den Core worker-pool API.
+    /// </summary>
+    public string BaseUrl { get; init; } = "http://127.0.0.1:5299";
+
+    /// <summary>
+    /// HTTP timeout in seconds for worker-pool API calls.
+    /// </summary>
+    public int TimeoutSeconds { get; init; } = 5;
+
+    /// <summary>
+    /// When true, the worker-pool is assumed unavailable.
+    /// Useful for offline/dev scenarios without a running Core worker-pool endpoint.
+    /// </summary>
+    public bool Disabled { get; init; } = true;
 }

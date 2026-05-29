@@ -28,6 +28,10 @@ builder.Services.AddHttpClient<GatewayStateClient>(client =>
 {
     // Base address is set per-request in the client; this just registers DI
 });
+builder.Services.AddHttpClient<IWorkerPoolStateClient, WorkerPoolStateClient>(client =>
+{
+    // Base address is set per-request in the client; this just registers DI
+});
 builder.Services.AddSingleton<AgentsOverviewService>();
 
 var app = builder.Build();

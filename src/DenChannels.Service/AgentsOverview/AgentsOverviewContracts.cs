@@ -133,7 +133,8 @@ public sealed record AgentsOverviewResponse(
 
 public sealed record SourceHealthDto(
     SourceServiceStatusDto? Channels,
-    SourceServiceStatusDto? Gateway);
+    SourceServiceStatusDto? Gateway,
+    SourceServiceStatusDto? WorkerPool = null);
 
 public sealed record SourceServiceStatusDto(
     string Status,
@@ -150,7 +151,10 @@ public sealed record AgentOverviewItem(
     IReadOnlyList<ChannelMembershipOverviewDto>? Memberships,
     IReadOnlyList<GatewayBindingOverviewDto>? Bindings,
     IReadOnlyList<DeliveryOverviewDto>? DeliverySummaries,
-    IReadOnlyList<ActivityEventOverviewDto>? RecentActivity);
+    IReadOnlyList<ActivityEventOverviewDto>? RecentActivity,
+    WorkerPoolMemberDto? WorkerPoolState = null,
+    WorkerPoolAssignmentDto? CurrentAssignment = null,
+    AssignmentTraceHandlesDto? AssignmentTrace = null);
 
 public sealed record AgentSummaryDto(
     int ChannelCount,
@@ -230,7 +234,10 @@ public sealed record AgentDetailResponse(
     IReadOnlyList<TaskAssociationDto>? TaskAssociations,
     AgentSummaryDto? Summary,
     IReadOnlyList<string> Flags,
-    SourceHealthDto SourceHealth);
+    SourceHealthDto SourceHealth,
+    WorkerPoolMemberDto? WorkerPoolState = null,
+    WorkerPoolAssignmentDto? CurrentAssignment = null,
+    AssignmentTraceHandlesDto? AssignmentTrace = null);
 
 public sealed record TaskAssociationDto(
     long? TaskId,
@@ -239,3 +246,46 @@ public sealed record TaskAssociationDto(
     string? Status,
     int ActivityCount,
     string? LatestActivityAt);
+
+// =========================================================================
+// Worker-pool state projection (consumed from Core worker-pool API #1722)
+// =========================================================================
+
+/// <summary>
+/// Core worker-pool member canonical state. This is the authoritative source
+/// for availability, lease state, and quarantine. Read-only projection only.
+/// </summary>
+public sealed record WorkerPoolMemberDto(
+    string? MemberIdentity,
+    string? Role,
+    string? ToolProfile,
+    string? Availability,
+    string? LastActivityAt,
+    WorkerPoolAssignmentDto? CurrentAssignment,
+    IReadOnlyList<string>? Flags);
+
+/// <summary>
+/// Current assignment on a worker-pool member. Derived from Core lease/checkpoint state.
+/// Phase reflects: waiting / running / blocked / completed / cleanup_pending.
+/// </summary>
+public sealed record WorkerPoolAssignmentDto(
+    string? AssignmentId,
+    string? TaskId,
+    string? ProjectId,
+    string? LeaseOwner,
+    string? LeaseExpiresAt,
+    string? Phase,
+    string? CheckpointType,
+    string? CheckpointHandle,
+    string? LastCheckpointAt);
+
+/// <summary>
+/// Trace handles for Den Web #1729 linking the overview row/detail to
+/// the assignment transcript, channel activity, and delivery evidence.
+/// </summary>
+public sealed record AssignmentTraceHandlesDto(
+    string? AssignmentId,
+    long? ChannelId,
+    string? RepresentativeMessageId,
+    string? ActivityHandle,
+    string? DeliveryHandle);
