@@ -123,12 +123,31 @@ public sealed class AgentsOverviewService
             var latestMembership = memberships.MaxBy(m => m.UpdatedAt);
             var operatorStatus = latestMembership?.MembershipStatus ?? "unknown";
 
-            // Prefer Gateway's authoritative delivery lifecycle state when present;
-            // fall back to activity-event status when Gateway is unavailable or has no row.
+            // Combine Gateway delivery evidence and activity events to derive live work state.
+            // Recent non-terminal activity overrides stale Gateway stuck state.
+            // Stale delivery debt remains visible via flags and counts.
+            var scopedDeliveries = gatewayEntries
+                .SelectMany(g => ScopedGatewayDeliveries(g, effectiveProjectId, channelId))
+                .ToList();
             var (activityWorkState, activitySeverity) = DeriveWorkStateAndSeverity(activityEvents);
-            var gatewayWorkState = gatewayEntries.Select(g => ScopedGatewayDeliveryState(g, effectiveProjectId, channelId)).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
-            var workState = gatewayWorkState ?? activityWorkState;
-            var severity = DeriveSeverity(workState, activitySeverity);
+
+            // Use combined derivation when Gateway data exists; fall back to activity-only
+            string workState;
+            string? severity;
+            if (scopedDeliveries.Count > 0)
+            {
+                (workState, severity) = DeriveWorkStateFromGatewayAndActivity(scopedDeliveries, activityEvents);
+            }
+            else
+            {
+                workState = activityWorkState ?? "idle";
+                severity = DeriveSeverity(workState, activitySeverity);
+            }
+
+            // Detect stale gateway delivery debt
+            var hasStaleDebt = HasStaleGatewayDebt(scopedDeliveries, activityEvents);
+            var staleDebtCount = CountStaleGatewayDebt(scopedDeliveries, activityEvents);
+            if (hasStaleDebt) flags.Add("stale_delivery_debt");
 
             // Build membership overview DTOs
             var membershipOverviews = memberships
@@ -161,11 +180,30 @@ public sealed class AgentsOverviewService
 
             // Build delivery summaries from Gateway. Keep delivered and completed distinct:
             // delivered is non-terminal/current; completed is terminal/recent.
+            // Mark deliveries as stale when they have no recent activity.
+            var liveDeliveryIds = FindLiveDeliveryIds(activityEvents);
             var deliverySummaries = gatewayEntries
                 .SelectMany(g => ScopedGatewayDeliveries(g, effectiveProjectId, channelId))
-                .Select(ToDeliveryOverview)
+                .Select(d =>
+                {
+                    var baseDto = ToDeliveryOverview(d);
+                    var isStale = !d.Terminal && !liveDeliveryIds.Contains(d.RequestId ?? string.Empty);
+                    return new DeliveryOverviewDto(
+                        DeliveryRequestId: baseDto.DeliveryRequestId,
+                        State: baseDto.State,
+                        Status: baseDto.Status,
+                        Terminal: baseDto.Terminal,
+                        CreatedAt: baseDto.CreatedAt,
+                        UpdatedAt: baseDto.UpdatedAt,
+                        Summary: baseDto.Summary,
+                        IsStale: isStale);
+                })
+                // Sort: live deliveries first, then stale ones
+                .OrderBy(d => d.IsStale)
+                .ThenByDescending(d => d.CreatedAt)
                 .ToList();
 
+            // Fallback: if Gateway has summary-level but no detail-level deliveries
             if (deliverySummaries.Count == 0)
             {
                 deliverySummaries = gatewayEntries
@@ -216,7 +254,8 @@ public sealed class AgentsOverviewService
                 gatewayEntries.Sum(g => ActiveGatewayDeliveryCount(g, effectiveProjectId, channelId)),
                 activityEvents.Count,
                 activityEvents.Count > 0 ? activityEvents.Max(a => a.CreatedAt) : null,
-                severity);
+                severity,
+                staleDebtCount);
 
             // Build links
             var encodedIdentity = Uri.EscapeDataString(identity);
@@ -319,12 +358,28 @@ public sealed class AgentsOverviewService
                 g.AdapterInstances))
             .ToList();
 
-        // 10. Build current/recent deliveries from Gateway
+        // 10. Build current/recent deliveries from Gateway, marked with staleness
+        var liveDeliveryIdsDetail = FindLiveDeliveryIds(activityEvents);
         var currentDeliveries = gatewayEntries
             .Where(g => g.CurrentDeliveries is not null)
             .SelectMany(g => g.CurrentDeliveries!.Where(d => GatewayDeliveryMatchesScope(d, projectId, channelId)))
             .Take(deliveryLimit)
-            .Select(ToDeliveryOverview)
+            .Select(d =>
+            {
+                var baseDetail = ToDeliveryOverview(d);
+                var isStale = !d.Terminal && !liveDeliveryIdsDetail.Contains(d.RequestId ?? string.Empty);
+                return new DeliveryOverviewDto(
+                    DeliveryRequestId: baseDetail.DeliveryRequestId,
+                    State: baseDetail.State,
+                    Status: baseDetail.Status,
+                    Terminal: baseDetail.Terminal,
+                    CreatedAt: baseDetail.CreatedAt,
+                    UpdatedAt: baseDetail.UpdatedAt,
+                    Summary: baseDetail.Summary,
+                    IsStale: isStale);
+            })
+            .OrderBy(d => d.IsStale)
+            .ThenByDescending(d => d.CreatedAt)
             .ToList();
 
         var recentDeliveries = gatewayEntries
@@ -344,8 +399,17 @@ public sealed class AgentsOverviewService
                 a.Summary, a.CreatedAt, a.UpdatedAt))
             .ToList();
 
-        // 12. Build task associations
-        var taskAssociations = taskEvents
+        // 12. Build task associations from both dedicated task events and recent activity
+        //     that carries task/run context
+        var activityWithTaskContext = activityEvents
+            .Where(a => a.TaskId.HasValue)
+            .ToList();
+        var allTaskEvents = taskEvents
+            .Concat(activityWithTaskContext)
+            .GroupBy(a => a.Id) // dedupe by activity event ID
+            .Select(g => g.First())
+            .ToList();
+        var taskAssociations = allTaskEvents
             .GroupBy(a => (a.TaskId, a.ProjectId))
             .Select(g =>
             {
@@ -363,18 +427,36 @@ public sealed class AgentsOverviewService
             .OrderByDescending(t => t.LatestActivityAt)
             .ToList();
 
-        // 13. Build summary
-        var (activityWorkState, activitySeverity) = DeriveWorkStateAndSeverity(activityEvents);
-        var gatewayWorkState = gatewayEntries.Select(g => ScopedGatewayDeliveryState(g, projectId, channelId)).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s));
-        var workState = gatewayWorkState ?? activityWorkState;
-        var severity = DeriveSeverity(workState, activitySeverity);
+        // 13. Build summary - combine Gateway and activity evidence
+        var scopedDetailDeliveries = gatewayEntries
+            .SelectMany(g => ScopedGatewayDeliveries(g, projectId, channelId))
+            .ToList();
+        var (activityDetailWorkState, activityDetailSeverity) = DeriveWorkStateAndSeverity(activityEvents);
+
+        string detailWorkState;
+        string? detailSeverity;
+        if (scopedDetailDeliveries.Count > 0)
+        {
+            (detailWorkState, detailSeverity) = DeriveWorkStateFromGatewayAndActivity(scopedDetailDeliveries, activityEvents);
+        }
+        else
+        {
+            detailWorkState = activityDetailWorkState ?? "idle";
+            detailSeverity = DeriveSeverity(detailWorkState, activityDetailSeverity);
+        }
+
+        var staleDebtCountDetail = CountStaleGatewayDebt(scopedDetailDeliveries, activityEvents);
+        var hasStaleDebtDetail = HasStaleGatewayDebt(scopedDetailDeliveries, activityEvents);
+        if (hasStaleDebtDetail) flags.Add("stale_delivery_debt");
+
         var summary = new AgentSummaryDto(
             memberships.Count,
             memberships.Count(m => m.MembershipStatus == "active"),
             gatewayEntries.Sum(g => ActiveGatewayDeliveryCount(g, projectId, channelId)),
             activityEvents.Count,
             activityEvents.Count > 0 ? activityEvents.Max(a => a.CreatedAt) : null,
-            severity);
+            detailSeverity,
+            staleDebtCountDetail);
 
         var sourceHealth = new SourceHealthDto(channelsHealth, gatewayHealth);
 
@@ -394,6 +476,97 @@ public sealed class AgentsOverviewService
     // =========================================================================
     // Helpers
     // =========================================================================
+
+    /// <summary>
+    /// Find delivery request IDs that have recent non-terminal activity events,
+    /// indicating the delivery is live/current rather than stale debt.
+    /// </summary>
+    private static HashSet<string> FindLiveDeliveryIds(
+        IReadOnlyList<ChannelActivityEventDto> activityEvents)
+    {
+        return activityEvents
+            .Where(a => !string.IsNullOrWhiteSpace(a.DeliveryRequestId))
+            .Where(a => !a.Terminal || a.EventType != "noop")
+            .Select(a => a.DeliveryRequestId!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Combine Gateway delivery evidence and Channels activity events to derive
+    /// the live agent work state. Activity events indicate current liveness;
+    /// old Gateway stuck deliveries without recent activity are stale debt.
+    /// </summary>
+    private static (string WorkState, string? Severity) DeriveWorkStateFromGatewayAndActivity(
+        IReadOnlyList<GatewayDeliveryDto>? gatewayDeliveries,
+        IReadOnlyList<ChannelActivityEventDto> activityEvents)
+    {
+        var liveDeliveryIds = FindLiveDeliveryIds(activityEvents);
+        var deliveries = (gatewayDeliveries ?? []).ToList();
+
+        // Check activity first: any non-terminal activity means agent is actively working
+        var hasNonTerminalActivity = activityEvents.Any(a => !a.Terminal);
+        if (hasNonTerminalActivity)
+            return ("active", "info");
+
+        // Check if any Gateway delivery with "stuck" flag has NO recent activity → stale debt
+        var gatewayHasStuck = deliveries.Any(d => d.Flags?.Contains("stuck") == true);
+        var gatewayHasActiveNonTerminal = deliveries.Any(d => !d.Terminal && d.Status != "completed" && d.Status != "expired");
+
+        // If all activity is terminal and no stuck Gateway deliveries → derive from activity
+        if (!gatewayHasStuck && !gatewayHasActiveNonTerminal)
+        {
+            var (activityState, activitySeverity) = DeriveWorkStateAndSeverity(activityEvents);
+            return (activityState ?? "idle", activitySeverity);
+        }
+
+        // If there are stuck deliveries but all recent activity is terminal,
+        // the stuck state from Gateway is the real state
+        if (gatewayHasStuck)
+            return ("stuck", "error");
+
+        // Remaining active Gateway deliveries without activity
+        if (gatewayHasActiveNonTerminal)
+            return ("delivering", "info");
+
+        // Fallback to activity-derived state
+        var (fallbackState, fallbackSeverity) = DeriveWorkStateAndSeverity(activityEvents);
+        return (fallbackState ?? "idle", fallbackSeverity);
+    }
+
+    /// <summary>
+    /// Determine if there are stale Gateway delivery debt entries that should be flagged.
+    /// An entry is stale if it is non-terminal or stuck, and has no recent associated activity.
+    /// </summary>
+    private static bool HasStaleGatewayDebt(
+        IReadOnlyList<GatewayDeliveryDto>? gatewayDeliveries,
+        IReadOnlyList<ChannelActivityEventDto> activityEvents)
+    {
+        if (gatewayDeliveries is null || gatewayDeliveries.Count == 0)
+            return false;
+
+        var liveDeliveryIds = FindLiveDeliveryIds(activityEvents);
+
+        return gatewayDeliveries.Any(d =>
+            (!d.Terminal || d.Flags?.Contains("stuck") == true) &&
+            !liveDeliveryIds.Contains(d.RequestId ?? string.Empty));
+    }
+
+    /// <summary>
+    /// Count stale Gateway delivery debt entries.
+    /// </summary>
+    private static int CountStaleGatewayDebt(
+        IReadOnlyList<GatewayDeliveryDto>? gatewayDeliveries,
+        IReadOnlyList<ChannelActivityEventDto> activityEvents)
+    {
+        if (gatewayDeliveries is null || gatewayDeliveries.Count == 0)
+            return 0;
+
+        var liveDeliveryIds = FindLiveDeliveryIds(activityEvents);
+
+        return gatewayDeliveries.Count(d =>
+            (!d.Terminal || d.Flags?.Contains("stuck") == true) &&
+            !liveDeliveryIds.Contains(d.RequestId ?? string.Empty));
+    }
 
     /// <summary>
     /// Derive workState and severity from activity events.
@@ -549,4 +722,26 @@ public sealed class AgentsOverviewService
         if (!string.IsNullOrWhiteSpace(text))
             parts.Add($"{propertyName}: {text}");
     }
+
+    // =========================================================================
+    // Test-friendly public wrappers for static helpers
+    // =========================================================================
+
+    public static HashSet<string> FindLiveDeliveryIdsForTest(IReadOnlyList<ChannelActivityEventDto> activityEvents)
+        => FindLiveDeliveryIds(activityEvents);
+
+    public static (string WorkState, string? Severity) DeriveWorkStateFromGatewayForTest(
+        IReadOnlyList<GatewayDeliveryDto>? gatewayDeliveries,
+        IReadOnlyList<ChannelActivityEventDto> activityEvents)
+        => DeriveWorkStateFromGatewayAndActivity(gatewayDeliveries, activityEvents);
+
+    public static bool HasStaleGatewayDebtForTest(
+        IReadOnlyList<GatewayDeliveryDto>? gatewayDeliveries,
+        IReadOnlyList<ChannelActivityEventDto> activityEvents)
+        => HasStaleGatewayDebt(gatewayDeliveries, activityEvents);
+
+    public static int CountStaleGatewayDebtForTest(
+        IReadOnlyList<GatewayDeliveryDto>? gatewayDeliveries,
+        IReadOnlyList<ChannelActivityEventDto> activityEvents)
+        => CountStaleGatewayDebt(gatewayDeliveries, activityEvents);
 }

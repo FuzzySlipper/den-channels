@@ -158,7 +158,8 @@ public sealed record AgentSummaryDto(
     int ActiveDeliveryCount,
     int RecentActivityCount,
     string? LatestActivityAt,
-    string? HighestSeverity);
+    string? HighestSeverity,
+    int StaleDeliveryCount = 0);
 
 public sealed record AgentLinksDto(
     string? Self,
@@ -192,7 +193,8 @@ public sealed record DeliveryOverviewDto(
     bool Terminal,
     string? CreatedAt,
     string? UpdatedAt,
-    string? Summary);
+    string? Summary,
+    bool IsStale = false);
 
 public sealed record ActivityEventOverviewDto(
     long Id,

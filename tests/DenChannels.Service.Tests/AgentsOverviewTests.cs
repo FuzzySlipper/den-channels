@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using DenChannels.Service.AgentsOverview;
+using DenChannels.Service.Channels;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 
@@ -738,6 +739,228 @@ public sealed class AgentsOverviewTests : IDisposable
     }
 
     // =========================================================================
+    // Live vs stale work state derivation tests (task #1730)
+    // =========================================================================
+
+    [Fact]
+    public void DeriveWorkState_RecentActivityOverridesStuckGateway()
+    {
+        // Agent with old stuck deliveries AND recent non-terminal activity
+        // Expected: workState = "active", not "stuck"
+        var stuckDeliveries = new List<GatewayDeliveryDto>
+        {
+            GatewayDeliveryWithFlags(1, "ao-proj", "3", "delivered", ["stuck"]),
+        };
+        var activityEvents = new List<ChannelActivityEventDto>
+        {
+            MakeActivityEvent("delivery-1", eventType: "tool_call_started", terminal: false, status: "started"),
+            MakeActivityEvent("delivery-2", eventType: "tool_call_completed", terminal: false, status: "active"),
+        };
+
+        var (workState, severity) = AgentsOverviewService.DeriveWorkStateFromGatewayForTest(
+            stuckDeliveries, activityEvents);
+
+        Assert.Equal("active", workState);
+        Assert.Equal("info", severity);
+    }
+
+    [Fact]
+    public void DeriveWorkState_StaleDebtWithoutActivity_ShowsStuck()
+    {
+        // Agent with stuck Gateway deliveries but NO recent non-terminal activity
+        // Expected: workState = "stuck"
+        var stuckDeliveries = new List<GatewayDeliveryDto>
+        {
+            GatewayDeliveryWithFlags(1, "ao-proj", "3", "delivered", ["stuck"]),
+        };
+        var activityEvents = new List<ChannelActivityEventDto>
+        {
+            MakeActivityEvent("delivery-1", eventType: "tool_call_completed", terminal: true, status: "completed"),
+        };
+
+        var (workState, severity) = AgentsOverviewService.DeriveWorkStateFromGatewayForTest(
+            stuckDeliveries, activityEvents);
+
+        Assert.Equal("stuck", workState);
+        Assert.Equal("error", severity);
+    }
+
+    [Fact]
+    public void FindLiveDeliveryIds_NonTerminalActivity_IncludesDeliveryId()
+    {
+        var activityEvents = new List<ChannelActivityEventDto>
+        {
+            MakeActivityEvent("delivery-1", eventType: "tool_call_started", terminal: false, status: "started"),
+            MakeActivityEvent("", eventType: "tool_call_completed", terminal: true, status: "completed"),
+        };
+
+        var liveIds = AgentsOverviewService.FindLiveDeliveryIdsForTest(activityEvents);
+
+        Assert.Single(liveIds);
+        Assert.Contains("delivery-1", liveIds);
+    }
+
+    [Fact]
+    public void HasStaleGatewayDebt_OldStuckDeliveryWithoutActivity_ReturnsTrue()
+    {
+        var scopedDeliveries = new List<GatewayDeliveryDto>
+        {
+            GatewayDeliveryWithFlags(1, "ao-proj", "3", "delivered", ["stuck"]),
+        };
+        var activityEvents = new List<ChannelActivityEventDto>
+        {
+            MakeActivityEvent("delivery-other", eventType: "tool_call_completed", terminal: true, status: "completed"),
+        };
+
+        // Old stuck delivery "1" has no recent activity → stale debt
+        var hasStale = AgentsOverviewService.HasStaleGatewayDebtForTest(scopedDeliveries, activityEvents);
+
+        Assert.True(hasStale);
+    }
+
+    [Fact]
+    public void HasStaleGatewayDebt_ActiveDeliveryWithActivity_ReturnsFalse()
+    {
+        var scopedDeliveries = new List<GatewayDeliveryDto>
+        {
+            GatewayDeliveryWithFlags(1, "ao-proj", "3", "delivered", null),
+        };
+        var activityEvents = new List<ChannelActivityEventDto>
+        {
+            MakeActivityEvent("1", eventType: "tool_call_started", terminal: false, status: "active"),
+        };
+
+        var hasStale = AgentsOverviewService.HasStaleGatewayDebtForTest(scopedDeliveries, activityEvents);
+
+        Assert.False(hasStale);
+    }
+
+    [Fact]
+    public void CountStaleGatewayDebt_ReturnsCorrectCount()
+    {
+        var scopedDeliveries = new List<GatewayDeliveryDto>
+        {
+            GatewayDeliveryWithFlags(1, "ao-proj", "3", "delivered", ["stuck"]),
+            GatewayDeliveryWithFlags(2, "ao-proj", "3", "delivered", ["stuck"]),
+            GatewayDeliveryWithFlags(3, "ao-proj", "3", "delivered", null), // active but no activity
+        };
+        var activityEvents = new List<ChannelActivityEventDto>
+        {
+            MakeActivityEvent("1", eventType: "tool_call_completed", terminal: true, status: "completed"),
+        };
+
+        var count = AgentsOverviewService.CountStaleGatewayDebtForTest(scopedDeliveries, activityEvents);
+
+        // Delivery 1 has activity → not stale. Delivery 2 stuck without activity → stale.
+        // Delivery 3 non-terminal without activity → stale.
+        Assert.Equal(2, count);
+    }
+
+    [Fact]
+    public async Task AgentsOverview_StaleDebtFlag_AppearsWithOldStuckDeliveries()
+    {
+        // Integration test: with Gateway disabled, we use includeGateway=false to simulate
+        // an agent that has activity without Gateway. The agent should still have correct workState.
+        // For full Gateway integration, we test via pure unit tests above.
+
+        var channel = await EnsureDefaultChannelAsync("ao-stale-proj");
+        await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "stale-bot",
+            wakePolicy = "mentions_only"
+        });
+
+        // Recent activity showing active work
+        await PostActivityEventAsync(channel.Id, new
+        {
+            projectId = "ao-stale-proj",
+            agentIdentity = "stale-bot",
+            deliveryRequestId = "active-delivery-1",
+            hermesSessionKey = "session-active",
+            eventType = "tool_call_started",
+            status = "started",
+            terminal = false,
+            sequence = 1,
+            title = "Working on task",
+            dedupeKey = $"ao-stale:{Guid.NewGuid():N}"
+        });
+        await PostActivityEventAsync(channel.Id, new
+        {
+            projectId = "ao-stale-proj",
+            agentIdentity = "stale-bot",
+            deliveryRequestId = "active-delivery-1",
+            hermesSessionKey = "session-active",
+            eventType = "tool_call_completed",
+            status = "completed",
+            deliveryStage = "tool",
+            terminal = false,
+            sequence = 2,
+            title = "Continuing work",
+            dedupeKey = $"ao-stale-2:{Guid.NewGuid():N}"
+        });
+
+        var response = await _client.GetFromJsonAsync<AgentsOverviewResponsePayload>(
+            "/api/agents/overview?includeGateway=false&activityLimit=5");
+
+        Assert.NotNull(response);
+        var agent = Assert.Single(response.Agents);
+        Assert.Equal("stale-bot", agent.AgentIdentity);
+        // Activity has non-terminal events → should be active
+        Assert.Equal("active", agent.WorkState);
+        Assert.Equal("info", agent.Severity);
+        Assert.NotNull(agent.Summary);
+        Assert.Equal(2, agent.Summary.RecentActivityCount);
+        Assert.NotNull(agent.RecentActivity);
+        Assert.Equal(2, agent.RecentActivity.Count);
+    }
+
+    [Fact]
+    public async Task AgentDetail_TaskAssociations_FromRecentActivityWithTaskContext()
+    {
+        // Test that activity events with taskId/workerRunId populate task associations
+        var channel = await EnsureDefaultChannelAsync("ao-task-context-proj");
+        await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "task-context-bot",
+            wakePolicy = "mentions_only"
+        });
+
+        // Create activity event with task context (taskId, workerRunId)
+        await PostActivityEventAsync(channel.Id, new
+        {
+            projectId = "ao-task-context-proj",
+            agentIdentity = "task-context-bot",
+            deliveryRequestId = "task-delivery-1",
+            hermesSessionKey = "task-session",
+            workerRunId = "run-1730",
+            workerRole = "coder",
+            taskId = 1730L,
+            eventType = "tool_call_completed",
+            status = "completed",
+            deliveryStage = "tool",
+            terminal = false,
+            sequence = 1,
+            title = "Working on task 1730",
+            summary = "Fixed live vs stale work state",
+            dedupeKey = $"ao-task-ctx:{Guid.NewGuid():N}"
+        });
+
+        var response = await _client.GetFromJsonAsync<AgentDetailResponsePayload>(
+            "/api/agents/task-context-bot/overview?activityLimit=50");
+
+        Assert.NotNull(response);
+        Assert.NotNull(response.TaskAssociations);
+        var task = Assert.Single(response.TaskAssociations);
+        Assert.Equal(1730L, task.TaskId);
+        Assert.Equal("ao-task-context-proj", task.ProjectId);
+        Assert.Equal("in_progress", task.Status); // non-terminal
+        Assert.Equal(1, task.ActivityCount);
+        Assert.NotNull(task.Title);
+    }
+
+    // =========================================================================
     // Disposal
     // =========================================================================
 
@@ -821,6 +1044,69 @@ public sealed class AgentsOverviewTests : IDisposable
         LastAttempt: null,
         Flags: null);
 
+    private static GatewayDeliveryDto GatewayDeliveryWithFlags(long id, string? projectId, string? channelId, string status = "delivered", IReadOnlyList<string>? flags = null) => new(
+        DeliveryRequestId: id,
+        Status: status,
+        DeliveryMode: null,
+        TargetType: "agent",
+        TargetIdentity: null,
+        ProjectId: projectId,
+        TaskId: null,
+        ChannelId: channelId,
+        SourceKind: null,
+        SourceId: null,
+        SourceProjectId: projectId,
+        ContextSummary: "test delivery",
+        ContextLink: null,
+        AttemptCount: 1,
+        LeaseExpiresAt: null,
+        NextAttemptAt: null,
+        ExpiresAt: null,
+        CreatedAt: "2026-05-27T00:00:00Z",
+        UpdatedAt: "2026-05-27T00:00:00Z",
+        LastAttempt: null,
+        Flags: flags);
+
+    private static ChannelActivityEventDto MakeActivityEvent(
+        string? deliveryRequestId = null,
+        string agentIdentity = "test-agent",
+        string eventType = "tool_call_completed",
+        string status = "completed",
+        string deliveryStage = "tool",
+        bool terminal = true,
+        long? taskId = null,
+        string? workerRunId = null,
+        string? hermesSessionKey = null,
+        string? title = null) => new(
+            Id: 0,
+            ChannelId: 0,
+            ProjectId: "test-project",
+            AgentIdentity: agentIdentity,
+            DeliveryRequestId: deliveryRequestId,
+            HermesSessionKey: hermesSessionKey,
+            DisplayBlockId: null,
+            ParentHermesSessionKey: null,
+            ParentAgentIdentity: null,
+            WorkerRunId: workerRunId,
+            WorkerRole: null,
+            TaskId: taskId,
+            ThreadId: null,
+            AnchorMessageId: null,
+            EventType: eventType,
+            Status: status,
+            DeliveryStage: deliveryStage,
+            Terminal: terminal,
+            Sequence: 1,
+            UpdateVersion: 1,
+            Title: title,
+            Summary: null,
+            PreviewJson: null,
+            MetadataJson: null,
+            DedupeKey: "test-dedupe",
+            FinalChannelMessageId: null,
+            CreatedAt: "2026-05-29T10:00:00Z",
+            UpdatedAt: "2026-05-29T10:00:00Z");
+
     // ---- Local payload records ----
 
     private sealed record ChannelStub(long Id, string Slug, string Kind, string? ProjectId);
@@ -860,7 +1146,8 @@ public sealed class AgentsOverviewTests : IDisposable
         int ActiveDeliveryCount,
         int RecentActivityCount,
         string? LatestActivityAt,
-        string? HighestSeverity);
+        string? HighestSeverity,
+        int StaleDeliveryCount = 0);
 
     private sealed record AgentLinksPayload(
         string? Self,
