@@ -76,6 +76,51 @@ public sealed class GatewayStateClient
         }
     }
 
+    public async Task<DirectAgentDeliveryObservation> WaitForDirectAgentDeliveryStatusAsync(
+        string? projectId,
+        string memberIdentity,
+        string requestId,
+        string? waitFor,
+        int? timeoutMs,
+        CancellationToken cancellationToken = default)
+    {
+        var target = GatewayDirectAgentDeliveryStatus.NormalizeWaitFor(waitFor);
+        if (target == "none")
+        {
+            return DirectAgentDeliveryObservation.RecordedPending(
+                "Direct agent wake_event recorded; caller requested no Gateway claim wait.");
+        }
+
+        var boundedTimeoutMs = Math.Clamp(timeoutMs ?? 1500, 0, 5000);
+        var deadline = DateTimeOffset.UtcNow.AddMilliseconds(boundedTimeoutMs);
+        DirectAgentDeliveryObservation latest = DirectAgentDeliveryObservation.RecordedPending();
+
+        do
+        {
+            var state = await FetchGatewayStateAsync(projectId, memberIdentity, cancellationToken);
+            latest = GatewayDirectAgentDeliveryStatus.FromGatewayState(state, requestId);
+            if (latest.GatewayUnavailable || GatewayDirectAgentDeliveryStatus.MeetsWaitTarget(latest, target))
+                return latest;
+
+            if (boundedTimeoutMs == 0)
+                break;
+
+            var remaining = deadline - DateTimeOffset.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+                break;
+
+            var delay = remaining < TimeSpan.FromMilliseconds(150) ? remaining : TimeSpan.FromMilliseconds(150);
+            await Task.Delay(delay, cancellationToken);
+        }
+        while (DateTimeOffset.UtcNow < deadline);
+
+        return latest with
+        {
+            TimedOut = true,
+            EvidenceSummary = $"Direct agent wake_event recorded; timed out waiting for Gateway {target} evidence."
+        };
+    }
+
     private string BuildGatewayStatePath(string? projectId, string? agentIdentity)
     {
         var query = new List<string>();

@@ -53,7 +53,9 @@ public sealed record PostGatewayDirectAgentMessageRequest(
     string? ProjectId,
     string MemberIdentity,
     string SenderIdentity,
-    string Body);
+    string Body,
+    string? WaitFor = null,
+    int? TimeoutMs = null);
 
 /// <summary>Result of a direct targeted message request with delivery/evidence status links.</summary>
 public sealed record GatewayDirectAgentMessageDto(
@@ -67,6 +69,12 @@ public sealed record GatewayDirectAgentMessageDto(
     long MessageId,
     long ChannelId,
     string RequestId,
+    long? DeliveryRequestId,
+    long? AttemptId,
+    string? GatewayDeliveryState,
+    string? GatewayAttemptStatus,
+    bool TimedOut,
+    bool GatewayUnavailable,
     string GatewayMessageUrl,
     string GatewayEventsUrl,
     string EvidenceSummary);

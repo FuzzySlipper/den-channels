@@ -25,6 +25,7 @@ This repo currently contains the service skeleton for Den task #1320:
 - `/api/channel-messages/{messageId}/reactions` — idempotent reaction add.
 - `/api/gateway/memberships?channelId={id}|projectId={projectId}` — Gateway-facing participant/wake-policy snapshot for channel routing.
 - `/api/gateway/test-wakes` — controlled synthetic wake-event recorder for an active agent membership; it records Channels-owned evidence only and returns Gateway message/events URLs for downstream delivery/claim/complete/fail follow-up.
+- `/api/gateway/direct-agent-messages` — active-member direct-agent wake/message recorder with optional bounded Gateway claim/ack wait (`waitFor`, `timeoutMs`) and explicit delivery status handles. See `docs/direct-agent-delivery-status.md`.
 
 The Den Web channel chat panel (in the `den-web` repo) exposes the same boundary:
 it lists project/space channels, shows channel participants/active agent bindings, lets a tester

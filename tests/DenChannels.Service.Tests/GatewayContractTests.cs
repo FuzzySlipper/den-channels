@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using DenChannels.Service.AgentsOverview;
+using DenChannels.Service.Gateway;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 
@@ -636,17 +638,20 @@ public sealed class GatewayContractTests : IDisposable
             channelId = channel.Id,
             memberIdentity = "hermes-reviewer",
             senderIdentity = "operator",
-            body = "Please review the fix."
+            body = "Please review the fix.",
+            waitFor = "none"
         });
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var payload = await response.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
         Assert.NotNull(payload);
         Assert.Equal("recorded", payload.Status);
-        Assert.Equal("recorded_pending_claim", payload.DeliveryStatus);
+        Assert.Equal("recorded_but_not_claimed_yet", payload.DeliveryStatus);
         Assert.Equal("unclaimed", payload.ClaimStatus);
         Assert.Equal("pending", payload.CompletionStatus);
         Assert.Equal("not_suppressed", payload.SuppressionStatus);
+        Assert.False(payload.TimedOut);
+        Assert.False(payload.GatewayUnavailable);
         Assert.Equal("hermes-reviewer", payload.MemberIdentity);
         Assert.Equal("direct_questions_only", payload.WakePolicy);
         Assert.Equal(channel.Id, payload.ChannelId);
@@ -654,7 +659,7 @@ public sealed class GatewayContractTests : IDisposable
         Assert.DoesNotContain($"direct-agent-message:{channel.Id}:1:", payload.RequestId);
         Assert.Equal($"/api/gateway/messages/{payload.MessageId}", payload.GatewayMessageUrl);
         Assert.Contains($"/api/gateway/events?channelId={channel.Id}", payload.GatewayEventsUrl);
-        Assert.Contains("claim/completion/suppression", payload.EvidenceSummary);
+        Assert.Contains("no Gateway claim wait", payload.EvidenceSummary);
 
         var message = await _client.GetFromJsonAsync<GatewayMessagePayload>(payload.GatewayMessageUrl);
         Assert.NotNull(message);
@@ -662,6 +667,49 @@ public sealed class GatewayContractTests : IDisposable
         Assert.Equal(payload.RequestId, message.SourceId);
         Assert.Equal("Please review the fix.", message.Body);
         Assert.Contains("recorded, pending claim/completion", message.Summary);
+    }
+
+    [Fact]
+    public void GatewayDirectAgentStatus_MapsImmediateClaimEvidence()
+    {
+        var state = BuildGatewayState("direct-agent-message:16:voxelforge-runner:1", "delivering", 42, 7);
+
+        var observation = GatewayDirectAgentDeliveryStatus.FromGatewayState(state, "direct-agent-message:16:voxelforge-runner:1");
+
+        Assert.Equal("claimed", observation.DeliveryStatus);
+        Assert.Equal("claimed", observation.ClaimStatus);
+        Assert.Equal("pending", observation.CompletionStatus);
+        Assert.Equal(42, observation.DeliveryRequestId);
+        Assert.Equal(7, observation.AttemptId);
+    }
+
+    [Fact]
+    public void GatewayDirectAgentStatus_MapsCompletedAndSuppressedEvidence()
+    {
+        var completed = GatewayDirectAgentDeliveryStatus.FromGatewayState(
+            BuildGatewayState("direct-agent-message:16:voxelforge-runner:2", "completed", 43, 8),
+            "direct-agent-message:16:voxelforge-runner:2");
+        var suppressed = GatewayDirectAgentDeliveryStatus.FromGatewayState(
+            BuildGatewayState("direct-agent-message:16:voxelforge-runner:3", "suppressed", 44, null),
+            "direct-agent-message:16:voxelforge-runner:3");
+
+        Assert.Equal("completed", completed.DeliveryStatus);
+        Assert.Equal("completed", completed.CompletionStatus);
+        Assert.Equal("suppressed", suppressed.DeliveryStatus);
+        Assert.Equal("suppressed", suppressed.SuppressionStatus);
+        Assert.Equal("suppressed", suppressed.CompletionStatus);
+    }
+
+    [Fact]
+    public void GatewayDirectAgentStatus_ReportsRecordedButUnclaimedWhenRequestMissing()
+    {
+        var state = BuildGatewayState("direct-agent-message:16:someone-else:4", "pending", 45, null);
+
+        var observation = GatewayDirectAgentDeliveryStatus.FromGatewayState(state, "direct-agent-message:16:voxelforge-runner:4");
+
+        Assert.Equal("recorded_but_not_claimed_yet", observation.DeliveryStatus);
+        Assert.Equal("unclaimed", observation.ClaimStatus);
+        Assert.Equal("pending", observation.CompletionStatus);
     }
 
     // -------------------------------------------------------------------------
@@ -759,9 +807,59 @@ public sealed class GatewayContractTests : IDisposable
         long MessageId,
         long ChannelId,
         string RequestId,
+        long? DeliveryRequestId,
+        long? AttemptId,
+        string? GatewayDeliveryState,
+        string? GatewayAttemptStatus,
+        bool TimedOut,
+        bool GatewayUnavailable,
         string GatewayMessageUrl,
         string GatewayEventsUrl,
         string EvidenceSummary);
+
+    private static GatewayStateDto BuildGatewayState(string sourceId, string deliveryStatus, long deliveryRequestId, long? attemptId)
+    {
+        var delivery = new GatewayDeliveryDto(
+            DeliveryRequestId: deliveryRequestId,
+            Status: deliveryStatus,
+            DeliveryMode: "wake",
+            TargetType: "agent",
+            TargetIdentity: "voxelforge-runner",
+            ProjectId: "voxelforge",
+            TaskId: null,
+            ChannelId: "16",
+            SourceKind: "wake_event",
+            SourceId: sourceId,
+            SourceProjectId: "voxelforge",
+            ContextSummary: "direct agent request",
+            ContextLink: null,
+            AttemptCount: attemptId is null ? 0 : 1,
+            LeaseExpiresAt: null,
+            NextAttemptAt: null,
+            ExpiresAt: null,
+            CreatedAt: "2026-05-29T08:00:00Z",
+            UpdatedAt: "2026-05-29T08:00:01Z",
+            LastAttempt: attemptId is null
+                ? null
+                : new GatewayDeliveryAttemptDto(attemptId.Value, 1, 9, "claimed", "claim", "external-1", "session-1", "2026-05-29T08:00:01Z", null, null),
+            Flags: []);
+        var agent = new GatewayAgentDto(
+            AgentKey: "voxelforge:voxelforge-runner:runner",
+            ProjectId: "voxelforge",
+            AgentIdentity: "voxelforge-runner",
+            Role: "runner",
+            BindingFreshness: "fresh",
+            AdapterInstances: [],
+            DeliverySummary: new GatewayDeliverySummaryDto("working", 0, deliveryStatus == "delivering" ? 1 : 0, 0, deliveryStatus == "completed" ? 1 : 0, 0, deliveryStatus == "suppressed" ? 1 : 0, 0, 1),
+            CurrentDeliveries: delivery.Terminal ? [] : [delivery],
+            RecentDeliveries: delivery.Terminal ? [delivery] : [],
+            Flags: []);
+        return new GatewayStateDto(
+            GeneratedAt: "2026-05-29T08:00:01Z",
+            Service: "den-gateway",
+            BindingHealth: new GatewayBindingHealthDto("available", 1, 1, 0, null),
+            Agents: [agent]);
+    }
 
     private sealed record GatewayMessagePayload(
         long Id,

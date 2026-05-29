@@ -315,6 +315,7 @@ public static class GatewayRoutes
         // -----------------------------------------------------------------------
         gw.MapPost("/direct-agent-messages", async (
             ChannelsRepository repository,
+            GatewayStateClient gatewayStateClient,
             PostGatewayDirectAgentMessageRequest request,
             CancellationToken cancellationToken) =>
         {
@@ -383,20 +384,34 @@ public static class GatewayRoutes
 
             var gatewayMessageUrl = $"/api/gateway/messages/{msg.Id}";
             gatewayEventsUrl = $"/api/gateway/events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10";
+            var deliveryObservation = await gatewayStateClient.WaitForDirectAgentDeliveryStatusAsync(
+                channel.ProjectId ?? request.ProjectId,
+                member.MemberIdentity,
+                requestId,
+                request.WaitFor,
+                request.TimeoutMs,
+                cancellationToken);
+
             return Results.Created(gatewayMessageUrl, new GatewayDirectAgentMessageDto(
                 Status: "recorded",
-                DeliveryStatus: "recorded_pending_claim",
-                ClaimStatus: "unclaimed",
-                CompletionStatus: "pending",
-                SuppressionStatus: "not_suppressed",
+                DeliveryStatus: deliveryObservation.DeliveryStatus,
+                ClaimStatus: deliveryObservation.ClaimStatus,
+                CompletionStatus: deliveryObservation.CompletionStatus,
+                SuppressionStatus: deliveryObservation.SuppressionStatus,
                 MemberIdentity: member.MemberIdentity,
                 WakePolicy: member.WakePolicy,
                 MessageId: msg.Id,
                 ChannelId: channel.Id,
                 RequestId: requestId,
+                DeliveryRequestId: deliveryObservation.DeliveryRequestId,
+                AttemptId: deliveryObservation.AttemptId,
+                GatewayDeliveryState: deliveryObservation.GatewayDeliveryState,
+                GatewayAttemptStatus: deliveryObservation.GatewayAttemptStatus,
+                TimedOut: deliveryObservation.TimedOut,
+                GatewayUnavailable: deliveryObservation.GatewayUnavailable,
                 GatewayMessageUrl: gatewayMessageUrl,
                 GatewayEventsUrl: gatewayEventsUrl,
-                EvidenceSummary: "Direct agent wake_event recorded; Gateway evidence URL exposes delivery request status and follow-up claim/completion/suppression events."));
+                EvidenceSummary: deliveryObservation.EvidenceSummary ?? "Direct agent wake_event recorded; Gateway evidence URL exposes delivery request status and follow-up claim/completion/suppression events."));
         });
 
         // -----------------------------------------------------------------------
