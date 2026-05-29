@@ -329,7 +329,59 @@ public sealed class ChannelsDatabaseInitializerTests
     }
 
     [Fact]
-    public async Task ApplyMigrationsAsync_AddsActivityCorrelationColumnsToLegacyActivityTable()
+    public async Task ApplyMigrationsAsync_AddsAssignmentColumnsToChannelMessages()
+    {
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        var columns = await ListColumnsAsync(connection, "channel_messages");
+        Assert.Contains("assignment_id", columns);
+        Assert.Contains("checkpoint_type", columns);
+        Assert.Contains("checkpoint_handle", columns);
+
+        var indexes = await ListIndexesAsync(connection);
+        Assert.Contains("idx_channel_messages_assignment", indexes);
+    }
+
+    [Fact]
+    public async Task ApplyMigrationsAsync_AddsAssignmentColumnsToActivityEvents()
+    {
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        var columns = await ListColumnsAsync(connection, "channel_activity_events");
+        Assert.Contains("assignment_id", columns);
+        Assert.Contains("checkpoint_type", columns);
+        Assert.Contains("checkpoint_handle", columns);
+
+        var indexes = await ListIndexesAsync(connection);
+        Assert.Contains("idx_channel_activity_events_assignment", indexes);
+    }
+
+    [Fact]
+    public async Task ApplyMigrationsAsync_AddsAssignmentColumnsToLegacyMessageTable()
+    {
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ExecuteAsync(connection, """
+            CREATE TABLE channel_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL,
+                sender_type TEXT NOT NULL,
+                sender_identity TEXT NOT NULL,
+                body TEXT NOT NULL
+            );
+            """);
+
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        var columns = await ListColumnsAsync(connection, "channel_messages");
+        Assert.Contains("assignment_id", columns);
+        Assert.Contains("checkpoint_type", columns);
+        Assert.Contains("checkpoint_handle", columns);
+    }
+
+    [Fact]
+    public async Task ApplyMigrationsAsync_AddsAssignmentColumnsToLegacyActivityTable()
     {
         await using var connection = await OpenInMemoryDatabaseAsync();
         await ExecuteAsync(connection, """

@@ -46,6 +46,9 @@ public sealed record ChannelMessageDto(
     string? MetadataJson,
     string? DeliveryRequestId,
     string? DedupeKey,
+    string? AssignmentId,
+    string? CheckpointType,
+    string? CheckpointHandle,
     string CreatedAt,
     string? EditedAt,
     string? DeletedAt);
@@ -64,7 +67,10 @@ public sealed record PostChannelMessageRequest(
     long? ReplyToMessageId,
     string? MetadataJson,
     string? DeliveryRequestId,
-    string? DedupeKey);
+    string? DedupeKey,
+    string? AssignmentId = null,
+    string? CheckpointType = null,
+    string? CheckpointHandle = null);
 
 public sealed record ChannelMembershipDto(
     long Id,
@@ -140,6 +146,9 @@ public sealed record ChannelActivityEventDto(
     long? TaskId,
     long? ThreadId,
     long? AnchorMessageId,
+    string? AssignmentId,
+    string? CheckpointType,
+    string? CheckpointHandle,
     string EventType,
     string Status,
     string DeliveryStage,
@@ -168,6 +177,9 @@ public sealed record AppendChannelActivityEventRequest(
     long? TaskId,
     long? ThreadId,
     long? AnchorMessageId,
+    string? AssignmentId,
+    string? CheckpointType,
+    string? CheckpointHandle,
     string EventType,
     string? Status,
     string? DeliveryStage,
@@ -189,3 +201,13 @@ public sealed record UpdateChannelActivityEventRequest(
     string? PreviewJson,
     string? MetadataJson,
     long? FinalChannelMessageId);
+
+/// <summary>
+/// Assignment-scoped transcript response: visible messages + non-waking activity/checkpoint events.
+/// Consumer: Den Web #1729.
+/// Field order matches JSON serialization for simple response shape.
+/// </summary>
+public sealed record AssignmentTranscriptResponse(
+    string AssignmentId,
+    IReadOnlyList<ChannelMessageDto> Messages,
+    IReadOnlyList<ChannelActivityEventDto> ActivityEvents);

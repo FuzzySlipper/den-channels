@@ -87,8 +87,8 @@ public static class ChannelRoutes
         });
 
         api.MapGet("/channels/{channelId:long}/messages", async (ChannelsRepository repository, long channelId,
-            long? afterId, int? limit, CancellationToken cancellationToken) => Results.Ok(
-                await repository.ListMessagesAsync(channelId, afterId, limit ?? 100, cancellationToken)));
+            long? afterId, string? assignmentId, int? limit, CancellationToken cancellationToken) => Results.Ok(
+                await repository.ListMessagesAsync(channelId, afterId, assignmentId, limit ?? 100, cancellationToken)));
 
         api.MapGet("/channels/{channelId:long}/reactions", async (ChannelsRepository repository, long channelId,
             CancellationToken cancellationToken) => Results.Ok(
@@ -110,9 +110,9 @@ public static class ChannelRoutes
 
         api.MapGet("/channels/{channelId:long}/activity-events", async (ChannelsRepository repository, long channelId,
             string? deliveryRequestId, string? hermesSessionKey, string? displayBlockId, string? workerRunId,
-            long? anchorMessageId, long? taskId, long? afterId, int? limit, CancellationToken cancellationToken) => Results.Ok(
+            long? anchorMessageId, long? taskId, string? assignmentId, long? afterId, int? limit, CancellationToken cancellationToken) => Results.Ok(
                 await repository.ListActivityEventsAsync(channelId, deliveryRequestId, hermesSessionKey, displayBlockId,
-                    workerRunId, anchorMessageId, taskId, afterId, limit ?? 100, cancellationToken)));
+                    workerRunId, anchorMessageId, taskId, assignmentId, afterId, limit ?? 100, cancellationToken)));
 
         api.MapPatch("/channel-activity-events/{activityEventId:long}", async (ChannelsRepository repository, long activityEventId,
             UpdateChannelActivityEventRequest request, CancellationToken cancellationToken) =>
@@ -126,6 +126,48 @@ public static class ChannelRoutes
             {
                 return Results.Conflict(new ProblemDetailsDto("activity_event_constraint_failed", ex.SqliteErrorCode, ex.Message));
             }
+        });
+
+        // -----------------------------------------------------------------------
+        // GET /api/assignments/{assignmentId}/transcript
+        // Assignment-scoped readback: visible messages + non-waking activity/checkpoint events.
+        // Den Web #1729 consumer: given assignmentId, return bounded visible messages
+        // plus non-waking activity/checkpoint events with channel/message/delivery handles.
+        // -----------------------------------------------------------------------
+        api.MapGet("/assignments/{assignmentId}/transcript", async (ChannelsRepository repository,
+            string assignmentId, long? channelId, string? projectId, int? messageLimit, int? activityLimit,
+            CancellationToken cancellationToken) =>
+        {
+            if (channelId is null && string.IsNullOrWhiteSpace(projectId))
+                return Results.BadRequest(new { code = "missing_parameter", message = "Provide channelId or projectId." });
+
+            long resolvedChannelId;
+            if (channelId is not null)
+            {
+                var channel = await repository.GetChannelAsync(channelId.Value, cancellationToken);
+                if (channel is null)
+                    return Results.NotFound(new { code = "channel_not_found", message = $"Channel {channelId} not found." });
+                resolvedChannelId = channel.Id;
+            }
+            else
+            {
+                var channels = await repository.ListChannelsAsync(projectId!, "project_default", 1, cancellationToken);
+                if (channels.Count == 0)
+                    return Results.NotFound(new { code = "channel_not_found", message = $"No default channel found for project '{projectId}'." });
+                resolvedChannelId = channels[0].Id;
+            }
+
+            var messageCap = Math.Clamp(messageLimit ?? 100, 1, 500);
+            var activityCap = Math.Clamp(activityLimit ?? 100, 1, 500);
+
+            var messages = await repository.ListMessagesAsync(resolvedChannelId, null, assignmentId, messageCap, cancellationToken);
+            var activityEvents = await repository.ListActivityEventsAsync(resolvedChannelId,
+                assignmentId: assignmentId, limit: activityCap, cancellationToken: cancellationToken);
+
+            return Results.Ok(new AssignmentTranscriptResponse(
+                AssignmentId: assignmentId,
+                Messages: messages,
+                ActivityEvents: activityEvents));
         });
 
         api.MapPut("/channels/{channelId:long}/memberships", async (ChannelsRepository repository, long channelId,

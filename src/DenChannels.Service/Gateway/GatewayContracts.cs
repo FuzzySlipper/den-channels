@@ -54,6 +54,9 @@ public sealed record PostGatewayDirectAgentMessageRequest(
     string MemberIdentity,
     string SenderIdentity,
     string Body,
+    string? AssignmentId = null,
+    string? CheckpointType = null,
+    string? CheckpointHandle = null,
     string? WaitFor = null,
     int? TimeoutMs = null);
 

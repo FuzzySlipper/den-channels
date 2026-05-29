@@ -158,7 +158,7 @@ public static class GatewayRoutes
             // the chat UI (which returns the most-recent N messages).
             var pageSize = Math.Clamp(limit ?? 50, 1, 200);
             var fetched = await repository.ListMessagesAsync(
-                resolvedChannelId, afterId ?? 0L, pageSize + 1, cancellationToken);
+                resolvedChannelId, afterId ?? 0L, null, pageSize + 1, cancellationToken);
 
             var hasMore = fetched.Count > pageSize;
             var items = hasMore ? fetched.Take(pageSize).ToList() : fetched.ToList();
@@ -380,7 +380,10 @@ public static class GatewayRoutes
                 ReplyToMessageId: null,
                 MetadataJson: metadataJson,
                 DeliveryRequestId: null,
-                DedupeKey: null), cancellationToken);
+                DedupeKey: null,
+                AssignmentId: request.AssignmentId,
+                CheckpointType: request.CheckpointType,
+                CheckpointHandle: request.CheckpointHandle), cancellationToken);
 
             var gatewayMessageUrl = $"/api/gateway/messages/{msg.Id}";
             gatewayEventsUrl = $"/api/gateway/events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10";

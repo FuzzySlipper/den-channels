@@ -50,6 +50,7 @@ public sealed class ChannelsDatabaseInitializer
         await EnsureChannelMessagesSourceKindConstraintAsync(connection, cancellationToken);
         await EnsureChannelActivityEventsSchemaAsync(connection, cancellationToken);
         await EnsureChannelActivityEventsCompatibilityColumnsAsync(connection, cancellationToken);
+        await EnsureAssignmentCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureAgentCommonsSeedAsync(connection, cancellationToken);
         await ExecuteNonQueryAsync(connection, PostCreateIndexesSql, cancellationToken);
     }
@@ -85,6 +86,17 @@ public sealed class ChannelsDatabaseInitializer
         await EnsureColumnAsync(connection, "channel_activity_events", "delivery_stage", "TEXT NOT NULL DEFAULT 'progress'", cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "terminal", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "final_channel_message_id", "INTEGER", cancellationToken);
+    }
+
+    private static async Task EnsureAssignmentCompatibilityColumnsAsync(SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await EnsureColumnAsync(connection, "channel_messages", "assignment_id", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_messages", "checkpoint_type", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_messages", "checkpoint_handle", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_activity_events", "assignment_id", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_activity_events", "checkpoint_type", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_activity_events", "checkpoint_handle", "TEXT", cancellationToken);
     }
 
     private static async Task EnsureAgentCommonsSeedAsync(SqliteConnection connection,
@@ -461,7 +473,7 @@ public sealed class ChannelsDatabaseInitializer
             updated_at = datetime('now');
         """;
 
-    private const string PostCreateIndexesSql = """
+    private const string PostCreateIndexesSql = """"
         CREATE UNIQUE INDEX IF NOT EXISTS ux_channels_project_default
             ON channels(project_id)
             WHERE project_id IS NOT NULL AND kind = 'project_default';
@@ -484,7 +496,13 @@ public sealed class ChannelsDatabaseInitializer
         CREATE INDEX IF NOT EXISTS idx_channel_activity_events_worker_run
             ON channel_activity_events(worker_run_id, sequence, id)
             WHERE worker_run_id IS NOT NULL;
-        """;
+        CREATE INDEX IF NOT EXISTS idx_channel_messages_assignment
+            ON channel_messages(assignment_id, channel_id, id)
+            WHERE assignment_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_assignment
+            ON channel_activity_events(assignment_id, channel_id, id)
+            WHERE assignment_id IS NOT NULL;
+        """";
 
     private const string RebuildChannelMessagesWithGatewayDeliverySourceKindSql = """
         PRAGMA foreign_keys = OFF;

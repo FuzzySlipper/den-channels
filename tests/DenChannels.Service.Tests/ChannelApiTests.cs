@@ -525,6 +525,271 @@ public sealed class ChannelApiTests : IDisposable
         Assert.Empty(messages);
     }
 
+    [Fact]
+    public async Task AssignmentMessages_StoreAndReadAssignmentMetadata()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+
+        var posted = await PostJsonAsync<MessagePayload>(client, $"/api/channels/{channel.Id}/messages", new
+        {
+            senderType = "system",
+            senderIdentity = "den-gateway",
+            body = "Checkpoint transcript: Assignment #asn-42 created.",
+            messageKind = "system_event",
+            sourceKind = "gateway_delivery",
+            sourceId = "assign-42",
+            sourceProjectId = "den-channels",
+            assignmentId = "asn-42",
+            checkpointType = "assignment_created",
+            checkpointHandle = "chk://den-core/assignment/asn-42/1",
+            dedupeKey = $"assign-msg:{Guid.NewGuid():N}"
+        });
+        Assert.NotNull(posted);
+
+        // Read back by assignmentId filter
+        var byAssignment = await client.GetFromJsonAsync<List<MessagePayload>>(
+            $"/api/channels/{channel.Id}/messages?assignmentId=asn-42&limit=50");
+        Assert.NotNull(byAssignment);
+        var found = Assert.Single(byAssignment);
+        Assert.Equal(posted.Id, found.Id);
+    }
+
+    [Fact]
+    public async Task AssignmentActivityEvents_StoreAndReadAssignmentMetadata()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+
+        var posted = await PostJsonAsync<ActivityEventPayload>(client, $"/api/channels/{channel.Id}/activity-events", new
+        {
+            projectId = "den-channels",
+            agentIdentity = "den-mcp-runner",
+            deliveryRequestId = "delivery-asn-42",
+            hermesSessionKey = "session-asn-42",
+            workerRunId = "run-asn-42",
+            workerRole = "coder",
+            taskId = 1724L,
+            eventType = "lifecycle_status",
+            status = "interim",
+            deliveryStage = "assignment_checkpoint",
+            terminal = false,
+            sequence = 1,
+            assignmentId = "asn-42",
+            checkpointType = "checkpoint_saved",
+            checkpointHandle = "chk://den-core/assignment/asn-42/2",
+            title = "Checkpoint saved",
+            summary = "Assignment asn-42 checkpoint saved",
+            dedupeKey = $"assign-activity:{Guid.NewGuid():N}"
+        });
+        Assert.NotNull(posted);
+
+        // Read back by assignmentId filter
+        var byAssignment = await client.GetFromJsonAsync<List<ActivityEventPayload>>(
+            $"/api/channels/{channel.Id}/activity-events?assignmentId=asn-42");
+        Assert.NotNull(byAssignment);
+        var found = Assert.Single(byAssignment);
+        Assert.Equal(posted.Id, found.Id);
+    }
+
+    [Fact]
+    public async Task AssignmentMessages_FilterIsServerSideBeforePagination()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+
+        // Post 10 messages with different assignment IDs
+        for (var i = 1; i <= 5; i++)
+        {
+            await PostJsonAsync<MessagePayload>(client, $"/api/channels/{channel.Id}/messages", new
+            {
+                senderType = "system",
+                senderIdentity = "den-gateway",
+                body = $"Checkpoint {i} for asn-a",
+                assignmentId = "asn-a",
+                checkpointType = "checkpoint",
+                dedupeKey = $"assign-filter-a-{i}:{Guid.NewGuid():N}"
+            });
+        }
+        for (var i = 1; i <= 5; i++)
+        {
+            await PostJsonAsync<MessagePayload>(client, $"/api/channels/{channel.Id}/messages", new
+            {
+                senderType = "system",
+                senderIdentity = "den-gateway",
+                body = $"Checkpoint {i} for asn-b",
+                assignmentId = "asn-b",
+                checkpointType = "checkpoint",
+                dedupeKey = $"assign-filter-b-{i}:{Guid.NewGuid():N}"
+            });
+        }
+
+        // Filter by assignmentId=asn-a with limit=2 should return 2 of asn-a's messages, not 2 of asn-b
+        var filtered = await client.GetFromJsonAsync<List<MessagePayload>>(
+            $"/api/channels/{channel.Id}/messages?assignmentId=asn-a&limit=2");
+        Assert.NotNull(filtered);
+        Assert.Equal(2, filtered.Count);
+        foreach (var msg in filtered)
+        {
+            Assert.Equal("asn-a", msg.AssignmentId);
+        }
+    }
+
+    [Fact]
+    public async Task AssignmentActivityEvents_FilterIsServerSideBeforePagination()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+
+        for (var i = 1; i <= 5; i++)
+        {
+            await PostJsonAsync<ActivityEventPayload>(client, $"/api/channels/{channel.Id}/activity-events", new
+            {
+                projectId = "den-channels",
+                agentIdentity = "den-mcp-runner",
+                deliveryRequestId = $"delivery-a-{i}",
+                eventType = "lifecycle_status",
+                status = "interim",
+                terminal = false,
+                sequence = i,
+                assignmentId = "asn-active-a",
+                dedupeKey = $"assign-filter-activity-a-{i}:{Guid.NewGuid():N}"
+            });
+        }
+        for (var i = 1; i <= 5; i++)
+        {
+            await PostJsonAsync<ActivityEventPayload>(client, $"/api/channels/{channel.Id}/activity-events", new
+            {
+                projectId = "den-channels",
+                agentIdentity = "den-mcp-runner",
+                deliveryRequestId = $"delivery-b-{i}",
+                eventType = "lifecycle_status",
+                status = "interim",
+                terminal = false,
+                sequence = i,
+                assignmentId = "asn-active-b",
+                dedupeKey = $"assign-filter-activity-b-{i}:{Guid.NewGuid():N}"
+            });
+        }
+
+        var filtered = await client.GetFromJsonAsync<List<ActivityEventPayload>>(
+            $"/api/channels/{channel.Id}/activity-events?assignmentId=asn-active-a&limit=2");
+        Assert.NotNull(filtered);
+        Assert.Equal(2, filtered.Count);
+        foreach (var ev in filtered)
+        {
+            Assert.Equal("asn-active-a", ev.AssignmentId);
+        }
+    }
+
+    [Fact]
+    public async Task AssignmentActivityEvents_AreNonWakingAndDoNotAffectCursors()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+
+        // Post a visible message first (waking content)
+        var msg = await PostJsonAsync<MessagePayload>(client, $"/api/channels/{channel.Id}/messages", new
+        {
+            senderType = "user",
+            senderIdentity = "patch",
+            body = "Wake message",
+            dedupeKey = $"wake-msg:{Guid.NewGuid():N}"
+        });
+        Assert.NotNull(msg);
+
+        // Post a non-waking assignment activity event
+        var activity = await PostJsonAsync<ActivityEventPayload>(client, $"/api/channels/{channel.Id}/activity-events", new
+        {
+            projectId = "den-channels",
+            agentIdentity = "den-mcp-runner",
+            deliveryRequestId = "delivery-asn-nw",
+            eventType = "lifecycle_status",
+            status = "interim",
+            terminal = false,
+            sequence = 1,
+            assignmentId = "asn-nw",
+            dedupeKey = $"assign-nw:{Guid.NewGuid():N}"
+        });
+        Assert.NotNull(activity);
+
+        // Verify no new messages were created (only the wake message exists)
+        var messagesAfterActivity = await client.GetFromJsonAsync<List<MessagePayload>>(
+            $"/api/channels/{channel.Id}/messages?afterId=0&limit=10");
+        Assert.NotNull(messagesAfterActivity);
+        Assert.Single(messagesAfterActivity);  // Only the wake message
+
+        // Verify activity events list includes the assignment event
+        var activities = await client.GetFromJsonAsync<List<ActivityEventPayload>>(
+            $"/api/channels/{channel.Id}/activity-events?assignmentId=asn-nw");
+        Assert.NotNull(activities);
+        Assert.NotEmpty(activities);
+    }
+
+    [Fact]
+    public async Task AssignmentTranscript_ReadbackByAssignmentId_ReturnsMessagesAndActivity()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+
+        // Post a message with assignment metadata
+        var msg = await PostJsonAsync<MessagePayload>(client, $"/api/channels/{channel.Id}/messages", new
+        {
+            senderType = "system",
+            senderIdentity = "den-gateway",
+            body = "Assignment transcript message",
+            assignmentId = "asn-transcript-1",
+            checkpointType = "assignment_created",
+            checkpointHandle = "chk://den-core/assignment/asn-transcript-1/1",
+            dedupeKey = $"assign-transcript-msg:{Guid.NewGuid():N}"
+        });
+
+        // Post activity events with the same assignmentId
+        var activity = await PostJsonAsync<ActivityEventPayload>(client, $"/api/channels/{channel.Id}/activity-events", new
+        {
+            projectId = "den-channels",
+            agentIdentity = "den-mcp-runner",
+            deliveryRequestId = "delivery-transcript",
+            eventType = "lifecycle_status",
+            status = "completed",
+            terminal = true,
+            sequence = 1,
+            assignmentId = "asn-transcript-1",
+            checkpointType = "checkpoint_applied",
+            checkpointHandle = "chk://den-core/assignment/asn-transcript-1/2",
+            summary = "Checkpoint applied",
+            dedupeKey = $"assign-transcript-activity:{Guid.NewGuid():N}"
+        });
+
+        // Use the assignment-scoped read API to get transcript
+        var transcript = await client.GetFromJsonAsync<AssignmentTranscriptPayload>(
+            $"/api/assignments/asn-transcript-1/transcript?channelId={channel.Id}");
+        Assert.NotNull(transcript);
+        Assert.Equal("asn-transcript-1", transcript.AssignmentId);
+        Assert.NotEmpty(transcript.Messages);
+        Assert.NotEmpty(transcript.ActivityEvents);
+        Assert.Contains(transcript.Messages, m => m.Id == msg.Id);
+        Assert.Contains(transcript.ActivityEvents, e => e.Id == activity.Id);
+    }
+
     public void Dispose()
     {
         _factory.Dispose();
@@ -562,7 +827,7 @@ public sealed class ChannelApiTests : IDisposable
     private sealed record ChannelPayload(long Id, string Slug, string DisplayName, string Kind, string? ProjectId);
 
     private sealed record MessagePayload(long Id, long ChannelId, string Body, string? SourceKind, string? DeepLink,
-        string? DeliveryRequestId, string? DedupeKey);
+        string? DeliveryRequestId, string? DedupeKey, string? AssignmentId = null, string? CheckpointType = null, string? CheckpointHandle = null);
 
     private sealed record GatewayMessagePayload(long Id, long ChannelId, string? SourceKind, string? SourceId,
         string? DeliveryRequestId, string? DedupeKey);
@@ -603,5 +868,10 @@ public sealed class ChannelApiTests : IDisposable
         string? DeliveryRequestId, string? HermesSessionKey, string? DisplayBlockId, string? ParentHermesSessionKey,
         string? ParentAgentIdentity, string? WorkerRunId, string? WorkerRole, long? AnchorMessageId, string EventType, string Status,
         string DeliveryStage, bool Terminal, long Sequence, long UpdateVersion, string? Summary, string? PreviewJson,
-        string? MetadataJson, long? FinalChannelMessageId);
+        string? MetadataJson, long? FinalChannelMessageId, string? AssignmentId = null, string? CheckpointType = null, string? CheckpointHandle = null);
+
+    private sealed record AssignmentTranscriptPayload(
+        string AssignmentId,
+        IReadOnlyList<MessagePayload> Messages,
+        IReadOnlyList<ActivityEventPayload> ActivityEvents);
 }
