@@ -224,6 +224,64 @@ public static class ChannelRoutes
             }
         });
 
+        // -----------------------------------------------------------------------
+        // Worker-pool lobby endpoints (task #1771)
+        // -----------------------------------------------------------------------
+
+        api.MapPut("/worker-pool/lobby", async (ChannelsRepository repository,
+            CancellationToken cancellationToken) =>
+        {
+            var channel = await repository.EnsureWorkerPoolLobbyChannelAsync(cancellationToken);
+            return Results.Ok(channel);
+        });
+
+        api.MapPut("/worker-pool/lobby/presence", async (ChannelsRepository repository,
+            UpsertWorkerPoolLobbyPresenceRequest request, CancellationToken cancellationToken) =>
+        {
+            var lobby = await repository.EnsureWorkerPoolLobbyChannelAsync(cancellationToken);
+            var presence = await repository.UpsertWorkerPoolLobbyPresenceAsync(lobby.Id, request, cancellationToken);
+            return Results.Ok(presence);
+        });
+
+        api.MapPost("/worker-pool/lobby/presence/{memberIdentity}/acknowledge-release", async (
+            ChannelsRepository repository, string memberIdentity,
+            CancellationToken cancellationToken) =>
+        {
+            var lobby = await repository.EnsureWorkerPoolLobbyChannelAsync(cancellationToken);
+            var presence = await repository.AcknowledgeWorkerPoolReleaseAsync(lobby.Id, memberIdentity, cancellationToken);
+            return presence is null
+                ? Results.NotFound(new { code = "no_release_pending", message = $"No released presence found for '{memberIdentity}'." })
+                : Results.Ok(presence);
+        });
+
+        api.MapGet("/worker-pool/lobby/presence", async (ChannelsRepository repository,
+            CancellationToken cancellationToken) =>
+        {
+            var lobby = await repository.EnsureWorkerPoolLobbyChannelAsync(cancellationToken);
+            var members = await repository.ListWorkerPoolLobbyPresenceAsync(lobby.Id, cancellationToken);
+
+            // Build overview response grouped by role/profile for available (idle) workers
+            var idleMembers = members.Where(m => string.Equals(m.Status, "idle", StringComparison.OrdinalIgnoreCase)).ToList();
+            var byRole = idleMembers
+                .GroupBy(m => (m.Role, m.Profile))
+                .Select(g => new WorkerPoolPresenceByRoleGroup(
+                    g.Key.Role,
+                    g.Key.Profile,
+                    g.Count(),
+                    g.ToList()))
+                .OrderByDescending(g => g.Count)
+                .ToList();
+
+            return Results.Ok(new WorkerPoolLobbyOverviewResponse(
+                LobbySlug: lobby.Slug,
+                LobbyDisplayName: lobby.DisplayName,
+                LobbyChannelId: lobby.Id,
+                TotalMembers: members.Count,
+                AvailableCount: idleMembers.Count,
+                ByRole: byRole,
+                Members: members.ToList()));
+        });
+
         api.MapPost("/channel-messages/{messageId:long}/reactions", async (ChannelsRepository repository, long messageId,
             AddChannelReactionRequest request, CancellationToken cancellationToken) =>
         {

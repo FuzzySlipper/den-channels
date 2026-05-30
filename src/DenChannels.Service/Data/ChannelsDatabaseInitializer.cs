@@ -7,7 +7,7 @@ namespace DenChannels.Service.Data;
 
 public sealed class ChannelsDatabaseInitializer
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     private readonly IOptions<DenChannelsOptions> _options;
     private readonly ILogger<ChannelsDatabaseInitializer> _logger;
@@ -53,6 +53,13 @@ public sealed class ChannelsDatabaseInitializer
             await SetSchemaVersionAsync(connection, 2, "shared_profile_instances", cancellationToken);
         }
 
+        if (currentVersion < 3)
+        {
+            logger?.LogInformation("Applying Den Channels database migration 3: worker-pool lobby presence");
+            await ExecuteNonQueryAsync(connection, MigrationV3Sql, cancellationToken);
+            await SetSchemaVersionAsync(connection, 3, "worker_pool_lobby_presence", cancellationToken);
+        }
+
         await EnsureChannelsCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureChannelMessageCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureChannelMessagesSourceKindConstraintAsync(connection, cancellationToken);
@@ -62,6 +69,7 @@ public sealed class ChannelsDatabaseInitializer
         await EnsureSharedProfileInstanceColumnsAsync(connection, cancellationToken);
         await EnsureChannelReadCursorsInstanceConstraintAsync(connection, logger, cancellationToken);
         await EnsureAgentCommonsSeedAsync(connection, cancellationToken);
+        await EnsureWorkerPoolLobbySeedAsync(connection, cancellationToken);
         await ExecuteNonQueryAsync(connection, PostCreateIndexesSql, cancellationToken);
     }
 
@@ -192,6 +200,15 @@ public sealed class ChannelsDatabaseInitializer
         }
 
         await ExecuteNonQueryAsync(connection, AgentCommonsSeedSql, cancellationToken);
+    }
+
+    private static async Task EnsureWorkerPoolLobbySeedAsync(SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "channels", cancellationToken))
+            return;
+
+        await ExecuteNonQueryAsync(connection, WorkerPoolLobbySeedSql, cancellationToken);
     }
 
     private static async Task<string?> GetTableCreateSqlAsync(SqliteConnection connection, string tableName,
@@ -689,7 +706,7 @@ public sealed class ChannelsDatabaseInitializer
     /// Note: This only creates the table if missing. When the table already
     /// exists (from V1 schema), instance_id is added via EnsureColumnAsync.
     /// </summary>
-    private const string MigrationV2Sql = """
+    private const string MigrationV2Sql = """"
         -- Ensure channel_read_cursors table exists with instance_id support
         -- (may not exist in legacy schema v1 databases)
         CREATE TABLE IF NOT EXISTS channel_read_cursors (
@@ -709,5 +726,88 @@ public sealed class ChannelsDatabaseInitializer
         -- won't fail if column doesn't exist yet, but better to create from C# code
         -- that runs after EnsureColumnAsync. No index creation here to avoid
         -- 'no such column' errors when the table already exists without instance_id.)
-        """;
+        """";
+
+    /// <summary>
+    /// Migration v3: Worker-pool lobby presence table.
+    /// Tracks visible lobby status for worker-pool members with
+    /// concrete instance/member IDs and lifecycle status transitions.
+    /// </summary>
+    private const string MigrationV3Sql = """"
+        CREATE TABLE IF NOT EXISTS worker_pool_lobby_presence (
+            id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id              INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+            member_identity         TEXT NOT NULL,
+            agent_instance_id       TEXT,
+            pool_member_id          TEXT,
+            profile                 TEXT,
+            role                    TEXT,
+            status                  TEXT NOT NULL DEFAULT 'idle'
+                                    CHECK (status IN ('idle', 'leased', 'draining', 'released', 'quarantined', 'offline')),
+            current_assignment_id   TEXT,
+            current_task_id         TEXT,
+            current_project_id      TEXT,
+            last_activity_at        TEXT,
+            release_acknowledged    INTEGER NOT NULL DEFAULT 0 CHECK (release_acknowledged IN (0, 1)),
+            created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(channel_id, member_identity)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_wp_lobby_presence_status
+            ON worker_pool_lobby_presence(channel_id, status);
+
+        CREATE INDEX IF NOT EXISTS idx_wp_lobby_presence_role_profile
+            ON worker_pool_lobby_presence(channel_id, role, profile)
+            WHERE status = 'idle';
+        """";
+
+    /// <summary>
+    /// Seed SQL to ensure the #worker-pool lobby channel exists.
+    /// Uses slug='worker-pool' with kind='system' for simplicity;
+    /// distinct from agent-commons via slug.
+    /// </summary>
+    private const string WorkerPoolLobbySeedSql = """"
+        INSERT INTO channels(slug, display_name, kind, created_by, visibility, settings_json)
+        VALUES ('worker-pool', '#worker-pool', 'system', 'system', 'normal',
+                '{"systemManaged":true,"channelRole":"worker_pool_lobby","description":"Worker-pool lobby: visible home lane for spawned-coder orchestration. Idle = available. Status transitions: idle → leased → draining → released → idle."}')
+        ON CONFLICT(slug) DO UPDATE SET
+            display_name = '#worker-pool',
+            kind = 'system',
+            visibility = 'normal',
+            settings_json = COALESCE(channels.settings_json, excluded.settings_json),
+            updated_at = datetime('now');
+        """";
+
+    /// <summary>
+    /// Worker-pool lobby presence table schema (for self-contained creation).
+    /// </summary>
+    private const string WorkerPoolLobbyPresenceSchemaSql = """"
+        CREATE TABLE IF NOT EXISTS worker_pool_lobby_presence (
+            id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id              INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+            member_identity         TEXT NOT NULL,
+            agent_instance_id       TEXT,
+            pool_member_id          TEXT,
+            profile                 TEXT,
+            role                    TEXT,
+            status                  TEXT NOT NULL DEFAULT 'idle'
+                                    CHECK (status IN ('idle', 'leased', 'draining', 'released', 'quarantined', 'offline')),
+            current_assignment_id   TEXT,
+            current_task_id         TEXT,
+            current_project_id      TEXT,
+            last_activity_at        TEXT,
+            release_acknowledged    INTEGER NOT NULL DEFAULT 0 CHECK (release_acknowledged IN (0, 1)),
+            created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(channel_id, member_identity)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_wp_lobby_presence_status
+            ON worker_pool_lobby_presence(channel_id, status);
+
+        CREATE INDEX IF NOT EXISTS idx_wp_lobby_presence_role_profile
+            ON worker_pool_lobby_presence(channel_id, role, profile)
+            WHERE status = 'idle';
+        """";
 }

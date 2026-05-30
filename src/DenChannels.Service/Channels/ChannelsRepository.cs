@@ -1140,4 +1140,184 @@ public sealed partial class ChannelsRepository
         var value = reader.GetString(ordinal);
         return string.IsNullOrEmpty(value) ? null : value;
     }
+
+    // =========================================================================
+    // Worker-pool lobby operations (task #1771)
+    // =========================================================================
+
+    /// <summary>
+    /// Ensure the #worker-pool lobby channel exists (slug='worker-pool', kind='system').
+    /// Returns the channel DTO. Idempotent — uses ON CONFLICT on slug.
+    /// </summary>
+    public async Task<ChannelDto> EnsureWorkerPoolLobbyChannelAsync(CancellationToken cancellationToken = default)
+    {
+        const string settingsJson = "{\"systemManaged\":true,\"channelRole\":\"worker_pool_lobby\",\"description\":\"Worker-pool lobby: visible home lane for spawned-coder orchestration.\"}";
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """"
+            INSERT INTO channels(slug, display_name, kind, created_by, visibility, settings_json)
+            VALUES ('worker-pool', '#worker-pool', 'system', 'system', 'normal', $settingsJson)
+            ON CONFLICT(slug) DO UPDATE SET
+                display_name = '#worker-pool',
+                kind = 'system',
+                visibility = 'normal',
+                settings_json = COALESCE(channels.settings_json, excluded.settings_json),
+                updated_at = datetime('now')
+            RETURNING id, slug, display_name, kind, project_id, space_id, created_by, visibility, settings_json, created_at, updated_at, archived_at;
+            """";
+        command.Parameters.AddWithValue("$settingsJson", settingsJson);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        return ReadChannel(reader);
+    }
+
+    /// <summary>
+    /// Upsert a worker-pool member's presence record in the lobby.
+    /// Uses ON CONFLICT(channel_id, member_identity) to create or update.
+    /// The release_acknowledged flag gates the transition from 'released' to 'idle':
+    /// - Setting status='released' sets release_acknowledged=0
+    /// - A separate AcknowledgeWorkerPoolReleaseAsync call sets release_acknowledged=1
+    /// - Only when status='released' AND release_acknowledged=1 can the worker
+    ///   transition back to 'idle' (available)
+    /// </summary>
+    public async Task<WorkerPoolLobbyPresenceDto> UpsertWorkerPoolLobbyPresenceAsync(
+        long channelId, UpsertWorkerPoolLobbyPresenceRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var lobbyChannelId = channelId;
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+
+        // Determine if release-acknowledged gate applies.
+        // When transitioning from 'released' to 'idle', require release_acknowledged=1.
+        // For other transitions or new inserts, derive default ack state.
+        string requestedStatus = request.Status ?? "idle";
+
+        command.CommandText = """"
+            INSERT INTO worker_pool_lobby_presence(
+                channel_id, member_identity, agent_instance_id, pool_member_id,
+                profile, role, status, current_assignment_id, current_task_id,
+                current_project_id, last_activity_at, release_acknowledged)
+            VALUES (
+                $channelId, $memberIdentity, $agentInstanceId, $poolMemberId,
+                $profile, $role, $status, $currentAssignmentId, $currentTaskId,
+                $currentProjectId, $lastActivityAt,
+                CASE WHEN $status = 'idle' AND EXISTS(
+                    SELECT 1 FROM worker_pool_lobby_presence
+                    WHERE channel_id = $channelId
+                      AND member_identity = $memberIdentity
+                      AND status = 'released'
+                      AND release_acknowledged = 0
+                ) THEN 0 ELSE 1 END)
+            ON CONFLICT(channel_id, member_identity) DO UPDATE SET
+                agent_instance_id = COALESCE($agentInstanceId, worker_pool_lobby_presence.agent_instance_id),
+                pool_member_id = COALESCE($poolMemberId, worker_pool_lobby_presence.pool_member_id),
+                profile = COALESCE($profile, worker_pool_lobby_presence.profile),
+                role = COALESCE($role, worker_pool_lobby_presence.role),
+                status = CASE
+                    -- Gate: released->idle requires release_acknowledged
+                    WHEN $status = 'idle' AND worker_pool_lobby_presence.status = 'released'
+                         AND worker_pool_lobby_presence.release_acknowledged = 0
+                    THEN worker_pool_lobby_presence.status
+                    WHEN $status = 'released'
+                    THEN 'released'
+                    ELSE COALESCE($status, worker_pool_lobby_presence.status)
+                END,
+                current_assignment_id = $currentAssignmentId,
+                current_task_id = $currentTaskId,
+                current_project_id = $currentProjectId,
+                last_activity_at = COALESCE($lastActivityAt, worker_pool_lobby_presence.last_activity_at),
+                -- Reset release_acknowledged when transitioning to 'released'
+                release_acknowledged = CASE
+                    WHEN $status = 'released' THEN 0
+                    ELSE worker_pool_lobby_presence.release_acknowledged
+                END,
+                updated_at = datetime('now')
+            RETURNING id, channel_id, member_identity, agent_instance_id, pool_member_id,
+                profile, role, status, current_assignment_id, current_task_id,
+                current_project_id, last_activity_at, created_at, updated_at;
+            """";
+        command.Parameters.AddWithValue("$channelId", lobbyChannelId);
+        command.Parameters.AddWithValue("$memberIdentity", request.MemberIdentity);
+        command.Parameters.AddWithValue("$agentInstanceId", (object?)request.AgentInstanceId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$poolMemberId", (object?)request.PoolMemberId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$profile", (object?)request.Profile ?? DBNull.Value);
+        command.Parameters.AddWithValue("$role", (object?)request.Role ?? DBNull.Value);
+        command.Parameters.AddWithValue("$status", requestedStatus);
+        command.Parameters.AddWithValue("$currentAssignmentId", (object?)request.CurrentAssignmentId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$currentTaskId", (object?)request.CurrentTaskId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$currentProjectId", (object?)request.CurrentProjectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$lastActivityAt", (object?)request.LastActivityAt ?? DBNull.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        return ReadWorkerPoolLobbyPresence(reader);
+    }
+
+    /// <summary>
+    /// Acknowledge Core release for a worker in 'released' status, permitting
+    /// the transition back to 'idle' (available). This is the release gate:
+    /// Core must explicitly acknowledge before a worker is shown as available.
+    /// </summary>
+    public async Task<WorkerPoolLobbyPresenceDto?> AcknowledgeWorkerPoolReleaseAsync(
+        long channelId, string memberIdentity, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """"
+            UPDATE worker_pool_lobby_presence
+            SET release_acknowledged = 1,
+                updated_at = datetime('now')
+            WHERE channel_id = $channelId
+              AND member_identity = $memberIdentity
+              AND status = 'released'
+            RETURNING id, channel_id, member_identity, agent_instance_id, pool_member_id,
+                profile, role, status, current_assignment_id, current_task_id,
+                current_project_id, last_activity_at, created_at, updated_at;
+            """";
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$memberIdentity", memberIdentity);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadWorkerPoolLobbyPresence(reader) : null;
+    }
+
+    /// <summary>
+    /// List all worker-pool lobby presence records for a given lobby channel.
+    /// Returns the full presence list for projection into the overview response.
+    /// </summary>
+    public async Task<IReadOnlyList<WorkerPoolLobbyPresenceDto>> ListWorkerPoolLobbyPresenceAsync(
+        long channelId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """"
+            SELECT id, channel_id, member_identity, agent_instance_id, pool_member_id,
+                   profile, role, status, current_assignment_id, current_task_id,
+                   current_project_id, last_activity_at, created_at, updated_at
+            FROM worker_pool_lobby_presence
+            WHERE channel_id = $channelId
+            ORDER BY status ASC, role ASC, profile ASC, member_identity ASC;
+            """";
+        command.Parameters.AddWithValue("$channelId", channelId);
+        var rows = new List<WorkerPoolLobbyPresenceDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadWorkerPoolLobbyPresence(reader));
+        return rows;
+    }
+
+    private static WorkerPoolLobbyPresenceDto ReadWorkerPoolLobbyPresence(SqliteDataReader reader) => new(
+        reader.GetInt64(0),
+        reader.GetInt64(1),
+        reader.GetString(2),
+        GetNullableString(reader, 3),
+        GetNullableString(reader, 4),
+        GetNullableString(reader, 5),
+        GetNullableString(reader, 6),
+        reader.GetString(7),
+        GetNullableString(reader, 8),
+        GetNullableString(reader, 9),
+        GetNullableString(reader, 10),
+        GetNullableString(reader, 11),
+        reader.GetString(12),
+        reader.GetString(13));
 }

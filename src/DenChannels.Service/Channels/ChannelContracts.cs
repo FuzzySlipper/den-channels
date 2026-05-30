@@ -244,3 +244,83 @@ public sealed record UpsertChannelReadCursorRequest(
     string ReaderIdentity,
     string? InstanceId,
     long? LastReadChannelMessageId);
+
+// =========================================================================
+// Worker-pool lobby presence DTOs (task #1771)
+// =========================================================================
+
+/// <summary>
+/// Visible presence record for a worker-pool member in the #worker-pool lobby.
+/// Each record corresponds to an active member who has joined the lobby.
+/// Idle = available for assignment; other statuses indicate lease lifecycle.
+/// </summary>
+public sealed record WorkerPoolLobbyPresenceDto(
+    long Id,
+    long ChannelId,
+    string MemberIdentity,
+    string? AgentInstanceId,
+    string? PoolMemberId,
+    string? Profile,
+    string? Role,
+    string Status,
+    string? CurrentAssignmentId,
+    string? CurrentTaskId,
+    string? CurrentProjectId,
+    string? LastActivityAt,
+    string CreatedAt,
+    string UpdatedAt);
+
+/// <summary>
+/// Request to join or update presence in the #worker-pool lobby.
+/// Status transitions: idle -> leased -> draining -> released -> idle
+/// Quarantined/offline are terminal statuses requiring Core intervention.
+/// </summary>
+public sealed record UpsertWorkerPoolLobbyPresenceRequest(
+    string MemberIdentity,
+    string? AgentInstanceId,
+    string? PoolMemberId,
+    string? Profile,
+    string? Role,
+    string? Status,
+    string? CurrentAssignmentId,
+    string? CurrentTaskId,
+    string? CurrentProjectId,
+    string? LastActivityAt);
+
+/// <summary>
+/// Response payload for the worker-pool lobby overview.
+/// Groups available (idle) workers by role/profile for easy scheduling.
+/// </summary>
+public sealed record WorkerPoolLobbyOverviewResponse(
+    string LobbySlug,
+    string LobbyDisplayName,
+    long LobbyChannelId,
+    int TotalMembers,
+    int AvailableCount,
+    IReadOnlyList<WorkerPoolPresenceByRoleGroup> ByRole,
+    IReadOnlyList<WorkerPoolLobbyPresenceDto> Members);
+
+/// <summary>
+/// Group of available (idle-status) workers sharing a role/profile.
+/// </summary>
+public sealed record WorkerPoolPresenceByRoleGroup(
+    string? Role,
+    string? Profile,
+    int Count,
+    IReadOnlyList<WorkerPoolLobbyPresenceDto> Members);
+
+/// <summary>
+/// Body for a worker-pool lobby status message that carries trace context.
+/// Used when posting a lobby status update that includes assignment trace IDs.
+/// </summary>
+public sealed record PostWorkerPoolLobbyStatusRequest(
+    string SenderIdentity,
+    string Body,
+    string? AgentInstanceId,
+    string? PoolMemberId,
+    string? Profile,
+    string? Role,
+    string? Status,
+    string? CurrentAssignmentId,
+    string? CurrentTaskId,
+    string? CurrentProjectId);
