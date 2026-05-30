@@ -1026,13 +1026,16 @@ public sealed partial class ChannelsRepository
 
     /// <summary>
     /// Get a single read cursor by channel + reader identity. If instanceId is provided,
-    /// returns the instance-scoped cursor; otherwise returns the profile-scoped cursor.
+    /// returns the instance-scoped cursor; otherwise returns the profile-scoped cursor
+    /// (instance_id = '').
     /// </summary>
     public async Task<ChannelReadCursorDto?> GetReadCursorAsync(long channelId, string readerType, string readerIdentity,
         string? instanceId = null, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
+        // Normalize: null/empty instanceId matches profile-level cursor (instance_id = '')
+        var instanceFilter = string.IsNullOrEmpty(instanceId) ? "" : instanceId;
         command.CommandText = """
             SELECT id, channel_id, reader_type, reader_identity, instance_id,
                    last_read_channel_message_id, last_read_at, created_at, updated_at
@@ -1040,12 +1043,12 @@ public sealed partial class ChannelsRepository
             WHERE channel_id = $channelId
               AND reader_type = $readerType
               AND reader_identity = $readerIdentity
-              AND ($instanceId IS NULL AND instance_id IS NULL OR instance_id = $instanceId);
+              AND instance_id = $instanceId;
             """;
         command.Parameters.AddWithValue("$channelId", channelId);
         command.Parameters.AddWithValue("$readerType", readerType);
         command.Parameters.AddWithValue("$readerIdentity", readerIdentity);
-        command.Parameters.AddWithValue("$instanceId", (object?)instanceId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$instanceId", instanceFilter);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadReadCursor(reader) : null;
     }
@@ -1053,12 +1056,15 @@ public sealed partial class ChannelsRepository
     /// <summary>
     /// Upsert a read cursor for profile-level or instance-level scoping.
     /// Two instances sharing the same profile identity maintain independent read positions.
+    /// Profile-level cursors use instance_id = '' for proper SQLite UNIQUE enforcement.
     /// </summary>
     public async Task<ChannelReadCursorDto> UpsertReadCursorAsync(long channelId, UpsertChannelReadCursorRequest request,
         CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
+        // Normalize: null/empty instanceId -> '' (profile-level cursor with proper uniqueness)
+        var normalizedInstanceId = string.IsNullOrEmpty(request.InstanceId) ? "" : request.InstanceId;
         command.CommandText = """
             INSERT INTO channel_read_cursors(channel_id, reader_type, reader_identity, instance_id, last_read_channel_message_id)
             VALUES ($channelId, $readerType, $readerIdentity, $instanceId, $lastReadMessageId)
@@ -1073,7 +1079,7 @@ public sealed partial class ChannelsRepository
         command.Parameters.AddWithValue("$channelId", channelId);
         command.Parameters.AddWithValue("$readerType", request.ReaderType);
         command.Parameters.AddWithValue("$readerIdentity", request.ReaderIdentity);
-        command.Parameters.AddWithValue("$instanceId", (object?)request.InstanceId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$instanceId", normalizedInstanceId);
         command.Parameters.AddWithValue("$lastReadMessageId", (object?)request.LastReadChannelMessageId ?? DBNull.Value);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         await reader.ReadAsync(cancellationToken);
@@ -1082,6 +1088,9 @@ public sealed partial class ChannelsRepository
 
     /// <summary>
     /// List read cursors for a channel, optionally filtered by reader identity or instance.
+    /// Profile-level cursors use instance_id = '' internally.
+    /// When instanceId is null/omitted, returns ALL cursors (both profile and instance).
+    /// When instanceId is provided, filters to that specific instance ('' for profile-level).
     /// </summary>
     public async Task<IReadOnlyList<ChannelReadCursorDto>> ListReadCursorsAsync(long channelId,
         string? readerType = null, string? readerIdentity = null, string? instanceId = null,
@@ -1097,12 +1106,14 @@ public sealed partial class ChannelsRepository
               AND ($readerType IS NULL OR reader_type = $readerType)
               AND ($readerIdentity IS NULL OR reader_identity = $readerIdentity)
               AND ($instanceId IS NULL OR instance_id = $instanceId)
-            ORDER BY reader_type, reader_identity, instance_id NULLS FIRST, id ASC;
+            ORDER BY reader_type, reader_identity, instance_id, id ASC;
             """;
         command.Parameters.AddWithValue("$channelId", channelId);
         command.Parameters.AddWithValue("$readerType", (object?)readerType ?? DBNull.Value);
         command.Parameters.AddWithValue("$readerIdentity", (object?)readerIdentity ?? DBNull.Value);
-        command.Parameters.AddWithValue("$instanceId", (object?)instanceId ?? DBNull.Value);
+        // When instanceId is explicitly provided (including ''), normalize and filter;
+        // when null, the $instanceId IS NULL condition matches all rows.
+        command.Parameters.AddWithValue("$instanceId", instanceId is null ? DBNull.Value : (object)(string.IsNullOrEmpty(instanceId) ? "" : instanceId));
         var rows = new List<ChannelReadCursorDto>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
@@ -1115,9 +1126,18 @@ public sealed partial class ChannelsRepository
         reader.GetInt64(1),
         reader.GetString(2),
         reader.GetString(3),
-        GetNullableString(reader, 4),
+        // Convert '' back to null in DTO for API backward compatibility
+        // (profile-level cursor shows as null InstanceId externally)
+        NormalizeReadCursorInstanceId(reader, 4),
         GetNullableInt64(reader, 5),
         reader.GetString(6),
         reader.GetString(7),
         reader.GetString(8));
+
+    private static string? NormalizeReadCursorInstanceId(SqliteDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal)) return null;
+        var value = reader.GetString(ordinal);
+        return string.IsNullOrEmpty(value) ? null : value;
+    }
 }

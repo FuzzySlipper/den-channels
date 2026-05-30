@@ -59,6 +59,7 @@ public sealed class ChannelsDatabaseInitializer
         await EnsureChannelActivityEventsCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureAssignmentCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureSharedProfileInstanceColumnsAsync(connection, cancellationToken);
+        await EnsureChannelReadCursorsInstanceConstraintAsync(connection, logger, cancellationToken);
         await EnsureAgentCommonsSeedAsync(connection, cancellationToken);
         await ExecuteNonQueryAsync(connection, PostCreateIndexesSql, cancellationToken);
     }
@@ -142,6 +143,38 @@ public sealed class ChannelsDatabaseInitializer
                     WHERE instance_id IS NOT NULL;
                 """, cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// Ensures the channel_read_cursors UNIQUE constraint includes instance_id.
+    /// For databases created before migration v2, the old constraint
+    /// UNIQUE(channel_id, reader_type, reader_identity) prevents per-instance
+    /// cursors. This method rebuilds the table with the new constraint and
+    /// normalizes any NULL instance_ids to '' for proper SQLite uniqueness.
+    /// </summary>
+    private static async Task EnsureChannelReadCursorsInstanceConstraintAsync(SqliteConnection connection,
+        ILogger? logger = null, CancellationToken cancellationToken = default)
+    {
+        if (!await TableExistsAsync(connection, "channel_read_cursors", cancellationToken))
+            return;
+
+        var createSql = await GetTableCreateSqlAsync(connection, "channel_read_cursors", cancellationToken);
+
+        // Check if the new UNIQUE constraint already includes instance_id
+        if (createSql?.Contains("UNIQUE (channel_id, reader_type, reader_identity, instance_id)", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            // Constraint is already correct; just normalize any NULL instance_ids to ''
+            await ExecuteNonQueryAsync(connection, """
+                UPDATE channel_read_cursors
+                SET instance_id = ''
+                WHERE instance_id IS NULL;
+                """, cancellationToken);
+            return;
+        }
+
+        // Old constraint detected — rebuild table with instance_id in UNIQUE
+        await ExecuteNonQueryAsync(connection, RebuildChannelReadCursorsForInstanceConstraintSql, cancellationToken);
+        logger?.LogInformation("Rebuilt channel_read_cursors table with instance-scoped UNIQUE constraint");
     }
 
     private static async Task EnsureAgentCommonsSeedAsync(SqliteConnection connection,
@@ -516,6 +549,40 @@ public sealed class ChannelsDatabaseInitializer
                 ELSE channel_memberships.wake_policy
             END,
             updated_at = datetime('now');
+        """;
+
+    /// <summary>
+    /// Rebuild channel_read_cursors with instance-scoped UNIQUE constraint
+    /// and normalize NULL instance_ids to '' for proper SQLite uniqueness.
+    /// Preserves existing cursor data.
+    /// </summary>
+    private const string RebuildChannelReadCursorsForInstanceConstraintSql = """
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE channel_read_cursors__new (
+            id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id                 INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+            reader_type                TEXT NOT NULL CHECK (reader_type IN ('user', 'agent', 'role', 'group')),
+            reader_identity            TEXT NOT NULL,
+            instance_id                TEXT NOT NULL DEFAULT '',
+            last_read_channel_message_id INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
+            last_read_at               TEXT NOT NULL DEFAULT (datetime('now')),
+            created_at                 TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at                 TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(channel_id, reader_type, reader_identity, instance_id)
+        );
+
+        INSERT INTO channel_read_cursors__new(
+            id, channel_id, reader_type, reader_identity, instance_id,
+            last_read_channel_message_id, last_read_at, created_at, updated_at)
+        SELECT
+            id, channel_id, reader_type, reader_identity, COALESCE(instance_id, ''),
+            last_read_channel_message_id, last_read_at, created_at, updated_at
+        FROM channel_read_cursors
+        ORDER BY id;
+
+        DROP TABLE channel_read_cursors;
+        ALTER TABLE channel_read_cursors__new RENAME TO channel_read_cursors;
+        PRAGMA foreign_keys = ON;
         """;
 
     private const string PostCreateIndexesSql = """"

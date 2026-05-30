@@ -426,6 +426,163 @@ public sealed class ChannelsDatabaseInitializerTests
         Assert.Contains("worker_role", columns);
     }
 
+    [Fact]
+    public async Task ApplyMigrationsAsync_RebuildsChannelReadCursorsConstraintForLegacyV1Db()
+    {
+        // Simulate a V1 database with the old UNIQUE constraint
+        // (without instance_id) — the exact structure from InitialSchemaSql
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ExecuteAsync(connection, """
+            CREATE TABLE channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                project_id TEXT
+            );
+            INSERT INTO channels(slug, display_name, kind, project_id)
+            VALUES ('project-test', 'Test Project', 'project_default', 'test-proj');
+
+            CREATE TABLE channel_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                sender_type TEXT NOT NULL,
+                sender_identity TEXT NOT NULL,
+                body TEXT NOT NULL,
+                message_kind TEXT NOT NULL DEFAULT 'human_text',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO channel_messages(channel_id, sender_type, sender_identity, body)
+            VALUES (1, 'system', 'test', 'test-message-1');
+            INSERT INTO channel_messages(channel_id, sender_type, sender_identity, body)
+            VALUES (1, 'system', 'test', 'test-message-2');
+
+            CREATE TABLE channel_read_cursors (
+                id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id                 INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                reader_type                TEXT NOT NULL CHECK (reader_type IN ('user', 'agent', 'role', 'group')),
+                reader_identity            TEXT NOT NULL,
+                last_read_channel_message_id INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
+                last_read_at               TEXT NOT NULL DEFAULT (datetime('now')),
+                created_at                 TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at                 TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(channel_id, reader_type, reader_identity)
+            );
+            -- Existing profile-level cursor
+            INSERT INTO channel_read_cursors(channel_id, reader_type, reader_identity, last_read_channel_message_id)
+            VALUES (1, 'agent', 'spawned-coder', 1);
+            """);
+
+        // Apply migrations (fresh create of schema_migrations table shows version 0)
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        // Verify: can insert two cursors with same (channel, type, identity) but different instance_ids
+        await ExecuteAsync(connection, """
+            INSERT INTO channel_read_cursors(channel_id, reader_type, reader_identity, instance_id, last_read_channel_message_id)
+            VALUES (1, 'agent', 'spawned-coder', 'inst-a', 1);
+            """);
+
+        await ExecuteAsync(connection, """
+            INSERT INTO channel_read_cursors(channel_id, reader_type, reader_identity, instance_id, last_read_channel_message_id)
+            VALUES (1, 'agent', 'spawned-coder', 'inst-b', 2);
+            """);
+
+        // Verify: existing profile-level cursor data was preserved (instance_id normalized to '')
+        var profileCursor = await QuerySingleAsync(connection, """
+            SELECT instance_id, last_read_channel_message_id
+            FROM channel_read_cursors
+            WHERE channel_id = 1
+              AND reader_type = 'agent'
+              AND reader_identity = 'spawned-coder'
+              AND instance_id = '';
+            """);
+        Assert.Equal("1", profileCursor["last_read_channel_message_id"]);
+
+        var count = await CountRowsAsync(connection, "channel_read_cursors");
+        Assert.Equal(3, count);
+
+        // Verify: the old UNIQUE constraint no longer blocks per-instance cursors
+        var instanceA = await QuerySingleAsync(connection, """
+            SELECT last_read_channel_message_id
+            FROM channel_read_cursors
+            WHERE channel_id = 1
+              AND reader_type = 'agent'
+              AND reader_identity = 'spawned-coder'
+              AND instance_id = 'inst-a';
+            """);
+        Assert.Equal("1", instanceA["last_read_channel_message_id"]);
+
+        var instanceB = await QuerySingleAsync(connection, """
+            SELECT last_read_channel_message_id
+            FROM channel_read_cursors
+            WHERE channel_id = 1
+              AND reader_type = 'agent'
+              AND reader_identity = 'spawned-coder'
+              AND instance_id = 'inst-b';
+            """);
+        Assert.Equal("2", instanceB["last_read_channel_message_id"]);
+    }
+
+    [Fact]
+    public async Task ApplyMigrationsAsync_NormalizesNullInstanceIdsDuringRebuild()
+    {
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        // Simulate a V1 database where channel_read_cursors already exists
+        // with the old UNIQUE constraint (before instance_id was added).
+        // This is the state of a V1 DB before migration v2 runs.
+        await ExecuteAsync(connection, """
+            CREATE TABLE channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                project_id TEXT
+            );
+            INSERT INTO channels(slug, display_name, kind, project_id)
+            VALUES ('project-null-test', 'Null Test', 'project_default', 'null-test');
+
+            CREATE TABLE channel_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                sender_type TEXT NOT NULL,
+                sender_identity TEXT NOT NULL,
+                body TEXT NOT NULL,
+                message_kind TEXT NOT NULL DEFAULT 'human_text',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO channel_messages(channel_id, sender_type, sender_identity, body)
+            VALUES (1, 'system', 'test', 'msg');
+
+            CREATE TABLE channel_read_cursors (
+                id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id                 INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                reader_type                TEXT NOT NULL CHECK (reader_type IN ('user', 'agent', 'role', 'group')),
+                reader_identity            TEXT NOT NULL,
+                last_read_channel_message_id INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
+                last_read_at               TEXT NOT NULL DEFAULT (datetime('now')),
+                created_at                 TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at                 TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(channel_id, reader_type, reader_identity)
+            );
+            -- Existing profile-level cursor (NULL instance_id, old constraint)
+            INSERT INTO channel_read_cursors(channel_id, reader_type, reader_identity, last_read_channel_message_id)
+            VALUES (1, 'agent', 'null-test-agent', 1);
+            """);
+
+        // Apply migrations — should rebuild table and normalize NULL to ''
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        var row = await QuerySingleAsync(connection, """
+            SELECT instance_id, last_read_channel_message_id
+            FROM channel_read_cursors
+            WHERE channel_id = 1
+              AND reader_type = 'agent'
+              AND reader_identity = 'null-test-agent';
+            """);
+        Assert.Equal("", row["instance_id"]);
+        Assert.Equal("1", row["last_read_channel_message_id"]);
+    }
+
     private static async Task<SqliteConnection> OpenInMemoryDatabaseAsync()
     {
         var connection = new SqliteConnection("Data Source=:memory:");
