@@ -70,6 +70,7 @@ public sealed class ChannelsDatabaseInitializer
         await EnsureChannelReadCursorsInstanceConstraintAsync(connection, logger, cancellationToken);
         await EnsureAgentCommonsSeedAsync(connection, cancellationToken);
         await EnsureWorkerPoolLobbySeedAsync(connection, cancellationToken);
+        await EnsureWorkerPoolLobbyPresenceConcreteConstraintAsync(connection, logger, cancellationToken);
         await ExecuteNonQueryAsync(connection, PostCreateIndexesSql, cancellationToken);
     }
 
@@ -740,6 +741,7 @@ public sealed class ChannelsDatabaseInitializer
             member_identity         TEXT NOT NULL,
             agent_instance_id       TEXT,
             pool_member_id          TEXT,
+            concrete_identity       TEXT NOT NULL DEFAULT '',
             profile                 TEXT,
             role                    TEXT,
             status                  TEXT NOT NULL DEFAULT 'idle'
@@ -751,7 +753,7 @@ public sealed class ChannelsDatabaseInitializer
             release_acknowledged    INTEGER NOT NULL DEFAULT 0 CHECK (release_acknowledged IN (0, 1)),
             created_at              TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(channel_id, member_identity)
+            UNIQUE(channel_id, member_identity, concrete_identity)
         );
 
         CREATE INDEX IF NOT EXISTS idx_wp_lobby_presence_status
@@ -789,6 +791,7 @@ public sealed class ChannelsDatabaseInitializer
             member_identity         TEXT NOT NULL,
             agent_instance_id       TEXT,
             pool_member_id          TEXT,
+            concrete_identity       TEXT NOT NULL DEFAULT '',
             profile                 TEXT,
             role                    TEXT,
             status                  TEXT NOT NULL DEFAULT 'idle'
@@ -800,7 +803,7 @@ public sealed class ChannelsDatabaseInitializer
             release_acknowledged    INTEGER NOT NULL DEFAULT 0 CHECK (release_acknowledged IN (0, 1)),
             created_at              TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(channel_id, member_identity)
+            UNIQUE(channel_id, member_identity, concrete_identity)
         );
 
         CREATE INDEX IF NOT EXISTS idx_wp_lobby_presence_status
@@ -810,4 +813,93 @@ public sealed class ChannelsDatabaseInitializer
             ON worker_pool_lobby_presence(channel_id, role, profile)
             WHERE status = 'idle';
         """";
+
+    /// <summary>
+    /// Ensures the worker_pool_lobby_presence concrete_identity column exists
+    /// and the UNIQUE constraint includes concrete_identity instead of only
+    /// (channel_id, member_identity). For databases created before this fix,
+    /// the old constraint prevents multiple workers with the same member_identity
+    /// from joining the lobby. This method rebuilds the table with the new
+    /// constraint and normalizes concrete_identity values.
+    /// concrete_identity is computed as: pool_member_id when present, else
+    /// agent_instance_id when present, else '' for non-pool fallback.
+    /// </summary>
+    private static async Task EnsureWorkerPoolLobbyPresenceConcreteConstraintAsync(SqliteConnection connection,
+        ILogger? logger = null, CancellationToken cancellationToken = default)
+    {
+        if (!await TableExistsAsync(connection, "worker_pool_lobby_presence", cancellationToken))
+            return;
+
+        var createSql = await GetTableCreateSqlAsync(connection, "worker_pool_lobby_presence", cancellationToken);
+
+        // Check if the new UNIQUE constraint already includes concrete_identity.
+        // Tolerate both UNIQUE(...) and UNIQUE (...) spellings.
+        if (createSql is not null && Regex.IsMatch(createSql,
+                @"UNIQUE\s*\(\s*channel_id\s*,\s*member_identity\s*,\s*concrete_identity\s*\)",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            // Constraint is already correct; ensure concrete_identity column exists
+            await EnsureColumnAsync(connection, "worker_pool_lobby_presence",
+                "concrete_identity", "TEXT NOT NULL DEFAULT ''", cancellationToken);
+            // Normalize any NULL concrete_identity values (from old data)
+            await ExecuteNonQueryAsync(connection, """
+                UPDATE worker_pool_lobby_presence
+                SET concrete_identity = COALESCE(pool_member_id, agent_instance_id, '')
+                WHERE concrete_identity IS NULL OR concrete_identity = '';
+                """, cancellationToken);
+            return;
+        }
+
+        // Old constraint detected — rebuild table with concrete_identity in UNIQUE
+        await ExecuteNonQueryAsync(connection, RebuildWorkerPoolLobbyPresenceForConcreteConstraintSql, cancellationToken);
+        logger?.LogInformation("Rebuilt worker_pool_lobby_presence table with concrete-identity-scoped UNIQUE constraint");
+    }
+
+    /// <summary>
+    /// Rebuild worker_pool_lobby_presence with concrete-identity-scoped UNIQUE
+    /// constraint and normalize concrete_identity values. Preserves existing data.
+    /// concrete_identity is computed as: pool_member_id when present, else
+    /// agent_instance_id when present, else '' for non-pool callers.
+    /// </summary>
+    private const string RebuildWorkerPoolLobbyPresenceForConcreteConstraintSql = """
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE worker_pool_lobby_presence__new (
+            id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id              INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+            member_identity         TEXT NOT NULL,
+            agent_instance_id       TEXT,
+            pool_member_id          TEXT,
+            concrete_identity       TEXT NOT NULL DEFAULT '',
+            profile                 TEXT,
+            role                    TEXT,
+            status                  TEXT NOT NULL DEFAULT 'idle'
+                                    CHECK (status IN ('idle', 'leased', 'draining', 'released', 'quarantined', 'offline')),
+            current_assignment_id   TEXT,
+            current_task_id         TEXT,
+            current_project_id      TEXT,
+            last_activity_at        TEXT,
+            release_acknowledged    INTEGER NOT NULL DEFAULT 0 CHECK (release_acknowledged IN (0, 1)),
+            created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(channel_id, member_identity, concrete_identity)
+        );
+
+        INSERT INTO worker_pool_lobby_presence__new(
+            id, channel_id, member_identity, agent_instance_id, pool_member_id,
+            concrete_identity, profile, role, status, current_assignment_id,
+            current_task_id, current_project_id, last_activity_at,
+            release_acknowledged, created_at, updated_at)
+        SELECT
+            id, channel_id, member_identity, agent_instance_id, pool_member_id,
+            COALESCE(pool_member_id, agent_instance_id, ''),
+            profile, role, status, current_assignment_id,
+            current_task_id, current_project_id, last_activity_at,
+            COALESCE(release_acknowledged, 0), created_at, updated_at
+        FROM worker_pool_lobby_presence
+        ORDER BY id;
+
+        DROP TABLE worker_pool_lobby_presence;
+        ALTER TABLE worker_pool_lobby_presence__new RENAME TO worker_pool_lobby_presence;
+        PRAGMA foreign_keys = ON;
+        """;
 }

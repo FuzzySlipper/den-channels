@@ -230,7 +230,8 @@ public sealed class WorkerPoolLobbyTests : IDisposable
     {
         var lobby = await EnsureLobbyChannelAsync();
 
-        // Two workers with same profile but different instances
+        // Two workers with same member_identity/profile/role but different concrete IDs (pool_member_id).
+        // The concrete_identity column ensures uniqueness even with same shared member_identity.
         var worker1 = await UpsertPresenceAsync(lobby.Id, new UpsertWorkerPoolLobbyPresenceRequest(
             MemberIdentity: "spawned-coder", Status: "idle",
             AgentInstanceId: "inst-a", PoolMemberId: "pool-a",
@@ -239,7 +240,7 @@ public sealed class WorkerPoolLobbyTests : IDisposable
             CurrentProjectId: null, LastActivityAt: null));
 
         var worker2 = await UpsertPresenceAsync(lobby.Id, new UpsertWorkerPoolLobbyPresenceRequest(
-            MemberIdentity: "spawned-coder-2", Status: "idle",
+            MemberIdentity: "spawned-coder", Status: "idle",
             AgentInstanceId: "inst-b", PoolMemberId: "pool-b",
             Profile: "spawned-coder", Role: "coder",
             CurrentAssignmentId: null, CurrentTaskId: null,
@@ -250,6 +251,122 @@ public sealed class WorkerPoolLobbyTests : IDisposable
         Assert.Equal("inst-b", worker2.AgentInstanceId);
         Assert.Equal("pool-b", worker2.PoolMemberId);
         Assert.NotEqual(worker1.Id, worker2.Id);
+
+        // Both workers should appear in the lobby overview
+        var overview = await _client.GetFromJsonAsync<WorkerPoolLobbyOverviewResponse>("/api/worker-pool/lobby/presence");
+        Assert.NotNull(overview);
+        Assert.Equal(2, overview.TotalMembers);
+        Assert.Equal(2, overview.AvailableCount);
+
+        var coderGroup = Assert.Single(overview.ByRole, g => g.Role == "coder");
+        Assert.Equal("spawned-coder", coderGroup.Profile);
+        Assert.Equal(2, coderGroup.Count);
+    }
+
+    [Fact]
+    public async Task AcknowledgeRelease_ConcreteIdentity_ReleasesOnlyOneWorker()
+    {
+        var lobby = await EnsureLobbyChannelAsync();
+
+        // Two workers with same shared member_identity but different pool_member_id
+        const string sharedIdentity = "shared-identity-worker";
+        const string poolA = "concrete-pool-a";
+        const string poolB = "concrete-pool-b";
+        const string instA = "concrete-inst-a";
+        const string instB = "concrete-inst-b";
+
+        await UpsertPresenceAsync(lobby.Id, new UpsertWorkerPoolLobbyPresenceRequest(
+            MemberIdentity: sharedIdentity, Status: "idle",
+            AgentInstanceId: instA, PoolMemberId: poolA,
+            Profile: "spawned-coder", Role: "coder",
+            CurrentAssignmentId: null, CurrentTaskId: null,
+            CurrentProjectId: null, LastActivityAt: null));
+
+        await UpsertPresenceAsync(lobby.Id, new UpsertWorkerPoolLobbyPresenceRequest(
+            MemberIdentity: sharedIdentity, Status: "idle",
+            AgentInstanceId: instB, PoolMemberId: poolB,
+            Profile: "spawned-coder", Role: "coder",
+            CurrentAssignmentId: null, CurrentTaskId: null,
+            CurrentProjectId: null, LastActivityAt: null));
+
+        // Transition both to released
+        await UpsertPresenceAsync(lobby.Id, new UpsertWorkerPoolLobbyPresenceRequest(
+            MemberIdentity: sharedIdentity, Status: "released",
+            AgentInstanceId: instA, PoolMemberId: poolA,
+            Profile: "spawned-coder", Role: "coder",
+            CurrentAssignmentId: null, CurrentTaskId: null,
+            CurrentProjectId: null, LastActivityAt: "2026-05-29T14:00:00Z"));
+
+        await UpsertPresenceAsync(lobby.Id, new UpsertWorkerPoolLobbyPresenceRequest(
+            MemberIdentity: sharedIdentity, Status: "released",
+            AgentInstanceId: instB, PoolMemberId: poolB,
+            Profile: "spawned-coder", Role: "coder",
+            CurrentAssignmentId: null, CurrentTaskId: null,
+            CurrentProjectId: null, LastActivityAt: "2026-05-29T14:00:00Z"));
+
+        // Acknowledge release for worker A only (via concrete identity query params)
+        var ackResponseA = await _client.PostAsync(
+            $"/api/worker-pool/lobby/presence/{sharedIdentity}/acknowledge-release?agentInstanceId={instA}&poolMemberId={poolA}", null);
+        Assert.Equal(HttpStatusCode.OK, ackResponseA.StatusCode);
+
+        // Worker A should now be able to transition back to idle
+        var idleA = await UpsertPresenceAsync(lobby.Id, new UpsertWorkerPoolLobbyPresenceRequest(
+            MemberIdentity: sharedIdentity, Status: "idle",
+            AgentInstanceId: instA, PoolMemberId: poolA,
+            Profile: "spawned-coder", Role: "coder",
+            CurrentAssignmentId: null, CurrentTaskId: null,
+            CurrentProjectId: null, LastActivityAt: "2026-05-29T14:05:00Z"));
+        Assert.Equal("idle", idleA.Status);
+
+        // Worker B should still be blocked from returning to idle (release not acknowledged)
+        var blockedIdleB = await UpsertPresenceAsync(lobby.Id, new UpsertWorkerPoolLobbyPresenceRequest(
+            MemberIdentity: sharedIdentity, Status: "idle",
+            AgentInstanceId: instB, PoolMemberId: poolB,
+            Profile: "spawned-coder", Role: "coder",
+            CurrentAssignmentId: null, CurrentTaskId: null,
+            CurrentProjectId: null, LastActivityAt: "2026-05-29T14:10:00Z"));
+        Assert.Equal("released", blockedIdleB.Status);
+
+        // Acknowledge release for worker B
+        var ackResponseB = await _client.PostAsync(
+            $"/api/worker-pool/lobby/presence/{sharedIdentity}/acknowledge-release?agentInstanceId={instB}&poolMemberId={poolB}", null);
+        Assert.Equal(HttpStatusCode.OK, ackResponseB.StatusCode);
+
+        // Now worker B can also transition back to idle
+        var idleB = await UpsertPresenceAsync(lobby.Id, new UpsertWorkerPoolLobbyPresenceRequest(
+            MemberIdentity: sharedIdentity, Status: "idle",
+            AgentInstanceId: instB, PoolMemberId: poolB,
+            Profile: "spawned-coder", Role: "coder",
+            CurrentAssignmentId: null, CurrentTaskId: null,
+            CurrentProjectId: null, LastActivityAt: "2026-05-29T14:15:00Z"));
+        Assert.Equal("idle", idleB.Status);
+    }
+
+    [Fact]
+    public async Task AcknowledgeRelease_WithoutConcreteIdentity_MatchesAnyReleased()
+    {
+        var lobby = await EnsureLobbyChannelAsync();
+
+        // Single worker with no pool_member_id (non-pool caller, backward compat)
+        await UpsertPresenceAsync(lobby.Id, new UpsertWorkerPoolLobbyPresenceRequest(
+            MemberIdentity: "legacy-worker", Status: "released",
+            AgentInstanceId: "legacy-inst", PoolMemberId: null,
+            Profile: "spawned-coder", Role: "coder",
+            CurrentAssignmentId: null, CurrentTaskId: null,
+            CurrentProjectId: null, LastActivityAt: null));
+
+        // Acknowledge without concrete params — uses '' fallback
+        var response = await _client.PostAsync(
+            "/api/worker-pool/lobby/presence/legacy-worker/acknowledge-release", null);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var idle = await UpsertPresenceAsync(lobby.Id, new UpsertWorkerPoolLobbyPresenceRequest(
+            MemberIdentity: "legacy-worker", Status: "idle",
+            AgentInstanceId: "legacy-inst", PoolMemberId: null,
+            Profile: "spawned-coder", Role: "coder",
+            CurrentAssignmentId: null, CurrentTaskId: null,
+            CurrentProjectId: null, LastActivityAt: null));
+        Assert.Equal("idle", idle.Status);
     }
 
     // =========================================================================

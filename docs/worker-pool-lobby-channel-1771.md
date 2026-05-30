@@ -39,9 +39,10 @@ The channel is seeded at database migration v3 and on every startup via
 |--------|------|-------------|
 | `id` | INTEGER PK | Auto-increment |
 | `channel_id` | INTEGER FK → channels | Lobby channel ID |
-| `member_identity` | TEXT | Unique per channel (e.g. `spawned-coder`, `spawned-coder-2`) |
+| `member_identity` | TEXT | Shared identity (e.g. `spawned-coder`). Multiple workers may share. |
 | `agent_instance_id` | TEXT? | Concrete instance ID for same-profile distinction |
 | `pool_member_id` | TEXT? | Pool member ID from Core |
+| `concrete_identity` | TEXT (NOT NULL DEFAULT '') | Deterministic uniqueness key: pool_member_id when present, else agent_instance_id, else '' |
 | `profile` | TEXT? | Hermes profile name (e.g. `spawned-coder`, `spawned-reviewer`) |
 | `role` | TEXT? | Worker role (e.g. `coder`, `reviewer`, `validator`) |
 | `status` | TEXT | One of: `idle`, `leased`, `draining`, `released`, `quarantined`, `offline` |
@@ -53,7 +54,7 @@ The channel is seeded at database migration v3 and on every startup via
 | `created_at` | TEXT | Row creation timestamp |
 | `updated_at` | TEXT | Row last-update timestamp |
 
-**Unique constraint:** `(channel_id, member_identity)` — one presence record per member per lobby.
+**Unique constraint:** `(channel_id, member_identity, concrete_identity)` — multiple workers may share the same `member_identity` (e.g. `spawned-coder`) as long as they have distinct `concrete_identity` values. `concrete_identity` is computed as: `pool_member_id` when present, else `agent_instance_id` when present, else `''` (empty string fallback for non-pool callers, preserving backward compatibility with the old `UNIQUE(channel_id, member_identity)` contract).
 
 ## Status lifecycle
 
@@ -115,8 +116,12 @@ Create or update a worker's lobby presence record.
 
 Acknowledge Core release for a worker in `released` status, enabling return to `idle`.
 
+**Optional query params:** `agentInstanceId` and `poolMemberId` identify the concrete worker when
+multiple workers share the same `memberIdentity`. Without them, matches the worker whose
+`concrete_identity` is `''` (computed from NULL pool_member_id and agent_instance_id).
+
 **Response:** `200 OK` with `WorkerPoolLobbyPresenceDto`, or `404 Not Found` if no
-released presence exists for the given identity.
+released presence matches the given identity and concrete params.
 
 ### GET /api/worker-pool/lobby/presence
 
@@ -148,12 +153,24 @@ List all workers in the lobby with their presence, grouped by role/profile.
 }
 ```
 
-## Concrete instance/member IDs
+## Concrete instance/member IDs and uniqueness
 
 Each presence record carries `agent_instance_id` and `pool_member_id` to distinguish
 multiple concrete agent instances sharing the same Hermes profile (e.g., two `spawned-coder`
-workers with different instance IDs). This enables the lobby to show distinct workers
-even when they share the same profile name.
+workers with different instance IDs). The `concrete_identity` column provides deterministic
+uniqueness: it is computed as `pool_member_id` when present, else `agent_instance_id` when
+present, else `''`. The `UNIQUE(channel_id, member_identity, concrete_identity)` constraint
+allows multiple workers with the same `member_identity` (and same `profile`/`role`) to coexist
+in the lobby, each occupying a distinct row.
+
+**Important:** Do NOT create duplicate Hermes profiles to distinguish workers. The
+`member_identity` (and `profile`/`role`) may be identical across workers. Concrete identity
+(`pool_member_id` or `agent_instance_id`) is the discriminator.
+
+The acknowledge-release endpoint accepts optional `agentInstanceId` and `poolMemberId` query
+params to target a specific concrete worker when multiple exist with the same `memberIdentity`.
+Without these params, it matches workers whose `concrete_identity` is `''` (both concrete
+IDs were NULL), preserving backward compatibility with non-pool callers.
 
 ## Surfaces and assignment traces
 
@@ -172,7 +189,9 @@ Lobby activity carries trace context through the presence record's `currentAssig
 - Core must call `PUT /api/worker-pool/lobby/presence` to register workers and update their
   lifecycle status (idle → leased → draining → released).
 - Core must call `POST /api/worker-pool/lobby/presence/{memberIdentity}/acknowledge-release`
-  after verifying cleanup is complete to permit return-to-available.
+  after verifying cleanup is complete to permit return-to-available. When multiple workers share
+  the same `memberIdentity`, pass `?agentInstanceId=...&poolMemberId=...` to identify the
+  concrete worker.
 - The lobby presence is a Channels-side observability projection; Core remains authoritative
   for all lease, cleanup, quarantine, and release decisions.
 - Channel visibility in `#worker-pool` is a *wake-support indicator* — a worker showing `idle`

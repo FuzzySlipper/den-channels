@@ -1196,20 +1196,23 @@ public sealed partial class ChannelsRepository
         command.CommandText = """"
             INSERT INTO worker_pool_lobby_presence(
                 channel_id, member_identity, agent_instance_id, pool_member_id,
+                concrete_identity,
                 profile, role, status, current_assignment_id, current_task_id,
                 current_project_id, last_activity_at, release_acknowledged)
             VALUES (
                 $channelId, $memberIdentity, $agentInstanceId, $poolMemberId,
+                COALESCE($poolMemberId, $agentInstanceId, ''),
                 $profile, $role, $status, $currentAssignmentId, $currentTaskId,
                 $currentProjectId, $lastActivityAt,
                 CASE WHEN $status = 'idle' AND EXISTS(
                     SELECT 1 FROM worker_pool_lobby_presence
                     WHERE channel_id = $channelId
                       AND member_identity = $memberIdentity
+                      AND concrete_identity = COALESCE($poolMemberId, $agentInstanceId, '')
                       AND status = 'released'
                       AND release_acknowledged = 0
                 ) THEN 0 ELSE 1 END)
-            ON CONFLICT(channel_id, member_identity) DO UPDATE SET
+            ON CONFLICT(channel_id, member_identity, concrete_identity) DO UPDATE SET
                 agent_instance_id = COALESCE($agentInstanceId, worker_pool_lobby_presence.agent_instance_id),
                 pool_member_id = COALESCE($poolMemberId, worker_pool_lobby_presence.pool_member_id),
                 profile = COALESCE($profile, worker_pool_lobby_presence.profile),
@@ -1259,7 +1262,9 @@ public sealed partial class ChannelsRepository
     /// Core must explicitly acknowledge before a worker is shown as available.
     /// </summary>
     public async Task<WorkerPoolLobbyPresenceDto?> AcknowledgeWorkerPoolReleaseAsync(
-        long channelId, string memberIdentity, CancellationToken cancellationToken = default)
+        long channelId, string memberIdentity,
+        string? agentInstanceId = null, string? poolMemberId = null,
+        CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
@@ -1269,6 +1274,8 @@ public sealed partial class ChannelsRepository
                 updated_at = datetime('now')
             WHERE channel_id = $channelId
               AND member_identity = $memberIdentity
+              AND ($agentInstanceId IS NULL AND $poolMemberId IS NULL
+                   OR concrete_identity = COALESCE($poolMemberId, $agentInstanceId, ''))
               AND status = 'released'
             RETURNING id, channel_id, member_identity, agent_instance_id, pool_member_id,
                 profile, role, status, current_assignment_id, current_task_id,
@@ -1276,6 +1283,8 @@ public sealed partial class ChannelsRepository
             """";
         command.Parameters.AddWithValue("$channelId", channelId);
         command.Parameters.AddWithValue("$memberIdentity", memberIdentity);
+        command.Parameters.AddWithValue("$agentInstanceId", (object?)agentInstanceId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$poolMemberId", (object?)poolMemberId ?? DBNull.Value);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadWorkerPoolLobbyPresence(reader) : null;
     }
@@ -1295,7 +1304,7 @@ public sealed partial class ChannelsRepository
                    current_project_id, last_activity_at, created_at, updated_at
             FROM worker_pool_lobby_presence
             WHERE channel_id = $channelId
-            ORDER BY status ASC, role ASC, profile ASC, member_identity ASC;
+            ORDER BY status ASC, role ASC, profile ASC, member_identity ASC, concrete_identity ASC;
             """";
         command.Parameters.AddWithValue("$channelId", channelId);
         var rows = new List<WorkerPoolLobbyPresenceDto>();

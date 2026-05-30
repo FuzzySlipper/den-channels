@@ -245,10 +245,12 @@ public static class ChannelRoutes
 
         api.MapPost("/worker-pool/lobby/presence/{memberIdentity}/acknowledge-release", async (
             ChannelsRepository repository, string memberIdentity,
+            string? agentInstanceId, string? poolMemberId,
             CancellationToken cancellationToken) =>
         {
             var lobby = await repository.EnsureWorkerPoolLobbyChannelAsync(cancellationToken);
-            var presence = await repository.AcknowledgeWorkerPoolReleaseAsync(lobby.Id, memberIdentity, cancellationToken);
+            var presence = await repository.AcknowledgeWorkerPoolReleaseAsync(
+                lobby.Id, memberIdentity, agentInstanceId, poolMemberId, cancellationToken);
             return presence is null
                 ? Results.NotFound(new { code = "no_release_pending", message = $"No released presence found for '{memberIdentity}'." })
                 : Results.Ok(presence);
