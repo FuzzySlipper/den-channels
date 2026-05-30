@@ -1089,6 +1089,8 @@ public sealed class AgentsOverviewTests : IDisposable
             ParentAgentIdentity: null,
             WorkerRunId: workerRunId,
             WorkerRole: null,
+            AgentInstanceId: null,
+            PoolMemberId: null,
             TaskId: taskId,
             ThreadId: null,
             AnchorMessageId: null,

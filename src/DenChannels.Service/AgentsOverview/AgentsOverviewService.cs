@@ -267,7 +267,7 @@ public sealed class AgentsOverviewService
                 .Select(a => new ActivityEventOverviewDto(
                     a.Id, a.ChannelId, a.ProjectId, a.AgentIdentity,
                     a.DeliveryRequestId, a.HermesSessionKey, a.DisplayBlockId,
-                    a.WorkerRunId, a.WorkerRole, a.TaskId, a.EventType,
+                    a.WorkerRunId, a.WorkerRole, a.AgentInstanceId, a.PoolMemberId, a.TaskId, a.EventType,
                     a.Status, a.DeliveryStage, a.Terminal, a.Title,
                     a.Summary, a.CreatedAt, a.UpdatedAt))
                 .ToList();
@@ -447,7 +447,7 @@ public sealed class AgentsOverviewService
             .Select(a => new ActivityEventOverviewDto(
                 a.Id, a.ChannelId, a.ProjectId, a.AgentIdentity,
                 a.DeliveryRequestId, a.HermesSessionKey, a.DisplayBlockId,
-                a.WorkerRunId, a.WorkerRole, a.TaskId, a.EventType,
+                a.WorkerRunId, a.WorkerRole, a.AgentInstanceId, a.PoolMemberId, a.TaskId, a.EventType,
                 a.Status, a.DeliveryStage, a.Terminal, a.Title,
                 a.Summary, a.CreatedAt, a.UpdatedAt))
             .ToList();

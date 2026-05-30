@@ -49,6 +49,8 @@ public sealed record ChannelMessageDto(
     string? AssignmentId,
     string? CheckpointType,
     string? CheckpointHandle,
+    string? AgentInstanceId,
+    string? PoolMemberId,
     string CreatedAt,
     string? EditedAt,
     string? DeletedAt);
@@ -70,7 +72,9 @@ public sealed record PostChannelMessageRequest(
     string? DedupeKey,
     string? AssignmentId = null,
     string? CheckpointType = null,
-    string? CheckpointHandle = null);
+    string? CheckpointHandle = null,
+    string? AgentInstanceId = null,
+    string? PoolMemberId = null);
 
 public sealed record ChannelMembershipDto(
     long Id,
@@ -143,6 +147,8 @@ public sealed record ChannelActivityEventDto(
     string? ParentAgentIdentity,
     string? WorkerRunId,
     string? WorkerRole,
+    string? AgentInstanceId,
+    string? PoolMemberId,
     long? TaskId,
     long? ThreadId,
     long? AnchorMessageId,
@@ -174,6 +180,8 @@ public sealed record AppendChannelActivityEventRequest(
     string? ParentAgentIdentity,
     string? WorkerRunId,
     string? WorkerRole,
+    string? AgentInstanceId,
+    string? PoolMemberId,
     long? TaskId,
     long? ThreadId,
     long? AnchorMessageId,
@@ -211,3 +219,28 @@ public sealed record AssignmentTranscriptResponse(
     string AssignmentId,
     IReadOnlyList<ChannelMessageDto> Messages,
     IReadOnlyList<ChannelActivityEventDto> ActivityEvents);
+
+/// <summary>
+/// Channel read cursor DTO tracking which concrete reader has read up to which message.
+/// InstanceId enables multiple concrete agent instances sharing a profile identity
+/// to maintain independent read positions.
+/// </summary>
+public sealed record ChannelReadCursorDto(
+    long Id,
+    long ChannelId,
+    string ReaderType,
+    string ReaderIdentity,
+    string? InstanceId,
+    long? LastReadChannelMessageId,
+    string LastReadAt,
+    string CreatedAt,
+    string UpdatedAt);
+
+/// <summary>
+/// Request to upsert a channel read cursor with optional instance-level scoping.
+/// </summary>
+public sealed record UpsertChannelReadCursorRequest(
+    string ReaderType,
+    string ReaderIdentity,
+    string? InstanceId,
+    long? LastReadChannelMessageId);

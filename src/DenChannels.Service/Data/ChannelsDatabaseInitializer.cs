@@ -6,7 +6,7 @@ namespace DenChannels.Service.Data;
 
 public sealed class ChannelsDatabaseInitializer
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     private readonly IOptions<DenChannelsOptions> _options;
     private readonly ILogger<ChannelsDatabaseInitializer> _logger;
@@ -45,12 +45,20 @@ public sealed class ChannelsDatabaseInitializer
             await SetSchemaVersionAsync(connection, 1, "initial_channel_schema", cancellationToken);
         }
 
+        if (currentVersion < 2)
+        {
+            logger?.LogInformation("Applying Den Channels database migration 2: shared-profile instance support");
+            await ExecuteNonQueryAsync(connection, MigrationV2Sql, cancellationToken);
+            await SetSchemaVersionAsync(connection, 2, "shared_profile_instances", cancellationToken);
+        }
+
         await EnsureChannelsCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureChannelMessageCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureChannelMessagesSourceKindConstraintAsync(connection, cancellationToken);
         await EnsureChannelActivityEventsSchemaAsync(connection, cancellationToken);
         await EnsureChannelActivityEventsCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureAssignmentCompatibilityColumnsAsync(connection, cancellationToken);
+        await EnsureSharedProfileInstanceColumnsAsync(connection, cancellationToken);
         await EnsureAgentCommonsSeedAsync(connection, cancellationToken);
         await ExecuteNonQueryAsync(connection, PostCreateIndexesSql, cancellationToken);
     }
@@ -97,6 +105,43 @@ public sealed class ChannelsDatabaseInitializer
         await EnsureColumnAsync(connection, "channel_activity_events", "assignment_id", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "checkpoint_type", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "checkpoint_handle", "TEXT", cancellationToken);
+    }
+
+    private static async Task EnsureSharedProfileInstanceColumnsAsync(SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await EnsureColumnAsync(connection, "channel_messages", "agent_instance_id", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_messages", "pool_member_id", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_activity_events", "agent_instance_id", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_activity_events", "pool_member_id", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_read_cursors", "instance_id", "TEXT", cancellationToken);
+
+        // Create indexes (safe: CREATE INDEX IF NOT EXISTS will fail only for
+        // structural issues; column must exist via EnsureColumnAsync above)
+        if (await TableExistsAsync(connection, "channel_activity_events", cancellationToken))
+        {
+            await ExecuteNonQueryAsync(connection, """
+                CREATE INDEX IF NOT EXISTS idx_channel_activity_events_agent_instance
+                    ON channel_activity_events(agent_instance_id, channel_id, id)
+                    WHERE agent_instance_id IS NOT NULL;
+                """, cancellationToken);
+        }
+        if (await TableExistsAsync(connection, "channel_messages", cancellationToken))
+        {
+            await ExecuteNonQueryAsync(connection, """
+                CREATE INDEX IF NOT EXISTS idx_channel_messages_agent_instance
+                    ON channel_messages(agent_instance_id, channel_id, id)
+                    WHERE agent_instance_id IS NOT NULL;
+                """, cancellationToken);
+        }
+        if (await TableExistsAsync(connection, "channel_read_cursors", cancellationToken))
+        {
+            await ExecuteNonQueryAsync(connection, """
+                CREATE INDEX IF NOT EXISTS idx_channel_read_cursors_instance
+                    ON channel_read_cursors(channel_id, reader_type, reader_identity, instance_id)
+                    WHERE instance_id IS NOT NULL;
+                """, cancellationToken);
+        }
     }
 
     private static async Task EnsureAgentCommonsSeedAsync(SqliteConnection connection,
@@ -561,5 +606,36 @@ public sealed class ChannelsDatabaseInitializer
         DROP TABLE channel_messages;
         ALTER TABLE channel_messages__new RENAME TO channel_messages;
         PRAGMA foreign_keys = ON;
+        """;
+
+    /// <summary>
+    /// Migration v2: Add shared-profile concrete agent-instance support.
+    /// Ensures channel_read_cursors table exists with instance_id column
+    /// and new UNIQUE constraint for per-instance tracking.
+    /// Schema compatibility columns are handled idempotently by
+    /// EnsureSharedProfileInstanceColumnsAsync in C#.
+    /// Note: This only creates the table if missing. When the table already
+    /// exists (from V1 schema), instance_id is added via EnsureColumnAsync.
+    /// </summary>
+    private const string MigrationV2Sql = """
+        -- Ensure channel_read_cursors table exists with instance_id support
+        -- (may not exist in legacy schema v1 databases)
+        CREATE TABLE IF NOT EXISTS channel_read_cursors (
+            id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id                 INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+            reader_type                TEXT NOT NULL CHECK (reader_type IN ('user', 'agent', 'role', 'group')),
+            reader_identity            TEXT NOT NULL,
+            instance_id                TEXT,
+            last_read_channel_message_id INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
+            last_read_at               TEXT NOT NULL DEFAULT (datetime('now')),
+            created_at                 TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at                 TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(channel_id, reader_type, reader_identity, instance_id)
+        );
+
+        -- Indexes for agent_instance_id lookup (safe: CREATE INDEX IF NOT EXISTS
+        -- won't fail if column doesn't exist yet, but better to create from C# code
+        -- that runs after EnsureColumnAsync. No index creation here to avoid
+        -- 'no such column' errors when the table already exists without instance_id.)
         """;
 }

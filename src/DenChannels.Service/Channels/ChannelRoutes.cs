@@ -128,9 +128,9 @@ public static class ChannelRoutes
 
         api.MapGet("/channels/{channelId:long}/activity-events", async (ChannelsRepository repository, long channelId,
             string? deliveryRequestId, string? hermesSessionKey, string? displayBlockId, string? workerRunId,
-            long? anchorMessageId, long? taskId, string? assignmentId, long? afterId, int? limit, CancellationToken cancellationToken) => Results.Ok(
+            string? agentInstanceId, long? anchorMessageId, long? taskId, string? assignmentId, long? afterId, int? limit, CancellationToken cancellationToken) => Results.Ok(
                 await repository.ListActivityEventsAsync(channelId, deliveryRequestId, hermesSessionKey, displayBlockId,
-                    workerRunId, anchorMessageId, taskId, assignmentId, afterId, limit ?? 100, cancellationToken)));
+                    workerRunId, agentInstanceId, anchorMessageId, taskId, assignmentId, afterId, limit ?? 100, cancellationToken)));
 
         api.MapPatch("/channel-activity-events/{activityEventId:long}", async (ChannelsRepository repository, long activityEventId,
             UpdateChannelActivityEventRequest request, CancellationToken cancellationToken) =>
@@ -143,6 +143,28 @@ public static class ChannelRoutes
             catch (SqliteException ex) when (IsConstraintFailure(ex))
             {
                 return Results.Conflict(new ProblemDetailsDto("activity_event_constraint_failed", ex.SqliteErrorCode, ex.Message));
+            }
+        });
+
+        // -----------------------------------------------------------------------
+        // Read cursor endpoints (task #1769 shared-profile instance support)
+        // -----------------------------------------------------------------------
+
+        api.MapGet("/channels/{channelId:long}/read-cursors", async (ChannelsRepository repository, long channelId,
+            string? readerType, string? readerIdentity, string? instanceId, CancellationToken cancellationToken) =>
+            Results.Ok(await repository.ListReadCursorsAsync(channelId, readerType, readerIdentity, instanceId, cancellationToken)));
+
+        api.MapPut("/channels/{channelId:long}/read-cursors", async (ChannelsRepository repository, long channelId,
+            UpsertChannelReadCursorRequest request, CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                var cursor = await repository.UpsertReadCursorAsync(channelId, request, cancellationToken);
+                return Results.Ok(cursor);
+            }
+            catch (SqliteException ex) when (IsConstraintFailure(ex))
+            {
+                return Results.Conflict(new ProblemDetailsDto("read_cursor_constraint_failed", ex.SqliteErrorCode, ex.Message));
             }
         });
 

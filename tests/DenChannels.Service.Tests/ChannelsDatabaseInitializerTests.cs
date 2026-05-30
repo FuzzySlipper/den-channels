@@ -52,7 +52,7 @@ public sealed class ChannelsDatabaseInitializerTests
         await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
         await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
 
-        Assert.Equal(1, await CountRowsAsync(connection, "schema_migrations"));
+        Assert.Equal(2, await CountRowsAsync(connection, "schema_migrations"));
     }
 
     [Fact]

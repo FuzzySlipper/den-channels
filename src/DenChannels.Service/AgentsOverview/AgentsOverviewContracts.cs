@@ -210,6 +210,8 @@ public sealed record ActivityEventOverviewDto(
     string? DisplayBlockId,
     string? WorkerRunId,
     string? WorkerRole,
+    string? AgentInstanceId,
+    string? PoolMemberId,
     long? TaskId,
     string EventType,
     string Status,
