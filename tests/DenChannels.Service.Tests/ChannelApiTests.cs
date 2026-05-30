@@ -490,6 +490,52 @@ public sealed class ChannelApiTests : IDisposable
         Assert.Equal("parent-1567", onlyMessage.DeliveryRequestId);
     }
 
+    [Fact]
+    public async Task ActivityEventEndpoints_DefaultListReturnsLatestWindowChronologically()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/activity-window/default-channel", new
+        {
+            displayName = "Activity window"
+        });
+
+        var created = new List<ActivityEventPayload>();
+        for (var i = 1; i <= 130; i++)
+        {
+            var activity = await PostJsonAsync<ActivityEventPayload>(client, $"/api/channels/{channel.Id}/activity-events", new
+            {
+                projectId = "activity-window",
+                agentIdentity = "den-mcp-runner",
+                deliveryRequestId = $"delivery-{i:D3}",
+                hermesSessionKey = $"activity-window:{i:D3}",
+                displayBlockId = i <= 3 ? "old-display-block" : null,
+                workerRunId = i <= 3 ? "old-worker-run" : null,
+                eventType = "tool_call_started",
+                status = "started",
+                deliveryStage = "tool",
+                terminal = false,
+                sequence = 1,
+                title = $"tool-{i:D3}",
+                summary = $"activity event {i:D3}",
+                dedupeKey = $"activity-window:{i:D3}"
+            });
+            created.Add(activity);
+        }
+
+        var defaultWindow = await client.GetFromJsonAsync<List<ActivityEventPayload>>(
+            $"/api/channels/{channel.Id}/activity-events?limit=120");
+
+        Assert.NotNull(defaultWindow);
+        Assert.Equal(120, defaultWindow.Count);
+        Assert.Equal(created.Skip(10).Select(activity => activity.Id).ToArray(), defaultWindow.Select(activity => activity.Id).ToArray());
+        Assert.DoesNotContain(defaultWindow, activity => activity.Id == created[0].Id);
+        Assert.Contains(defaultWindow, activity => activity.Id == created[^1].Id);
+
+        var scopedDisplayBlock = await client.GetFromJsonAsync<List<ActivityEventPayload>>(
+            $"/api/channels/{channel.Id}/activity-events?displayBlockId=old-display-block&limit=120");
+        Assert.NotNull(scopedDisplayBlock);
+        Assert.Equal(created.Take(3).Select(activity => activity.Id).ToArray(), scopedDisplayBlock.Select(activity => activity.Id).ToArray());
+    }
 
     [Fact]
     public async Task GatewayActivityEndpoint_RecordsNonWakingProgressWithoutCreatingMessages()

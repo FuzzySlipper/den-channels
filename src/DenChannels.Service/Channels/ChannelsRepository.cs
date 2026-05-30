@@ -600,10 +600,19 @@ public sealed partial class ChannelsRepository
         int limit = 100, CancellationToken cancellationToken = default)
     {
         limit = Math.Clamp(limit, 1, 500);
+        var hasScopedFilter = deliveryRequestId is not null
+                              || hermesSessionKey is not null
+                              || displayBlockId is not null
+                              || workerRunId is not null
+                              || agentInstanceId is not null
+                              || anchorMessageId is not null
+                              || taskId is not null
+                              || assignmentId is not null;
+        var useLatestChannelWindow = !hasScopedFilter && afterId is null;
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = """"
-            SELECT id, channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key,
+        const string selectColumns = """
+            id, channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key,
                 display_block_id, parent_hermes_session_key, parent_agent_identity, worker_run_id, worker_role,
                 agent_instance_id, pool_member_id,
                 task_id, thread_id, anchor_message_id,
@@ -611,20 +620,35 @@ public sealed partial class ChannelsRepository
                 event_type, status, delivery_stage, terminal, sequence,
                 update_version, title, summary, preview_json, metadata_json, dedupe_key, final_channel_message_id,
                 created_at, updated_at
-            FROM channel_activity_events
-            WHERE channel_id = $channelId
-              AND ($deliveryRequestId IS NULL OR delivery_request_id = $deliveryRequestId)
-              AND ($hermesSessionKey IS NULL OR hermes_session_key = $hermesSessionKey)
-              AND ($displayBlockId IS NULL OR display_block_id = $displayBlockId)
-              AND ($workerRunId IS NULL OR worker_run_id = $workerRunId)
-              AND ($agentInstanceId IS NULL OR agent_instance_id = $agentInstanceId)
-              AND ($anchorMessageId IS NULL OR anchor_message_id = $anchorMessageId)
-              AND ($taskId IS NULL OR task_id = $taskId)
-              AND ($assignmentId IS NULL OR assignment_id = $assignmentId)
-              AND ($afterId IS NULL OR id > $afterId)
-            ORDER BY sequence ASC, id ASC
-            LIMIT $limit;
-            """";
+            """;
+        command.CommandText = useLatestChannelWindow
+            ? $""""
+              SELECT {selectColumns}
+              FROM (
+                  SELECT {selectColumns}
+                  FROM channel_activity_events
+                  WHERE channel_id = $channelId
+                  ORDER BY id DESC
+                  LIMIT $limit
+              ) recent_activity_events
+              ORDER BY id ASC;
+              """"
+            : $""""
+              SELECT {selectColumns}
+              FROM channel_activity_events
+              WHERE channel_id = $channelId
+                AND ($deliveryRequestId IS NULL OR delivery_request_id = $deliveryRequestId)
+                AND ($hermesSessionKey IS NULL OR hermes_session_key = $hermesSessionKey)
+                AND ($displayBlockId IS NULL OR display_block_id = $displayBlockId)
+                AND ($workerRunId IS NULL OR worker_run_id = $workerRunId)
+                AND ($agentInstanceId IS NULL OR agent_instance_id = $agentInstanceId)
+                AND ($anchorMessageId IS NULL OR anchor_message_id = $anchorMessageId)
+                AND ($taskId IS NULL OR task_id = $taskId)
+                AND ($assignmentId IS NULL OR assignment_id = $assignmentId)
+                AND ($afterId IS NULL OR id > $afterId)
+              ORDER BY sequence ASC, id ASC
+              LIMIT $limit;
+              """";
         command.Parameters.AddWithValue("$channelId", channelId);
         command.Parameters.AddWithValue("$deliveryRequestId", (object?)deliveryRequestId ?? DBNull.Value);
         command.Parameters.AddWithValue("$hermesSessionKey", (object?)hermesSessionKey ?? DBNull.Value);
