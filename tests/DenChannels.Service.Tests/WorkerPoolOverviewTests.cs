@@ -40,6 +40,21 @@ public sealed class WorkerPoolOverviewTests : IDisposable
     // =========================================================================
 
     [Fact]
+    public void ProductionAppSettings_EnableWorkerPoolCoreReadback()
+    {
+        var appSettingsPath = FindRepositoryFile("src/DenChannels.Service/appsettings.json");
+        var config = new ConfigurationBuilder()
+            .AddJsonFile(appSettingsPath, optional: false, reloadOnChange: false)
+            .Build();
+        var options = config.GetSection(DenChannelsOptions.SectionName).Get<DenChannelsOptions>();
+
+        Assert.NotNull(options);
+        Assert.False(options.WorkerPool.Disabled);
+        Assert.Equal("http://127.0.0.1:5299", options.WorkerPool.BaseUrl);
+        Assert.Equal(5, options.WorkerPool.TimeoutSeconds);
+    }
+
+    [Fact]
     public async Task WorkerPool_NoData_EmptyList()
     {
         var response = await _client.GetFromJsonAsync<WorkerPoolOverviewResponsePayload>("/api/agents/overview");
@@ -611,6 +626,30 @@ public sealed class WorkerPoolOverviewTests : IDisposable
     {
         using var response = await _client.PutAsJsonAsync($"/api/channels/{channelId}/memberships", request);
         response.EnsureSuccessStatusCode();
+    }
+
+    private static string FindRepositoryFile(string relativePath)
+    {
+        var startPaths = new[]
+        {
+            Directory.GetCurrentDirectory(),
+            AppContext.BaseDirectory
+        };
+
+        foreach (var startPath in startPaths)
+        {
+            var directory = new DirectoryInfo(startPath);
+            while (directory is not null)
+            {
+                var candidate = Path.Combine(directory.FullName, relativePath);
+                if (File.Exists(candidate))
+                    return candidate;
+
+                directory = directory.Parent;
+            }
+        }
+
+        throw new FileNotFoundException($"Could not locate repository file '{relativePath}'.");
     }
 
     private sealed class WorkerPoolCoreStubHandler(Func<HttpRequestMessage, string?> responseForRequest) : HttpMessageHandler
