@@ -1,6 +1,7 @@
 using DenChannels.Service.Configuration;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
+using System.Text.RegularExpressions;
 
 namespace DenChannels.Service.Data;
 
@@ -160,8 +161,12 @@ public sealed class ChannelsDatabaseInitializer
 
         var createSql = await GetTableCreateSqlAsync(connection, "channel_read_cursors", cancellationToken);
 
-        // Check if the new UNIQUE constraint already includes instance_id
-        if (createSql?.Contains("UNIQUE (channel_id, reader_type, reader_identity, instance_id)", StringComparison.OrdinalIgnoreCase) == true)
+        // Check if the new UNIQUE constraint already includes instance_id.
+        // SQLite preserves DDL formatting from the original CREATE TABLE, so
+        // tolerate both `UNIQUE(...)` and `UNIQUE (...)` spellings.
+        if (createSql is not null && Regex.IsMatch(createSql,
+                @"UNIQUE\s*\(\s*channel_id\s*,\s*reader_type\s*,\s*reader_identity\s*,\s*instance_id\s*\)",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
         {
             // Constraint is already correct; just normalize any NULL instance_ids to ''
             await ExecuteNonQueryAsync(connection, """
