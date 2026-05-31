@@ -307,6 +307,10 @@ public sealed class AgentsOverviewService
                 flags.Add("worker_pool_orphaned");
             }
 
+            // Build child runs for this agent identity from WorkerPool members (#1806)
+            var childRuns = BuildChildRunStates(workerPoolMembers, identity);
+            var childRunCount = childRuns.Count;
+
             items.Add(new AgentOverviewItem(
                 identity, operatorStatus, workState, severity, summaries,
                 flags, links,
@@ -316,7 +320,9 @@ public sealed class AgentsOverviewService
                 recentActivityDtos.Count > 0 ? recentActivityDtos : null,
                 WorkerPoolState: workerPoolStateDto,
                 CurrentAssignment: workerPoolAssignmentDto,
-                AssignmentTrace: traceHandles));
+                AssignmentTrace: traceHandles,
+                ChildRuns: childRuns.Count > 0 ? childRuns : null,
+                ChildRunCount: childRunCount));
         }
 
         var sourceHealth = new SourceHealthDto(channelsHealth, gatewayHealth, workerPoolHealth);
@@ -537,6 +543,10 @@ public sealed class AgentsOverviewService
             }
         }
 
+        // Build child runs for agent detail (#1806)
+        var detailChildRuns = BuildChildRunStates(workerPoolState?.Members ?? [], agentIdentity);
+        var detailChildRunCount = detailChildRuns.Count;
+
         return new AgentDetailResponse(
             agentIdentity,
             membershipOverviews.Count > 0 ? membershipOverviews : null,
@@ -550,7 +560,9 @@ public sealed class AgentsOverviewService
             sourceHealth,
             WorkerPoolState: detailWorkerPoolState,
             CurrentAssignment: detailWorkerPoolAssignment,
-            AssignmentTrace: detailTraceHandles);
+            AssignmentTrace: detailTraceHandles,
+            ChildRuns: detailChildRuns.Count > 0 ? detailChildRuns : null,
+            ChildRunCount: detailChildRunCount);
     }
 
     // =========================================================================
@@ -583,6 +595,9 @@ public sealed class AgentsOverviewService
             workerPoolMember.MemberIdentity,
             workerPoolMember.Role,
             workerPoolMember.ToolProfile,
+            workerPoolMember.AgentInstanceId,
+            workerPoolMember.PoolMemberId,
+            workerPoolMember.RunId,
             workerPoolMember.Availability,
             workerPoolMember.LastActivityAt,
             workerPoolAssignmentDto,
@@ -893,7 +908,7 @@ public sealed class AgentsOverviewService
     }
 
     // =========================================================================
-    // Test-friendly public wrappers for static helpers
+    // Test-accessible wrappers. These expose internal helpers for unit tests.
     // =========================================================================
 
     public static HashSet<string> FindLiveDeliveryIdsForTest(IReadOnlyList<ChannelActivityEventDto> activityEvents)
@@ -913,4 +928,59 @@ public sealed class AgentsOverviewService
         IReadOnlyList<GatewayDeliveryDto>? gatewayDeliveries,
         IReadOnlyList<ChannelActivityEventDto> activityEvents)
         => CountStaleGatewayDebt(gatewayDeliveries, activityEvents);
+
+    // =========================================================================
+    // Shared-profile pool child-run state builder (#1806)
+    // =========================================================================
+
+    /// <summary>
+    /// Build child-run states from WorkerPool members sharing the same agent identity
+    /// and ToolProfile (profile identity). Each member = one child-run slot.
+    /// Status derived from availability + current assignment phase.
+    /// </summary>
+    public static List<ChildRunStateDto> BuildChildRunStates(
+        IReadOnlyList<WorkerPoolMemberStateDto> members,
+        string? agentIdentity)
+    {
+        // Group members by agent identity (MemberIdentity is the pool member/slot id)
+        var relevant = agentIdentity is not null
+            ? members.Where(m => string.Equals(m.MemberIdentity, agentIdentity, StringComparison.OrdinalIgnoreCase)).ToList()
+            : members.ToList();
+
+        return relevant.Select(m =>
+        {
+            var flags = new List<string>();
+            var status = m.Availability.ToLowerInvariant() switch
+            {
+                "leased" => "busy",
+                "quarantined" => "quarantined",
+                "offline" => "stale",
+                "available" => "available",
+                var other => other
+            };
+
+            if (m.CurrentAssignment is { Phase: "cleanup_pending" })
+                flags.Add("cleanup_pending");
+            if (m.Flags?.Contains("core_busy_without_assignment") == true)
+                flags.Add("busy_without_assignment");
+            if (m.Flags?.Contains("core_offboarded") == true)
+                flags.Add("core_offboarded");
+
+            var supervisorTarget = m.MemberIdentity; // supervisor profile identity
+
+            return new ChildRunStateDto(
+                AgentInstanceId: m.AgentInstanceId,
+                RunId: m.RunId ?? m.CurrentAssignment?.RunId,
+                WorkerRunId: m.RunId,
+                AssignmentId: m.CurrentAssignment?.AssignmentId,
+                PoolMemberId: m.PoolMemberId ?? m.MemberIdentity,
+                ProfileIdentity: m.ToolProfile,
+                Status: status,
+                LastActivityAt: m.LastActivityAt,
+                Flags: flags.Count > 0 ? flags : null)
+            {
+                SupervisorDeliveryTarget = supervisorTarget,
+            };
+        }).ToList();
+    }
 }

@@ -298,6 +298,88 @@ public static class ChannelRoutes
             }
         });
 
+        // ── Shared-profile pool child-run routing (#1806) ─────────────────
+
+        /// <summary>
+        /// List active child-run presences filtered by agent_instance_id.
+        /// Returns per-run identities with routing handles for supervisor dispatch.
+        /// </summary>
+        api.MapGet("/worker-pool/lobby/presence/by-instance", async (
+            ChannelsRepository repository,
+            string? agentInstanceId,
+            CancellationToken cancellationToken) =>
+        {
+            var lobby = await repository.EnsureWorkerPoolLobbyChannelAsync(cancellationToken);
+            var allPresences = await repository.ListWorkerPoolLobbyPresenceAsync(lobby.Id, cancellationToken);
+
+            var filtered = string.IsNullOrWhiteSpace(agentInstanceId)
+                ? allPresences
+                : allPresences.Where(p =>
+                    string.Equals(p.AgentInstanceId, agentInstanceId, StringComparison.OrdinalIgnoreCase)).ToList();
+
+            return Results.Ok(new { presences = filtered, count = filtered.Count });
+        });
+
+        /// <summary>
+        /// Release a child-run lobby presence. Transitions status to 'released'.
+        /// Channels-only — does not claim to release Core capacity or Gateway delivery.
+        /// </summary>
+        api.MapPost("/worker-pool/lobby/presence/release-child-run", async (
+            ChannelsRepository repository,
+            string memberIdentity,
+            string? agentInstanceId,
+            string? poolMemberId,
+            CancellationToken cancellationToken) =>
+        {
+            if (string.IsNullOrWhiteSpace(memberIdentity))
+                return Results.BadRequest(new { error = "memberIdentity is required" });
+
+            var lobby = await repository.EnsureWorkerPoolLobbyChannelAsync(cancellationToken);
+            var presence = await repository.ReleaseChildRunPresenceAsync(
+                lobby.Id, memberIdentity, agentInstanceId, poolMemberId, cancellationToken);
+
+            return presence is null
+                ? Results.NotFound(new { code = "no_child_run_found", message = $"No active child-run presence found for '{memberIdentity}'." })
+                : Results.Ok(presence);
+        });
+
+        /// <summary>
+        /// Resolve child-run identities for a given agent identity.
+        /// Returns active child runs with routing handles for supervisor dispatch.
+        /// </summary>
+        api.MapGet("/agents/{agentIdentity}/child-runs", async (
+            ChannelsRepository repository,
+            string agentIdentity,
+            CancellationToken cancellationToken) =>
+        {
+            var lobby = await repository.EnsureWorkerPoolLobbyChannelAsync(cancellationToken);
+            var allPresences = await repository.ListWorkerPoolLobbyPresenceAsync(lobby.Id, cancellationToken);
+
+            var childRuns = allPresences
+                .Where(p => string.Equals(p.MemberIdentity, agentIdentity, StringComparison.OrdinalIgnoreCase)
+                         && !string.Equals(p.Status, "released", StringComparison.OrdinalIgnoreCase))
+                .Select(p => new
+                {
+                    p.MemberIdentity,
+                    p.Role,
+                    p.Profile,
+                    p.AgentInstanceId,
+                    p.PoolMemberId,
+                    p.Status,
+                    p.LastActivityAt,
+                    supervisorDeliveryTarget = p.MemberIdentity,
+                    childIdentityMetadata = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["agentInstanceId"] = p.AgentInstanceId,
+                        ["poolMemberId"] = p.PoolMemberId,
+                        ["profileIdentity"] = p.Profile,
+                    }
+                })
+                .ToList();
+
+            return Results.Ok(new { childRuns, count = childRuns.Count });
+        });
+
         return api;
     }
 

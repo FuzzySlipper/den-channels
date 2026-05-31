@@ -1314,6 +1314,39 @@ public sealed partial class ChannelsRepository
     }
 
     /// <summary>
+    /// Release a child-run lobby presence. Transitions status to 'released'.
+    /// Channels-only — does not claim to release Core capacity or Gateway delivery.
+    /// Only releases non-terminal statuses (idle, leased, busy).
+    /// </summary>
+    public async Task<WorkerPoolLobbyPresenceDto?> ReleaseChildRunPresenceAsync(
+        long channelId, string memberIdentity,
+        string? agentInstanceId = null, string? poolMemberId = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE worker_pool_lobby_presence
+            SET status = 'released',
+                updated_at = datetime('now')
+            WHERE channel_id = $channelId
+              AND member_identity = $memberIdentity
+              AND status IN ('idle', 'leased', 'busy')
+              AND ($agentInstanceId IS NULL AND $poolMemberId IS NULL
+                   OR concrete_identity = COALESCE($poolMemberId, $agentInstanceId, ''))
+            RETURNING id, channel_id, member_identity, agent_instance_id, pool_member_id,
+                profile, role, status, current_assignment_id, current_task_id,
+                current_project_id, last_activity_at, created_at, updated_at;
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$memberIdentity", memberIdentity);
+        command.Parameters.AddWithValue("$agentInstanceId", (object?)agentInstanceId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$poolMemberId", (object?)poolMemberId ?? DBNull.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadWorkerPoolLobbyPresence(reader) : null;
+    }
+
+    /// <summary>
     /// List all worker-pool lobby presence records for a given lobby channel.
     /// Returns the full presence list for projection into the overview response.
     /// </summary>

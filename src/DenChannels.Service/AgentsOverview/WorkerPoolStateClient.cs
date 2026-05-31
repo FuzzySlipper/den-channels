@@ -24,6 +24,9 @@ public sealed record WorkerPoolMemberStateDto(
     string MemberIdentity,
     string? Role,
     string? ToolProfile,
+    string? AgentInstanceId,
+    string? PoolMemberId,
+    string? RunId,
     string Availability,
     string? LastActivityAt,
     WorkerPoolMemberAssignmentStateDto? CurrentAssignment,
@@ -34,6 +37,7 @@ public sealed record WorkerPoolMemberStateDto(
 /// </summary>
 public sealed record WorkerPoolMemberAssignmentStateDto(
     string AssignmentId,
+    string RunId,
     string? TaskId,
     string? ProjectId,
     string? LeaseOwner,
@@ -325,6 +329,9 @@ public sealed class WorkerPoolStateClient : IWorkerPoolStateClient
             Role: currentAssignment?.Role,
             ToolProfile: TryReadMetadataString(member.Metadata, "tool_profile")
                          ?? TryReadMetadataString(member.Metadata, "profile"),
+            AgentInstanceId: TryReadMetadataString(member.Metadata, "agent_instance_id"),
+            PoolMemberId: member.WorkerIdentity, // WorkerIdentity IS the pool member id
+            RunId: currentAssignment?.RunId,
             Availability: projectedAvailability,
             LastActivityAt: member.LastHeartbeat ?? member.UpdatedAt?.ToString("O"),
             CurrentAssignment: currentAssignment is null ? null : ToAssignmentState(currentAssignment),
@@ -387,6 +394,7 @@ public sealed class WorkerPoolStateClient : IWorkerPoolStateClient
 
         return new WorkerPoolMemberAssignmentStateDto(
             AssignmentId: assignment.Id.ToString(),
+            RunId: assignment.RunId,
             TaskId: assignment.TaskId?.ToString(),
             ProjectId: assignment.ProjectId,
             LeaseOwner: assignment.AssignedBy,

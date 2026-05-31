@@ -154,7 +154,9 @@ public sealed record AgentOverviewItem(
     IReadOnlyList<ActivityEventOverviewDto>? RecentActivity,
     WorkerPoolMemberDto? WorkerPoolState = null,
     WorkerPoolAssignmentDto? CurrentAssignment = null,
-    AssignmentTraceHandlesDto? AssignmentTrace = null);
+    AssignmentTraceHandlesDto? AssignmentTrace = null,
+    [property: JsonPropertyName("childRuns")] IReadOnlyList<ChildRunStateDto>? ChildRuns = null,
+    [property: JsonPropertyName("childRunCount")] int ChildRunCount = 0);
 
 public sealed record AgentSummaryDto(
     int ChannelCount,
@@ -239,7 +241,9 @@ public sealed record AgentDetailResponse(
     SourceHealthDto SourceHealth,
     WorkerPoolMemberDto? WorkerPoolState = null,
     WorkerPoolAssignmentDto? CurrentAssignment = null,
-    AssignmentTraceHandlesDto? AssignmentTrace = null);
+    AssignmentTraceHandlesDto? AssignmentTrace = null,
+    [property: JsonPropertyName("childRuns")] IReadOnlyList<ChildRunStateDto>? ChildRuns = null,
+    [property: JsonPropertyName("childRunCount")] int ChildRunCount = 0);
 
 public sealed record TaskAssociationDto(
     long? TaskId,
@@ -261,6 +265,9 @@ public sealed record WorkerPoolMemberDto(
     string? MemberIdentity,
     string? Role,
     string? ToolProfile,
+    string? AgentInstanceId,
+    string? PoolMemberId,
+    string? RunId,
     string? Availability,
     string? LastActivityAt,
     WorkerPoolAssignmentDto? CurrentAssignment,
@@ -291,3 +298,47 @@ public sealed record AssignmentTraceHandlesDto(
     string? RepresentativeMessageId,
     string? ActivityHandle,
     string? DeliveryHandle);
+
+// =========================================================================
+// Shared-profile pool child-run state projection (#1806)
+// =========================================================================
+
+/// <summary>
+/// Per-child-run visibility for shared-profile worker pools. Each active
+/// child run under a profile identity (e.g., spawned-coder) gets a concrete
+/// ChildRunStateDto with routing handles for supervisor-routed delivery.
+/// </summary>
+public sealed record ChildRunStateDto(
+    [property: JsonPropertyName("agentInstanceId")] string? AgentInstanceId,
+    [property: JsonPropertyName("runId")] string? RunId,
+    [property: JsonPropertyName("workerRunId")] string? WorkerRunId,
+    [property: JsonPropertyName("assignmentId")] string? AssignmentId,
+    [property: JsonPropertyName("poolMemberId")] string? PoolMemberId,
+    [property: JsonPropertyName("profileIdentity")] string? ProfileIdentity,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("lastActivityAt")] string? LastActivityAt,
+    [property: JsonPropertyName("flags")] IReadOnlyList<string>? Flags)
+{
+    /// <summary>
+    /// Supervisor-routed delivery target. The supervisor profile identity
+    /// (e.g. pool-coder-01) receives deliveries and dispatches to the
+    /// correct child using AgentInstanceId + RunId + AssignmentId.
+    /// Direct child routing via Channels membership is deferred to
+    /// Bridge/Channels follow-up work.
+    /// </summary>
+    [JsonPropertyName("supervisorDeliveryTarget")]
+    public string? SupervisorDeliveryTarget { get; init; }
+
+    /// <summary>
+    /// Child identity metadata for supervisor routing disambiguation.
+    /// </summary>
+    [JsonPropertyName("childIdentityMetadata")]
+    public IReadOnlyDictionary<string, string?> ChildIdentityMetadata => new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["agentInstanceId"] = AgentInstanceId,
+        ["runId"] = RunId,
+        ["assignmentId"] = AssignmentId,
+        ["poolMemberId"] = PoolMemberId,
+        ["profileIdentity"] = ProfileIdentity,
+    };
+}
