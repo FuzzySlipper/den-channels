@@ -351,22 +351,27 @@ public static class GatewayRoutes
 
             var requestId = $"direct-agent-message:{channel.Id}:{Uri.EscapeDataString(member.MemberIdentity)}:{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
             var gatewayEventsUrl = $"/api/gateway/events?channelId={channel.Id}&afterId=0&limit=50";
-            var metadataJson = JsonSerializer.Serialize(new
+            var resolvedSourceProjectId = request.SourceProjectId ?? channel.ProjectId;
+            var metadataPayload = new Dictionary<string, object?>
             {
-                requestId,
-                targetMemberIdentity = member.MemberIdentity,
-                targetMemberType = member.MemberType,
-                wakePolicy = member.WakePolicy,
-                deliveryMode = "direct_agent_message",
-                deliveryStatus = "recorded_pending_claim",
-                claimStatus = "unclaimed",
-                completionStatus = "pending",
-                suppressionStatus = "not_suppressed",
-                evidence = new
-                {
-                    gatewayEventsUrl
-                }
-            });
+                ["requestId"] = requestId,
+                ["targetMemberIdentity"] = member.MemberIdentity,
+                ["targetMemberType"] = member.MemberType,
+                ["wakePolicy"] = member.WakePolicy,
+                ["deliveryMode"] = "direct_agent_message",
+                ["deliveryStatus"] = "recorded_pending_claim",
+                ["claimStatus"] = "unclaimed",
+                ["completionStatus"] = "pending",
+                ["suppressionStatus"] = "not_suppressed",
+                ["evidence"] = new { gatewayEventsUrl }
+            };
+            if (request.SourceProjectId is not null)
+                metadataPayload["sourceProjectId"] = request.SourceProjectId;
+            if (request.TargetTaskId is not null)
+                metadataPayload["targetTaskId"] = request.TargetTaskId;
+            if (request.AssignmentId is not null)
+                metadataPayload["assignmentId"] = request.AssignmentId;
+            var metadataJson = JsonSerializer.Serialize(metadataPayload);
 
             var msg = await repository.PostMessageAsync(channel.Id, new PostChannelMessageRequest(
                 SenderType: "user",
@@ -375,7 +380,7 @@ public static class GatewayRoutes
                 MessageKind: "human_text",
                 SourceKind: "wake_event",
                 SourceId: requestId,
-                SourceProjectId: channel.ProjectId,
+                SourceProjectId: resolvedSourceProjectId,
                 Summary: $"Direct agent request to {member.MemberIdentity}: recorded, pending claim/completion",
                 DeepLink: null,
                 ThreadRootMessageId: null,
@@ -407,6 +412,7 @@ public static class GatewayRoutes
                 evidenceSummary = $"{evidenceSummary} Delivery-loop trigger note: {pollObservation.Message}";
             }
 
+            var parsedAssignmentId = request.AssignmentId is not null && int.TryParse(request.AssignmentId, out var aid) ? aid : (int?)null;
             return Results.Created(gatewayMessageUrl, new GatewayDirectAgentMessageDto(
                 Status: "recorded",
                 DeliveryStatus: deliveryObservation.DeliveryStatus,
@@ -418,6 +424,9 @@ public static class GatewayRoutes
                 MessageId: msg.Id,
                 ChannelId: channel.Id,
                 RequestId: requestId,
+                SourceProjectId: resolvedSourceProjectId,
+                TargetTaskId: request.TargetTaskId,
+                AssignmentId: parsedAssignmentId,
                 DeliveryRequestId: deliveryObservation.DeliveryRequestId,
                 AttemptId: deliveryObservation.AttemptId,
                 GatewayDeliveryState: deliveryObservation.GatewayDeliveryState,

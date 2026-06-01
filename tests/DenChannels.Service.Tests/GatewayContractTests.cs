@@ -884,6 +884,9 @@ public sealed class GatewayContractTests : IDisposable
         long MessageId,
         long ChannelId,
         string RequestId,
+        string? SourceProjectId,
+        int? TargetTaskId,
+        int? AssignmentId,
         long? DeliveryRequestId,
         long? AttemptId,
         string? GatewayDeliveryState,
@@ -893,6 +896,69 @@ public sealed class GatewayContractTests : IDisposable
         string GatewayMessageUrl,
         string GatewayEventsUrl,
         string EvidenceSummary);
+
+    [Fact]
+    public async Task GatewayDirectAgentMessages_Post_WithSourceProjectId_UsesCallerProjectNotChannel()
+    {
+        var channel = await EnsureDefaultChannelAsync("gw-da-srcproj");
+        await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "smoke-reviewer",
+            wakePolicy = "direct_questions_only"
+        });
+
+        using var response = await _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
+        {
+            channelId = channel.Id,
+            memberIdentity = "smoke-reviewer",
+            senderIdentity = "operator",
+            body = "Review den-core task #1820",
+            sourceProjectId = "den-core",
+            targetTaskId = 1820,
+            assignmentId = "63",
+            waitFor = "none"
+        });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
+        Assert.NotNull(payload);
+        Assert.Equal("recorded", payload.Status);
+        Assert.Equal("den-core", payload.SourceProjectId);
+        Assert.NotEqual("gw-da-srcproj", payload.SourceProjectId);
+        Assert.Equal(1820, payload.TargetTaskId);
+        Assert.Equal(63, payload.AssignmentId);
+
+        var message = await _client.GetFromJsonAsync<GatewayMessagePayload>(payload.GatewayMessageUrl);
+        Assert.NotNull(message);
+        Assert.Equal("den-core", message.SourceProjectId);
+    }
+
+    [Fact]
+    public async Task GatewayDirectAgentMessages_Post_WithoutSourceProjectId_UsesChannelProject()
+    {
+        var channel = await EnsureDefaultChannelAsync("gw-da-nosrc");
+        await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "wake-reviewer",
+            wakePolicy = "direct_questions_only"
+        });
+
+        using var response = await _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
+        {
+            channelId = channel.Id,
+            memberIdentity = "wake-reviewer",
+            senderIdentity = "operator",
+            body = "Wake reviewer.",
+            waitFor = "none"
+        });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
+        Assert.NotNull(payload);
+        Assert.Equal("gw-da-nosrc", payload.SourceProjectId);
+    }
 
     private static GatewayStateDto BuildGatewayState(string sourceId, string deliveryStatus, long deliveryRequestId, long? attemptId)
     {
