@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using System.Text.Json;
 using DenChannels.Service.AgentsOverview;
 using DenChannels.Service.Configuration;
@@ -134,6 +135,58 @@ public sealed class GatewayStateClient
         };
     }
 
+    public async Task<GatewayDeliveryLoopPollObservation> TriggerDeliveryLoopPollAsync(
+        string? projectId,
+        int limit = 20,
+        CancellationToken cancellationToken = default)
+    {
+        if (_options.Disabled)
+        {
+            return new GatewayDeliveryLoopPollObservation(false, "gateway_disabled", "Gateway is disabled via configuration.");
+        }
+
+        if (string.IsNullOrWhiteSpace(projectId))
+        {
+            return new GatewayDeliveryLoopPollObservation(false, "missing_project_id", "No project id is available for Gateway delivery-loop poll.");
+        }
+
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(TimeSpan.FromSeconds(_options.TimeoutSeconds));
+
+            var response = await _httpClient.PostAsJsonAsync(
+                $"{_options.BaseUrl.TrimEnd('/')}/api/delivery-loop/poll",
+                new
+                {
+                    source = "channels",
+                    projectId = projectId.Trim(),
+                    limit = Math.Clamp(limit, 1, 200),
+                    seedCursorAtLatestWhenMissing = false
+                },
+                JsonOptions,
+                cts.Token);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Gateway delivery-loop poll returned {StatusCode}", response.StatusCode);
+                return new GatewayDeliveryLoopPollObservation(false, "gateway_poll_failed", $"Gateway delivery-loop poll returned {(int)response.StatusCode}.");
+            }
+
+            return new GatewayDeliveryLoopPollObservation(true, null, "Gateway delivery-loop poll accepted.");
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("Gateway delivery-loop poll timed out after {Timeout}s.", _options.TimeoutSeconds);
+            return new GatewayDeliveryLoopPollObservation(false, "gateway_poll_timeout", "Gateway delivery-loop poll timed out.");
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(ex, "Gateway delivery-loop poll failed (HTTP transport error).");
+            return new GatewayDeliveryLoopPollObservation(false, "gateway_poll_unavailable", "Gateway delivery-loop poll transport failed.");
+        }
+    }
+
     private string BuildGatewayStatePath(string? projectId, string? agentIdentity)
     {
         var query = new List<string>();
@@ -146,3 +199,5 @@ public sealed class GatewayStateClient
         return query.Count == 0 ? path : $"{path}?{string.Join('&', query)}";
     }
 }
+
+public sealed record GatewayDeliveryLoopPollObservation(bool Triggered, string? ErrorCode, string? Message);

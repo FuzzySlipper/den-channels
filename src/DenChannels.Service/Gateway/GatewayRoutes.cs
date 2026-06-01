@@ -389,13 +389,23 @@ public static class GatewayRoutes
 
             var gatewayMessageUrl = $"/api/gateway/messages/{msg.Id}";
             gatewayEventsUrl = $"/api/gateway/events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10";
+            var deliveryProjectId = channel.ProjectId ?? request.ProjectId;
+            var pollObservation = await gatewayStateClient.TriggerDeliveryLoopPollAsync(
+                deliveryProjectId,
+                cancellationToken: cancellationToken);
             var deliveryObservation = await gatewayStateClient.WaitForDirectAgentDeliveryStatusAsync(
-                channel.ProjectId ?? request.ProjectId,
+                deliveryProjectId,
                 member.MemberIdentity,
                 requestId,
                 request.WaitFor,
                 request.TimeoutMs,
                 cancellationToken);
+            var evidenceSummary = deliveryObservation.EvidenceSummary
+                ?? "Direct agent wake_event recorded; Gateway evidence URL exposes delivery request status and follow-up claim/completion/suppression events.";
+            if (!pollObservation.Triggered && !string.IsNullOrWhiteSpace(pollObservation.Message))
+            {
+                evidenceSummary = $"{evidenceSummary} Delivery-loop trigger note: {pollObservation.Message}";
+            }
 
             return Results.Created(gatewayMessageUrl, new GatewayDirectAgentMessageDto(
                 Status: "recorded",
@@ -416,7 +426,7 @@ public static class GatewayRoutes
                 GatewayUnavailable: deliveryObservation.GatewayUnavailable,
                 GatewayMessageUrl: gatewayMessageUrl,
                 GatewayEventsUrl: gatewayEventsUrl,
-                EvidenceSummary: deliveryObservation.EvidenceSummary ?? "Direct agent wake_event recorded; Gateway evidence URL exposes delivery request status and follow-up claim/completion/suppression events."));
+                EvidenceSummary: evidenceSummary));
         });
 
         // -----------------------------------------------------------------------

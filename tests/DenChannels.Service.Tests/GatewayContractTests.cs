@@ -746,6 +746,32 @@ public sealed class GatewayContractTests : IDisposable
     }
 
     [Fact]
+    public async Task GatewayDirectAgentStatus_TriggerPollPostsNonSeedingProjectPoll()
+    {
+        var handler = new RecordingGatewayHandler();
+        using var httpClient = new HttpClient(handler);
+        var options = Options.Create(new DenChannelsOptions
+        {
+            Gateway = new GatewayOptions
+            {
+                BaseUrl = "http://gateway.invalid",
+                TimeoutSeconds = 5
+            }
+        });
+        var client = new GatewayStateClient(httpClient, options, NullLogger<GatewayStateClient>.Instance);
+
+        var observation = await client.TriggerDeliveryLoopPollAsync("goblinbench", limit: 123, CancellationToken.None);
+
+        Assert.True(observation.Triggered);
+        Assert.Equal(HttpMethod.Post, handler.LastRequestMethod);
+        Assert.Equal("http://gateway.invalid/api/delivery-loop/poll", handler.LastRequestUri?.ToString());
+        Assert.Contains("\"source\":\"channels\"", handler.LastRequestBody);
+        Assert.Contains("\"projectId\":\"goblinbench\"", handler.LastRequestBody);
+        Assert.Contains("\"limit\":123", handler.LastRequestBody);
+        Assert.Contains("\"seedCursorAtLatestWhenMissing\":false", handler.LastRequestBody);
+    }
+
+    [Fact]
     public void GatewayDirectAgentStatus_TerminalStatesSatisfyAckWait()
     {
         var failed = GatewayDirectAgentDeliveryStatus.FromGatewayState(
@@ -956,6 +982,27 @@ public sealed class GatewayContractTests : IDisposable
         string? Summary,
         string Body,
         string CreatedAt);
+
+    private sealed class RecordingGatewayHandler : HttpMessageHandler
+    {
+        public HttpMethod? LastRequestMethod { get; private set; }
+        public Uri? LastRequestUri { get; private set; }
+        public string LastRequestBody { get; private set; } = string.Empty;
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            LastRequestMethod = request.Method;
+            LastRequestUri = request.RequestUri;
+            LastRequestBody = request.Content is null
+                ? string.Empty
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new { status = "completed" })
+            };
+        }
+    }
 
     private sealed class SlowGatewayHandler(TimeSpan delay) : HttpMessageHandler
     {
