@@ -674,6 +674,66 @@ public sealed class GatewayContractTests : IDisposable
     }
 
     [Fact]
+    public async Task GatewayDirectAgentMessages_Post_UsesNonTimestampUniqueRequestIds()
+    {
+        var channel = await EnsureDefaultChannelAsync("gw-direct-agent-unique-proj");
+        await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "spawned-coder",
+            wakePolicy = "mentions_only"
+        });
+
+        var firstPost = _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
+        {
+            channelId = channel.Id,
+            memberIdentity = "spawned-coder",
+            senderIdentity = "operator",
+            body = "First concrete slot wake.",
+            waitFor = "none",
+            assignmentId = "101",
+            poolMemberId = "pool-coder-01"
+        });
+        var secondPost = _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
+        {
+            channelId = channel.Id,
+            memberIdentity = "spawned-coder",
+            senderIdentity = "operator",
+            body = "Second concrete slot wake.",
+            waitFor = "none",
+            assignmentId = "102",
+            poolMemberId = "pool-coder-02"
+        });
+
+        await Task.WhenAll(firstPost, secondPost);
+        using var firstResponse = await firstPost;
+        using var secondResponse = await secondPost;
+        Assert.Equal(HttpStatusCode.Created, firstResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, secondResponse.StatusCode);
+        var first = await firstResponse.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
+        var second = await secondResponse.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        Assert.NotEqual(first.RequestId, second.RequestId);
+
+        var firstToken = first.RequestId.Split(':').Last();
+        var secondToken = second.RequestId.Split(':').Last();
+        Assert.True(Guid.TryParseExact(firstToken, "N", out _), $"Expected GUID request token, got {firstToken}");
+        Assert.True(Guid.TryParseExact(secondToken, "N", out _), $"Expected GUID request token, got {secondToken}");
+
+        var firstMessage = await _client.GetFromJsonAsync<GatewayMessagePayload>(first.GatewayMessageUrl);
+        var secondMessage = await _client.GetFromJsonAsync<GatewayMessagePayload>(second.GatewayMessageUrl);
+        Assert.NotNull(firstMessage);
+        Assert.NotNull(secondMessage);
+        Assert.Equal(first.RequestId, firstMessage.SourceId);
+        Assert.Equal(second.RequestId, secondMessage.SourceId);
+        Assert.Equal("101", firstMessage.AssignmentId);
+        Assert.Equal("102", secondMessage.AssignmentId);
+        Assert.Equal("pool-coder-01", firstMessage.PoolMemberId);
+        Assert.Equal("pool-coder-02", secondMessage.PoolMemberId);
+    }
+
+    [Fact]
     public void GatewayDirectAgentStatus_MapsImmediateClaimEvidence()
     {
         var state = BuildGatewayState("direct-agent-message:16:voxelforge-runner:1", "delivering", 42, 7);
