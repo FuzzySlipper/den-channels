@@ -29,6 +29,12 @@ public sealed record EnsureProjectDefaultChannelRequest(
     string? CreatedBy,
     string? SettingsJson);
 
+/// <summary>
+/// A channel message with full attribution fields.
+/// SourceProjectId is the source/control project (transport attribution).
+/// TargetProjectId is the target work project (workflow attribution).
+/// These may differ when e.g. a shared worker-control channel delivers work for a different project.
+/// </summary>
 public sealed record ChannelMessageDto(
     long Id,
     long ChannelId,
@@ -39,6 +45,11 @@ public sealed record ChannelMessageDto(
     string? SourceKind,
     string? SourceId,
     string? SourceProjectId,
+    string? TargetProjectId,
+    long? TargetTaskId,
+    string? WorkerRunId,
+    string? WorkerRole,
+    string? ProfileIdentity,
     string? Summary,
     string? DeepLink,
     long? ThreadRootMessageId,
@@ -55,6 +66,12 @@ public sealed record ChannelMessageDto(
     string? EditedAt,
     string? DeletedAt);
 
+/// <summary>
+/// Request to post a new channel message.
+/// SourceProjectId is the source/control project (transport attribution).
+/// Target-work fields (TargetProjectId, TargetTaskId, WorkerRunId, WorkerRole, ProfileIdentity)
+/// are workflow attribution and must not be inferred only from the channel project.
+/// </summary>
 public sealed record PostChannelMessageRequest(
     string SenderType,
     string SenderIdentity,
@@ -63,13 +80,18 @@ public sealed record PostChannelMessageRequest(
     string? SourceKind,
     string? SourceId,
     string? SourceProjectId,
-    string? Summary,
-    string? DeepLink,
-    long? ThreadRootMessageId,
-    long? ReplyToMessageId,
-    string? MetadataJson,
-    string? DeliveryRequestId,
-    string? DedupeKey,
+    string? TargetProjectId = null,
+    long? TargetTaskId = null,
+    string? WorkerRunId = null,
+    string? WorkerRole = null,
+    string? ProfileIdentity = null,
+    string? Summary = null,
+    string? DeepLink = null,
+    long? ThreadRootMessageId = null,
+    long? ReplyToMessageId = null,
+    string? MetadataJson = null,
+    string? DeliveryRequestId = null,
+    string? DedupeKey = null,
     string? AssignmentId = null,
     string? CheckpointType = null,
     string? CheckpointHandle = null,

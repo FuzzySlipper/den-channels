@@ -885,8 +885,13 @@ public sealed class GatewayContractTests : IDisposable
         long ChannelId,
         string RequestId,
         string? SourceProjectId,
+        string? TargetProjectId,
         int? TargetTaskId,
         int? AssignmentId,
+        string? WorkerRunId,
+        string? WorkerRole,
+        string? ProfileIdentity,
+        string? PoolMemberId,
         long? DeliveryRequestId,
         long? AttemptId,
         string? GatewayDeliveryState,
@@ -960,6 +965,82 @@ public sealed class GatewayContractTests : IDisposable
         Assert.Equal("gw-da-nosrc", payload.SourceProjectId);
     }
 
+    [Fact]
+    public async Task GatewayDirectAgentMessages_Post_SharedControlChannel_DifferentTargetProject()
+    {
+        // Simulate a shared worker-control channel (e.g. den-hermes-bridge) delivering
+        // work for a different target project (e.g. goblinbench). The response DTO and
+        // stored message must preserve both source/control attribution and target-work fields.
+        var channel = await EnsureDefaultChannelAsync("gw-shared-control");
+        await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "goblinbench-worker",
+            wakePolicy = "direct_questions_only"
+        });
+
+        using var response = await _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
+        {
+            channelId = channel.Id,
+            memberIdentity = "goblinbench-worker",
+            senderIdentity = "den-hermes-bridge",
+            body = "Run task #1845 on goblinbench.",
+            sourceProjectId = "den-hermes-bridge",       // control/transport project
+            targetProjectId = "goblinbench",             // target work project
+            targetTaskId = 1845,
+            assignmentId = "81",
+            workerRunId = "dc-1845-20260602083828-coder",
+            workerRole = "spawned-coder",
+            profileIdentity = "den-hermes-coder",
+            poolMemberId = "pool-member-81",
+            waitFor = "none"
+        });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
+        Assert.NotNull(payload);
+
+        // Source/control project must be preserved from the request, not inferred from channel
+        Assert.Equal("den-hermes-bridge", payload.SourceProjectId);
+        Assert.NotEqual("gw-shared-control", payload.SourceProjectId);
+
+        // Target-work fields must be surfaced separately from source/control project
+        Assert.Equal("goblinbench", payload.TargetProjectId);
+        Assert.Equal(1845, payload.TargetTaskId);
+        Assert.Equal(81, payload.AssignmentId);
+        Assert.Equal("dc-1845-20260602083828-coder", payload.WorkerRunId);
+        Assert.Equal("spawned-coder", payload.WorkerRole);
+        Assert.Equal("den-hermes-coder", payload.ProfileIdentity);
+        Assert.Equal("pool-member-81", payload.PoolMemberId);
+
+        // Verify the stored message preserves both source/control and target-work fields
+        var message = await _client.GetFromJsonAsync<GatewayMessagePayload>(payload.GatewayMessageUrl);
+        Assert.NotNull(message);
+        Assert.Equal("den-hermes-bridge", message.SourceProjectId);
+        Assert.Equal("goblinbench", message.TargetProjectId);
+        Assert.Equal(1845, message.TargetTaskId);
+        Assert.Equal("81", message.AssignmentId);
+        Assert.Equal("dc-1845-20260602083828-coder", message.WorkerRunId);
+        Assert.Equal("spawned-coder", message.WorkerRole);
+        Assert.Equal("den-hermes-coder", message.ProfileIdentity);
+        Assert.Equal("pool-member-81", message.PoolMemberId);
+
+        // Events projection should surface target-work fields
+        var events = await _client.GetFromJsonAsync<GatewayEventsPayload>(
+            $"/api/gateway/events?channelId={channel.Id}&limit=10");
+        Assert.NotNull(events);
+        Assert.NotEmpty(events.Items);
+        var eventItem = events.Items.FirstOrDefault(e => e.SourceKind == "wake_event");
+        Assert.NotNull(eventItem);
+        Assert.Equal("goblinbench", eventItem.TargetProjectId);
+        Assert.Equal(1845, eventItem.TargetTaskId);
+        Assert.Equal("81", eventItem.AssignmentId);
+        Assert.Equal("dc-1845-20260602083828-coder", eventItem.WorkerRunId);
+        Assert.Equal("spawned-coder", eventItem.WorkerRole);
+        Assert.Equal("den-hermes-coder", eventItem.ProfileIdentity);
+        Assert.Equal("pool-member-81", eventItem.PoolMemberId);
+    }
+
     private static GatewayStateDto BuildGatewayState(string sourceId, string deliveryStatus, long deliveryRequestId, long? attemptId)
     {
         var delivery = new GatewayDeliveryDto(
@@ -1013,6 +1094,13 @@ public sealed class GatewayContractTests : IDisposable
         string? SourceKind,
         string? SourceId,
         string? SourceProjectId,
+        string? TargetProjectId,
+        long? TargetTaskId,
+        string? AssignmentId,
+        string? WorkerRunId,
+        string? WorkerRole,
+        string? ProfileIdentity,
+        string? PoolMemberId,
         string? DedupeKey,
         string? DeepLink,
         string? Summary,
@@ -1043,6 +1131,13 @@ public sealed class GatewayContractTests : IDisposable
         string? SourceKind,
         string? SourceId,
         string? SourceProjectId,
+        string? TargetProjectId,
+        long? TargetTaskId,
+        string? AssignmentId,
+        string? WorkerRunId,
+        string? WorkerRole,
+        string? ProfileIdentity,
+        string? PoolMemberId,
         string? DedupeKey,
         string? DeepLink,
         string? Summary,

@@ -241,6 +241,11 @@ public sealed class ChannelsDatabaseInitializer
         await EnsureColumnAsync(connection, "channel_messages", "source_kind", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_messages", "source_id", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_messages", "source_project_id", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_messages", "target_project_id", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_messages", "target_task_id", "INTEGER", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_messages", "worker_run_id", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_messages", "worker_role", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_messages", "profile_identity", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_messages", "summary", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_messages", "deep_link", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_messages", "thread_root_message_id", "INTEGER", cancellationToken);

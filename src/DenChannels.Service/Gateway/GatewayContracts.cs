@@ -47,7 +47,13 @@ public sealed record GatewayTestWakeDto(
     string GatewayEventsUrl,
     string EvidenceSummary);
 
-/// <summary>Request to record a direct targeted message as a Gateway-visible wake request.</summary>
+/// <summary>
+/// Request to record a direct targeted message as a Gateway-visible wake request.
+/// SourceProjectId is the source/control project (transport attribution) — may differ from target work project.
+/// Target-work fields (TargetProjectId, TargetTaskId, AssignmentId, WorkerRunId, WorkerRole, ProfileIdentity, PoolMemberId)
+/// are workflow attribution and must not be inferred only from the channel or source project.
+/// All target-work fields are optional for backward compatibility.
+/// </summary>
 public sealed record PostGatewayDirectAgentMessageRequest(
     long? ChannelId,
     string? ProjectId,
@@ -55,14 +61,25 @@ public sealed record PostGatewayDirectAgentMessageRequest(
     string SenderIdentity,
     string Body,
     string? SourceProjectId = null,
+    string? TargetProjectId = null,
     int? TargetTaskId = null,
     string? AssignmentId = null,
+    string? WorkerRunId = null,
+    string? WorkerRole = null,
+    string? ProfileIdentity = null,
+    string? PoolMemberId = null,
     string? CheckpointType = null,
     string? CheckpointHandle = null,
     string? WaitFor = null,
     int? TimeoutMs = null);
 
-/// <summary>Result of a direct targeted message request with delivery/evidence status links.</summary>
+/// <summary>
+/// Result of a direct targeted message request with delivery/evidence status links.
+/// SourceProjectId is the source/control project (transport attribution).
+/// Target-work fields (TargetProjectId, TargetTaskId, WorkerRunId, WorkerRole, ProfileIdentity, PoolMemberId)
+/// are workflow attribution and may differ from the transport/control project.
+/// All target-work fields are nullable for backward compatibility.
+/// </summary>
 public sealed record GatewayDirectAgentMessageDto(
     string Status,
     string DeliveryStatus,
@@ -75,8 +92,13 @@ public sealed record GatewayDirectAgentMessageDto(
     long ChannelId,
     string RequestId,
     string? SourceProjectId,
+    string? TargetProjectId,
     int? TargetTaskId,
     int? AssignmentId,
+    string? WorkerRunId,
+    string? WorkerRole,
+    string? ProfileIdentity,
+    string? PoolMemberId,
     long? DeliveryRequestId,
     long? AttemptId,
     string? GatewayDeliveryState,
@@ -87,7 +109,13 @@ public sealed record GatewayDirectAgentMessageDto(
     string GatewayEventsUrl,
     string EvidenceSummary);
 
-/// <summary>Single channel message suitable for Gateway routing/simulation decisions.</summary>
+/// <summary>
+/// Single channel message suitable for Gateway routing/simulation decisions.
+/// SourceProjectId is the source/control project (transport attribution).
+/// Target-work fields (TargetProjectId, TargetTaskId, WorkerRunId, WorkerRole, ProfileIdentity, PoolMemberId)
+/// are workflow attribution for the target project work, not inferred from the channel project.
+/// All target-work fields are nullable for backward compatibility.
+/// </summary>
 public sealed record GatewayMessageDto(
     long Id,
     long ChannelId,
@@ -97,6 +125,13 @@ public sealed record GatewayMessageDto(
     string? SourceKind,
     string? SourceId,
     string? SourceProjectId,
+    string? TargetProjectId,
+    long? TargetTaskId,
+    string? AssignmentId,
+    string? WorkerRunId,
+    string? WorkerRole,
+    string? ProfileIdentity,
+    string? PoolMemberId,
     string? DeliveryRequestId,
     string? DedupeKey,
     string? DeepLink,
@@ -110,7 +145,13 @@ public sealed record GatewayEventsDto(
     long? NextAfterId,
     bool HasMore);
 
-/// <summary>Single event item within the Gateway events cursor response.</summary>
+/// <summary>
+/// Single event item within the Gateway events cursor response.
+/// SourceProjectId is the source/control project (transport attribution).
+/// Target-work fields (TargetProjectId, TargetTaskId, WorkerRunId, WorkerRole, ProfileIdentity, PoolMemberId)
+/// are workflow attribution, surfaced as structured fields rather than only body-embedded metadata.
+/// All target-work fields are nullable for backward compatibility.
+/// </summary>
 public sealed record GatewayEventItemDto(
     long Id,
     long ChannelId,
@@ -120,6 +161,13 @@ public sealed record GatewayEventItemDto(
     string? SourceKind,
     string? SourceId,
     string? SourceProjectId,
+    string? TargetProjectId,
+    long? TargetTaskId,
+    string? AssignmentId,
+    string? WorkerRunId,
+    string? WorkerRole,
+    string? ProfileIdentity,
+    string? PoolMemberId,
     string? DeliveryRequestId,
     string? DedupeKey,
     string? DeepLink,

@@ -175,6 +175,13 @@ public static class GatewayRoutes
                 m.SourceKind,
                 m.SourceId,
                 m.SourceProjectId,
+                m.TargetProjectId,
+                m.TargetTaskId,
+                m.AssignmentId,
+                m.WorkerRunId,
+                m.WorkerRole,
+                m.ProfileIdentity,
+                m.PoolMemberId,
                 m.DeliveryRequestId,
                 m.DedupeKey,
                 m.DeepLink,
@@ -367,10 +374,20 @@ public static class GatewayRoutes
             };
             if (request.SourceProjectId is not null)
                 metadataPayload["sourceProjectId"] = request.SourceProjectId;
+            if (request.TargetProjectId is not null)
+                metadataPayload["targetProjectId"] = request.TargetProjectId;
             if (request.TargetTaskId is not null)
                 metadataPayload["targetTaskId"] = request.TargetTaskId;
             if (request.AssignmentId is not null)
                 metadataPayload["assignmentId"] = request.AssignmentId;
+            if (request.WorkerRunId is not null)
+                metadataPayload["workerRunId"] = request.WorkerRunId;
+            if (request.WorkerRole is not null)
+                metadataPayload["workerRole"] = request.WorkerRole;
+            if (request.ProfileIdentity is not null)
+                metadataPayload["profileIdentity"] = request.ProfileIdentity;
+            if (request.PoolMemberId is not null)
+                metadataPayload["poolMemberId"] = request.PoolMemberId;
             var metadataJson = JsonSerializer.Serialize(metadataPayload);
 
             var msg = await repository.PostMessageAsync(channel.Id, new PostChannelMessageRequest(
@@ -381,6 +398,12 @@ public static class GatewayRoutes
                 SourceKind: "wake_event",
                 SourceId: requestId,
                 SourceProjectId: resolvedSourceProjectId,
+                TargetProjectId: request.TargetProjectId,
+                TargetTaskId: request.TargetTaskId,
+                WorkerRunId: request.WorkerRunId,
+                WorkerRole: request.WorkerRole,
+                ProfileIdentity: request.ProfileIdentity,
+                PoolMemberId: request.PoolMemberId,
                 Summary: $"Direct agent request to {member.MemberIdentity}: recorded, pending claim/completion",
                 DeepLink: null,
                 ThreadRootMessageId: null,
@@ -425,8 +448,13 @@ public static class GatewayRoutes
                 ChannelId: channel.Id,
                 RequestId: requestId,
                 SourceProjectId: resolvedSourceProjectId,
+                TargetProjectId: request.TargetProjectId,
                 TargetTaskId: request.TargetTaskId,
                 AssignmentId: parsedAssignmentId,
+                WorkerRunId: request.WorkerRunId,
+                WorkerRole: request.WorkerRole,
+                ProfileIdentity: request.ProfileIdentity,
+                PoolMemberId: request.PoolMemberId,
                 DeliveryRequestId: deliveryObservation.DeliveryRequestId,
                 AttemptId: deliveryObservation.AttemptId,
                 GatewayDeliveryState: deliveryObservation.GatewayDeliveryState,
@@ -554,6 +582,13 @@ public static class GatewayRoutes
         m.SourceKind,
         m.SourceId,
         m.SourceProjectId,
+        m.TargetProjectId,
+        m.TargetTaskId,
+        m.AssignmentId,
+        m.WorkerRunId,
+        m.WorkerRole,
+        m.ProfileIdentity,
+        m.PoolMemberId,
         m.DeliveryRequestId,
         m.DedupeKey,
         m.DeepLink,

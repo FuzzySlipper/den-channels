@@ -126,11 +126,13 @@ public sealed partial class ChannelsRepository
         command.CommandText = """
             INSERT INTO channel_messages(
                 channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
+                target_project_id, target_task_id, worker_run_id, worker_role, profile_identity,
                 summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key,
                 assignment_id, checkpoint_type, checkpoint_handle,
                 agent_instance_id, pool_member_id)
             VALUES (
                 $channelId, $senderType, $senderIdentity, $body, $messageKind, $sourceKind, $sourceId, $sourceProjectId,
+                $targetProjectId, $targetTaskId, $workerRunId, $workerRole, $profileIdentity,
                 $summary, $deepLink, $threadRootMessageId, $replyToMessageId, $metadataJson, $deliveryRequestId, $dedupeKey,
                 $assignmentId, $checkpointType, $checkpointHandle,
                 $agentInstanceId, $poolMemberId)
@@ -138,6 +140,7 @@ public sealed partial class ChannelsRepository
                 summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key,
                 assignment_id, checkpoint_type, checkpoint_handle,
                 agent_instance_id, pool_member_id,
+                target_project_id, target_task_id, worker_run_id, worker_role, profile_identity,
                 created_at, edited_at, deleted_at;
             """;
         command.Parameters.AddWithValue("$channelId", channelId);
@@ -160,6 +163,11 @@ public sealed partial class ChannelsRepository
         command.Parameters.AddWithValue("$checkpointHandle", (object?)request.CheckpointHandle ?? DBNull.Value);
         command.Parameters.AddWithValue("$agentInstanceId", (object?)request.AgentInstanceId ?? DBNull.Value);
         command.Parameters.AddWithValue("$poolMemberId", (object?)request.PoolMemberId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$targetProjectId", (object?)request.TargetProjectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$targetTaskId", (object?)request.TargetTaskId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workerRunId", (object?)request.WorkerRunId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workerRole", (object?)request.WorkerRole ?? DBNull.Value);
+        command.Parameters.AddWithValue("$profileIdentity", (object?)request.ProfileIdentity ?? DBNull.Value);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         await reader.ReadAsync(cancellationToken);
         return ReadMessage(reader);
@@ -176,7 +184,8 @@ public sealed partial class ChannelsRepository
         var selectColumns = """"
             SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
                 summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key,
-                assignment_id, checkpoint_type, checkpoint_handle, agent_instance_id, pool_member_id, created_at, edited_at, deleted_at
+                assignment_id, checkpoint_type, checkpoint_handle, agent_instance_id, pool_member_id,
+                target_project_id, target_task_id, worker_run_id, worker_role, profile_identity, created_at, edited_at, deleted_at
             """";
 
         if (afterId is null)
@@ -228,7 +237,8 @@ public sealed partial class ChannelsRepository
         command.CommandText = """
             SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
                 summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key,
-                assignment_id, checkpoint_type, checkpoint_handle, agent_instance_id, pool_member_id, created_at, edited_at, deleted_at
+                assignment_id, checkpoint_type, checkpoint_handle, agent_instance_id, pool_member_id,
+                target_project_id, target_task_id, worker_run_id, worker_role, profile_identity, created_at, edited_at, deleted_at
             FROM channel_messages
             WHERE id = $messageId
               AND deleted_at IS NULL;
@@ -247,7 +257,8 @@ public sealed partial class ChannelsRepository
         command.CommandText = """
             SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
                 summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key,
-                assignment_id, checkpoint_type, checkpoint_handle, agent_instance_id, pool_member_id, created_at, edited_at, deleted_at
+                assignment_id, checkpoint_type, checkpoint_handle, agent_instance_id, pool_member_id,
+                target_project_id, target_task_id, worker_run_id, worker_role, profile_identity, created_at, edited_at, deleted_at
             FROM channel_messages
             WHERE source_kind = $sourceKind
               AND source_id = $sourceId
@@ -298,7 +309,8 @@ public sealed partial class ChannelsRepository
         command.CommandText = """
             SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
                 summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key,
-                assignment_id, checkpoint_type, checkpoint_handle, agent_instance_id, pool_member_id, created_at, edited_at, deleted_at
+                assignment_id, checkpoint_type, checkpoint_handle, agent_instance_id, pool_member_id,
+                target_project_id, target_task_id, worker_run_id, worker_role, profile_identity, created_at, edited_at, deleted_at
             FROM channel_messages
             WHERE channel_id = $channelId
               AND dedupe_key = $dedupeKey
@@ -786,21 +798,26 @@ public sealed partial class ChannelsRepository
         GetNullableString(reader, 6),
         GetNullableString(reader, 7),
         GetNullableString(reader, 8),
-        GetNullableString(reader, 9),
-        GetNullableString(reader, 10),
-        GetNullableInt64(reader, 11),
-        GetNullableInt64(reader, 12),
-        GetNullableString(reader, 13),
-        GetNullableString(reader, 14),
-        GetNullableString(reader, 15),
-        GetNullableString(reader, 16),
-        GetNullableString(reader, 17),
-        GetNullableString(reader, 18),
-        GetNullableString(reader, 19),
-        GetNullableString(reader, 20),
-        reader.GetString(21),
-        GetNullableString(reader, 22),
-        GetNullableString(reader, 23));
+        GetNullableString(reader, 21),  // target_project_id
+        GetNullableInt64(reader, 22),   // target_task_id
+        GetNullableString(reader, 23),  // worker_run_id
+        GetNullableString(reader, 24),  // worker_role
+        GetNullableString(reader, 25),  // profile_identity
+        GetNullableString(reader, 9),   // summary
+        GetNullableString(reader, 10),  // deep_link
+        GetNullableInt64(reader, 11),   // thread_root_message_id
+        GetNullableInt64(reader, 12),   // reply_to_message_id
+        GetNullableString(reader, 13),  // metadata_json
+        GetNullableString(reader, 14),  // delivery_request_id
+        GetNullableString(reader, 15),  // dedupe_key
+        GetNullableString(reader, 16),  // assignment_id
+        GetNullableString(reader, 17),  // checkpoint_type
+        GetNullableString(reader, 18),  // checkpoint_handle
+        GetNullableString(reader, 19),  // agent_instance_id
+        GetNullableString(reader, 20),  // pool_member_id
+        reader.GetString(26),           // created_at
+        GetNullableString(reader, 27),  // edited_at
+        GetNullableString(reader, 28)); // deleted_at
 
     private static ChannelMembershipDto ReadMembership(SqliteDataReader reader) => new(
         reader.GetInt64(0),
