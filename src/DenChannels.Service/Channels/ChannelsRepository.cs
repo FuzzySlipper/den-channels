@@ -1497,4 +1497,149 @@ public sealed partial class ChannelsRepository
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadMembership(reader) : null;
     }
+
+    // =========================================================================
+    // Active-work continuation routing queries (task #1873)
+    // =========================================================================
+
+    /// <summary>
+    /// Find channel messages carrying target-work fields that match the given
+    /// target project/task/assignment/run. Used by active-work continuation routing
+    /// to locate the source channel and session owner for active work.
+    /// Results are ordered by most recent first.
+    /// </summary>
+    public async Task<IReadOnlyList<ChannelMessageDto>> FindActiveWorkMessagesAsync(
+        string? targetProjectId = null,
+        long? targetTaskId = null,
+        string? assignmentId = null,
+        string? workerRunId = null,
+        string? profileIdentity = null,
+        int limit = 20,
+        CancellationToken cancellationToken = default)
+    {
+        limit = Math.Clamp(limit, 1, 100);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+
+        var conditions = new List<string>
+        {
+            "m.target_project_id IS NOT NULL"
+        };
+
+        if (!string.IsNullOrWhiteSpace(targetProjectId))
+            conditions.Add("m.target_project_id = $targetProjectId");
+        if (targetTaskId.HasValue)
+            conditions.Add("m.target_task_id = $targetTaskId");
+        if (!string.IsNullOrWhiteSpace(assignmentId))
+            conditions.Add("m.assignment_id = $assignmentId");
+        if (!string.IsNullOrWhiteSpace(workerRunId))
+            conditions.Add("m.worker_run_id = $workerRunId");
+        if (!string.IsNullOrWhiteSpace(profileIdentity))
+            conditions.Add("m.profile_identity = $profileIdentity");
+
+        var whereClause = string.Join(" AND ", conditions);
+        command.CommandText = $"""
+            SELECT m.id, m.channel_id, m.sender_type, m.sender_identity, m.body, m.message_kind, m.source_kind, m.source_id, m.source_project_id,
+                m.summary, m.deep_link, m.thread_root_message_id, m.reply_to_message_id, m.metadata_json, m.delivery_request_id, m.dedupe_key,
+                m.assignment_id, m.checkpoint_type, m.checkpoint_handle, m.agent_instance_id, m.pool_member_id,
+                m.session_owner_id, m.session_id,
+                m.target_project_id, m.target_task_id, m.worker_run_id, m.worker_role, m.profile_identity, m.created_at, m.edited_at, m.deleted_at
+            FROM channel_messages m
+            WHERE {whereClause}
+              AND m.deleted_at IS NULL
+            ORDER BY m.created_at DESC, m.id DESC
+            LIMIT $limit;
+            """;
+
+        if (!string.IsNullOrWhiteSpace(targetProjectId))
+            command.Parameters.AddWithValue("$targetProjectId", targetProjectId);
+        if (targetTaskId.HasValue)
+            command.Parameters.AddWithValue("$targetTaskId", targetTaskId.Value);
+        if (!string.IsNullOrWhiteSpace(assignmentId))
+            command.Parameters.AddWithValue("$assignmentId", assignmentId);
+        if (!string.IsNullOrWhiteSpace(workerRunId))
+            command.Parameters.AddWithValue("$workerRunId", workerRunId);
+        if (!string.IsNullOrWhiteSpace(profileIdentity))
+            command.Parameters.AddWithValue("$profileIdentity", profileIdentity);
+        command.Parameters.AddWithValue("$limit", limit);
+
+        var rows = new List<ChannelMessageDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadMessage(reader));
+        return rows;
+    }
+
+    /// <summary>
+    /// Find activity events carrying target-work fields (project_id, task_id,
+    /// assignment_id, worker_run_id) that match the given filters.
+    /// Ordered by most recent first.
+    /// </summary>
+    public async Task<IReadOnlyList<ChannelActivityEventDto>> FindActiveWorkActivityEventsAsync(
+        string? targetProjectId = null,
+        long? targetTaskId = null,
+        string? assignmentId = null,
+        string? workerRunId = null,
+        string? profileIdentity = null,
+        bool nonTerminalOnly = false,
+        int limit = 50,
+        CancellationToken cancellationToken = default)
+    {
+        limit = Math.Clamp(limit, 1, 200);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+
+        var conditions = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(targetProjectId))
+            conditions.Add("a.project_id = $targetProjectId");
+        if (targetTaskId.HasValue)
+            conditions.Add("a.task_id = $targetTaskId");
+        if (!string.IsNullOrWhiteSpace(assignmentId))
+            conditions.Add("a.assignment_id = $assignmentId");
+        if (!string.IsNullOrWhiteSpace(workerRunId))
+            conditions.Add("a.worker_run_id = $workerRunId");
+        // profileIdentity on activity events is matched via agent_identity
+        if (!string.IsNullOrWhiteSpace(profileIdentity))
+            conditions.Add("a.agent_identity = $profileIdentity");
+        if (nonTerminalOnly)
+            conditions.Add("a.terminal = 0");
+
+        var whereClause = conditions.Count > 0
+            ? string.Join(" AND ", conditions)
+            : "1=1";
+
+        command.CommandText = $"""
+            SELECT a.id, a.channel_id, a.project_id, a.agent_identity, a.delivery_request_id, a.hermes_session_key,
+                   a.display_block_id, a.parent_hermes_session_key, a.parent_agent_identity, a.worker_run_id, a.worker_role,
+                   a.agent_instance_id, a.pool_member_id,
+                   a.task_id, a.thread_id, a.anchor_message_id,
+                   a.assignment_id, a.checkpoint_type, a.checkpoint_handle,
+                   a.event_type, a.status, a.delivery_stage, a.terminal,
+                   a.sequence, a.update_version, a.title, a.summary, a.preview_json, a.metadata_json, a.dedupe_key,
+                   a.final_channel_message_id, a.created_at, a.updated_at
+            FROM channel_activity_events a
+            WHERE {whereClause}
+            ORDER BY a.created_at DESC, a.id DESC
+            LIMIT $limit;
+            """;
+
+        if (!string.IsNullOrWhiteSpace(targetProjectId))
+            command.Parameters.AddWithValue("$targetProjectId", targetProjectId);
+        if (targetTaskId.HasValue)
+            command.Parameters.AddWithValue("$targetTaskId", targetTaskId.Value);
+        if (!string.IsNullOrWhiteSpace(assignmentId))
+            command.Parameters.AddWithValue("$assignmentId", assignmentId);
+        if (!string.IsNullOrWhiteSpace(workerRunId))
+            command.Parameters.AddWithValue("$workerRunId", workerRunId);
+        if (!string.IsNullOrWhiteSpace(profileIdentity))
+            command.Parameters.AddWithValue("$profileIdentity", profileIdentity);
+        command.Parameters.AddWithValue("$limit", limit);
+
+        var rows = new List<ChannelActivityEventDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadActivityEvent(reader));
+        return rows;
+    }
 }

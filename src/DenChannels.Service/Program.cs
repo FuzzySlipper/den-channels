@@ -1,4 +1,5 @@
 using DenChannels.Service;
+using DenChannels.Service.ActiveWorkRouting;
 using DenChannels.Service.AgentsOverview;
 using DenChannels.Service.Channels;
 using DenChannels.Service.Configuration;
@@ -34,6 +35,7 @@ builder.Services.AddHttpClient<IWorkerPoolStateClient, WorkerPoolStateClient>(cl
     // Base address is set per-request in the client; this just registers DI
 });
 builder.Services.AddSingleton<AgentsOverviewService>();
+builder.Services.AddSingleton<ActiveWorkRoutingService>();
 
 var app = builder.Build();
 
@@ -86,6 +88,7 @@ app.MapDenCoreApiProxy();
 app.MapDirectAgentEventRoutes();
 app.MapGatewayRoutes();
 app.MapAgentsOverviewRoutes();
+app.MapActiveWorkRoutingRoutes();
 
 // API misses: machine-readable JSON. Root/public paths: serve the moved-page.
 app.MapFallback((HttpContext context, IWebHostEnvironment environment) =>
