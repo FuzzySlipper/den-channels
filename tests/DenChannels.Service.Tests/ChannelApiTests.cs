@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using DenChannels.Service.Gateway;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -164,7 +165,7 @@ public sealed class ChannelApiTests : IDisposable
             displayName = "Den Channels"
         });
 
-        var explicitDelivery = await PostJsonAsync<GatewayMessagePayload>(client, "/api/gateway/system-messages", new
+        var explicitDelivery = await PostJsonAsync<GatewayMessageDto>(client, "/api/gateway/system-messages", new
         {
             channelId = channel.Id,
             body = "Gateway delivered reply",
@@ -175,7 +176,7 @@ public sealed class ChannelApiTests : IDisposable
         });
         Assert.Equal("delivery-44", explicitDelivery.DeliveryRequestId);
 
-        var fallbackDelivery = await PostJsonAsync<GatewayMessagePayload>(client, "/api/gateway/system-messages", new
+        var fallbackDelivery = await PostJsonAsync<GatewayMessageDto>(client, "/api/gateway/system-messages", new
         {
             channelId = channel.Id,
             body = "Gateway delivered reply fallback",
@@ -333,7 +334,7 @@ public sealed class ChannelApiTests : IDisposable
         {
             displayName = "Den Channels"
         });
-        var parentMessage = await PostJsonAsync<GatewayMessagePayload>(client, "/api/gateway/system-messages", new
+        var parentMessage = await PostJsonAsync<GatewayMessageDto>(client, "/api/gateway/system-messages", new
         {
             channelId = channel.Id,
             body = "Parent #1567 final delivery block",
@@ -874,9 +875,6 @@ public sealed class ChannelApiTests : IDisposable
 
     private sealed record MessagePayload(long Id, long ChannelId, string Body, string? SourceKind, string? DeepLink,
         string? DeliveryRequestId, string? DedupeKey, string? AssignmentId = null, string? CheckpointType = null, string? CheckpointHandle = null);
-
-    private sealed record GatewayMessagePayload(long Id, long ChannelId, string? SourceKind, string? SourceId,
-        string? DeliveryRequestId, string? DedupeKey);
 
     private sealed record MembershipPayload(long Id, long ChannelId, string MemberType, string MemberIdentity,
         string MembershipStatus, string WakePolicy);

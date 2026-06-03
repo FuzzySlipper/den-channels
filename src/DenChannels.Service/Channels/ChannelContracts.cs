@@ -33,6 +33,8 @@ public sealed record EnsureProjectDefaultChannelRequest(
 /// A channel message with full attribution fields.
 /// SourceProjectId/ChannelId are the source/control context (where the interaction happened).
 /// TargetProjectId is the target work project (workflow attribution).
+/// NOTE: 31 positional constructor parameters — use named arguments at call sites
+/// to prevent silent parameter-order bugs when adding new fields.
 /// These may differ when e.g. a shared worker-control channel delivers work for a different project.
 /// SessionOwnerId/SessionId identify the agent session that owns this message, independent of
 /// which channel the message appears in.

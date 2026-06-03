@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using DenChannels.Service.Gateway;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 
@@ -494,7 +495,7 @@ public sealed class DirectAgentEventTests : IDisposable
         Assert.Equal("session-143", payload.SessionId);
 
         // Also stored durably on the message (verify via gateway message readback)
-        var message = await _client.GetFromJsonAsync<GatewayMessagePayload>(
+        var message = await _client.GetFromJsonAsync<GatewayMessageDto>(
             $"/api/gateway/messages/{payload.EventId}");
         Assert.NotNull(message);
         Assert.Equal("den-channels", message.SourceProjectId);
@@ -637,31 +638,6 @@ public sealed class DirectAgentEventTests : IDisposable
         string? DeliveryStatus,
         string? ClaimStatus,
         string? CompletionStatus,
-        string CreatedAt);
-
-    private sealed record GatewayMessagePayload(
-        long Id,
-        long ChannelId,
-        string MessageKind,
-        string SenderType,
-        string SenderIdentity,
-        string? SourceKind,
-        string? SourceId,
-        string? SourceProjectId,
-        string? TargetProjectId,
-        long? TargetTaskId,
-        string? AssignmentId,
-        string? WorkerRunId,
-        string? WorkerRole,
-        string? ProfileIdentity,
-        string? PoolMemberId,
-        string? AgentInstanceId,
-        string? SessionOwnerId,
-        string? SessionId,
-        string? DedupeKey,
-        string? DeepLink,
-        string? Summary,
-        string Body,
         string CreatedAt);
 
     private sealed record GatewayDirectAgentMessagePayload(

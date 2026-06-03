@@ -206,7 +206,7 @@ public sealed class GatewayContractTests : IDisposable
             dedupeKey = "gw-test:9900"
         });
 
-        var payload = await _client.GetFromJsonAsync<GatewayMessagePayload>(
+        var payload = await _client.GetFromJsonAsync<GatewayMessageDto>(
             $"/api/gateway/messages/{posted.Id}");
 
         Assert.NotNull(payload);
@@ -274,7 +274,7 @@ public sealed class GatewayContractTests : IDisposable
             dedupeKey = "rr:88:a"
         });
 
-        var messages = await _client.GetFromJsonAsync<List<GatewayMessagePayload>>(
+        var messages = await _client.GetFromJsonAsync<List<GatewayMessageDto>>(
             "/api/gateway/sources/review_round/77?sourceProjectId=gw-test-src-proj");
 
         Assert.NotNull(messages);
@@ -299,7 +299,7 @@ public sealed class GatewayContractTests : IDisposable
             dedupeKey = "wr:run-999"
         });
 
-        var messages = await _client.GetFromJsonAsync<List<GatewayMessagePayload>>(
+        var messages = await _client.GetFromJsonAsync<List<GatewayMessageDto>>(
             "/api/gateway/sources/worker_run/run-999");
 
         Assert.NotNull(messages);
@@ -482,7 +482,7 @@ public sealed class GatewayContractTests : IDisposable
             dedupeKey = "gw-sys:sentinel:1"
         });
         Assert.Equal(HttpStatusCode.Created, response1.StatusCode);
-        var created = await response1.Content.ReadFromJsonAsync<GatewayMessagePayload>();
+        var created = await response1.Content.ReadFromJsonAsync<GatewayMessageDto>();
         Assert.NotNull(created);
 
         // Re-post same dedupeKey — should return existing message (200 OK, not 409 Conflict)
@@ -494,7 +494,7 @@ public sealed class GatewayContractTests : IDisposable
             dedupeKey = "gw-sys:sentinel:1"
         });
         Assert.Equal(HttpStatusCode.OK, response2.StatusCode);
-        var existing = await response2.Content.ReadFromJsonAsync<GatewayMessagePayload>();
+        var existing = await response2.Content.ReadFromJsonAsync<GatewayMessageDto>();
         Assert.NotNull(existing);
         Assert.Equal(created.Id, existing.Id);
         // Body should be from original post, not re-posted body
@@ -512,7 +512,7 @@ public sealed class GatewayContractTests : IDisposable
             body = "Minimal gateway post"
         });
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        var payload = await response.Content.ReadFromJsonAsync<GatewayMessagePayload>();
+        var payload = await response.Content.ReadFromJsonAsync<GatewayMessageDto>();
         Assert.NotNull(payload);
         Assert.Equal("system_event", payload.MessageKind);
         Assert.Equal("den-gateway", payload.SenderIdentity);
@@ -532,7 +532,7 @@ public sealed class GatewayContractTests : IDisposable
             dedupeKey = "gw-route:proj:1"
         });
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        var payload = await response.Content.ReadFromJsonAsync<GatewayMessagePayload>();
+        var payload = await response.Content.ReadFromJsonAsync<GatewayMessageDto>();
         Assert.NotNull(payload);
         Assert.True(payload.ChannelId > 0);
     }
@@ -556,7 +556,7 @@ public sealed class GatewayContractTests : IDisposable
             dedupeKey = "gw-run:42"
         });
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        var payload = await response.Content.ReadFromJsonAsync<GatewayMessagePayload>();
+        var payload = await response.Content.ReadFromJsonAsync<GatewayMessageDto>();
         Assert.NotNull(payload);
         Assert.Equal("mirror_summary", payload.MessageKind);
         Assert.Equal("worker_run", payload.SourceKind);
@@ -618,7 +618,7 @@ public sealed class GatewayContractTests : IDisposable
         Assert.Equal(channel.Id, payload.ChannelId);
         Assert.Contains($"/api/gateway/messages/{payload.MessageId}", payload.GatewayMessageUrl);
 
-        var message = await _client.GetFromJsonAsync<GatewayMessagePayload>(payload.GatewayMessageUrl);
+        var message = await _client.GetFromJsonAsync<GatewayMessageDto>(payload.GatewayMessageUrl);
         Assert.NotNull(message);
         Assert.Equal("wake_event", message.SourceKind);
         Assert.Contains("Controlled test wake", message.Body);
@@ -665,7 +665,7 @@ public sealed class GatewayContractTests : IDisposable
         Assert.Contains($"/api/gateway/events?channelId={channel.Id}", payload.GatewayEventsUrl);
         Assert.Contains("no Gateway claim wait", payload.EvidenceSummary);
 
-        var message = await _client.GetFromJsonAsync<GatewayMessagePayload>(payload.GatewayMessageUrl);
+        var message = await _client.GetFromJsonAsync<GatewayMessageDto>(payload.GatewayMessageUrl);
         Assert.NotNull(message);
         Assert.Equal("wake_event", message.SourceKind);
         Assert.Equal(payload.RequestId, message.SourceId);
@@ -721,8 +721,8 @@ public sealed class GatewayContractTests : IDisposable
         Assert.True(Guid.TryParseExact(firstToken, "N", out _), $"Expected GUID request token, got {firstToken}");
         Assert.True(Guid.TryParseExact(secondToken, "N", out _), $"Expected GUID request token, got {secondToken}");
 
-        var firstMessage = await _client.GetFromJsonAsync<GatewayMessagePayload>(first.GatewayMessageUrl);
-        var secondMessage = await _client.GetFromJsonAsync<GatewayMessagePayload>(second.GatewayMessageUrl);
+        var firstMessage = await _client.GetFromJsonAsync<GatewayMessageDto>(first.GatewayMessageUrl);
+        var secondMessage = await _client.GetFromJsonAsync<GatewayMessageDto>(second.GatewayMessageUrl);
         Assert.NotNull(firstMessage);
         Assert.NotNull(secondMessage);
         Assert.Equal(first.RequestId, firstMessage.SourceId);
@@ -997,7 +997,7 @@ public sealed class GatewayContractTests : IDisposable
         Assert.Equal(1820, payload.TargetTaskId);
         Assert.Equal(63, payload.AssignmentId);
 
-        var message = await _client.GetFromJsonAsync<GatewayMessagePayload>(payload.GatewayMessageUrl);
+        var message = await _client.GetFromJsonAsync<GatewayMessageDto>(payload.GatewayMessageUrl);
         Assert.NotNull(message);
         Assert.Equal("den-core", message.SourceProjectId);
     }
@@ -1077,7 +1077,7 @@ public sealed class GatewayContractTests : IDisposable
         Assert.Equal("pool-member-81", payload.PoolMemberId);
 
         // Verify the stored message preserves both source/control and target-work fields
-        var message = await _client.GetFromJsonAsync<GatewayMessagePayload>(payload.GatewayMessageUrl);
+        var message = await _client.GetFromJsonAsync<GatewayMessageDto>(payload.GatewayMessageUrl);
         Assert.NotNull(message);
         Assert.Equal("den-hermes-bridge", message.SourceProjectId);
         Assert.Equal("goblinbench", message.TargetProjectId);
@@ -1189,14 +1189,14 @@ public sealed class GatewayContractTests : IDisposable
 
         // Verify stored messages in each channel carry their own source context
         // but share the same session-owner identity
-        var msgA = await _client.GetFromJsonAsync<GatewayMessagePayload>(payloadA.GatewayMessageUrl);
+        var msgA = await _client.GetFromJsonAsync<GatewayMessageDto>(payloadA.GatewayMessageUrl);
         Assert.NotNull(msgA);
         Assert.Equal("den-channels", msgA.SourceProjectId);
         Assert.Equal(sharedInstanceId, msgA.AgentInstanceId);
         Assert.Equal(sharedSessionOwnerId, msgA.SessionOwnerId);
         Assert.Equal(sharedSessionId, msgA.SessionId);
 
-        var msgB = await _client.GetFromJsonAsync<GatewayMessagePayload>(payloadB.GatewayMessageUrl);
+        var msgB = await _client.GetFromJsonAsync<GatewayMessageDto>(payloadB.GatewayMessageUrl);
         Assert.NotNull(msgB);
         Assert.Equal("den-core", msgB.SourceProjectId);
         Assert.Equal(sharedInstanceId, msgB.AgentInstanceId);
@@ -1282,12 +1282,12 @@ public sealed class GatewayContractTests : IDisposable
         Assert.NotEqual(payloadA.AssignmentId, payloadB.AssignmentId);
 
         // Verify stored messages carry distinct instance identity
-        var msgA = await _client.GetFromJsonAsync<GatewayMessagePayload>(payloadA.GatewayMessageUrl);
+        var msgA = await _client.GetFromJsonAsync<GatewayMessageDto>(payloadA.GatewayMessageUrl);
         Assert.NotNull(msgA);
         Assert.Equal("inst-runner-141", msgA.AgentInstanceId);
         Assert.Equal("runner-inst-141", msgA.SessionOwnerId);
 
-        var msgB = await _client.GetFromJsonAsync<GatewayMessagePayload>(payloadB.GatewayMessageUrl);
+        var msgB = await _client.GetFromJsonAsync<GatewayMessageDto>(payloadB.GatewayMessageUrl);
         Assert.NotNull(msgB);
         Assert.Equal("inst-runner-188", msgB.AgentInstanceId);
         Assert.Equal("runner-inst-188", msgB.SessionOwnerId);
@@ -1336,31 +1336,6 @@ public sealed class GatewayContractTests : IDisposable
             BindingHealth: new GatewayBindingHealthDto("available", 1, 1, 0, null),
             Agents: [agent]);
     }
-
-    private sealed record GatewayMessagePayload(
-        long Id,
-        long ChannelId,
-        string MessageKind,
-        string SenderType,
-        string SenderIdentity,
-        string? SourceKind,
-        string? SourceId,
-        string? SourceProjectId,
-        string? TargetProjectId,
-        long? TargetTaskId,
-        string? AssignmentId,
-        string? WorkerRunId,
-        string? WorkerRole,
-        string? ProfileIdentity,
-        string? PoolMemberId,
-        string? AgentInstanceId,
-        string? SessionOwnerId,
-        string? SessionId,
-        string? DedupeKey,
-        string? DeepLink,
-        string? Summary,
-        string Body,
-        string CreatedAt);
 
     private sealed record GatewayTestWakePayload(
         string Status,
