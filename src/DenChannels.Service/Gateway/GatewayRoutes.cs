@@ -45,7 +45,11 @@ public static class GatewayRoutes
                 "POST /api/direct-agent-events",
                 "GET /api/direct-agent-events/{eventId}",
                 "POST /api/gateway/test-wakes",
-                "GET /api/gateway/assignments/{assignmentId}/trace"
+                "GET /api/gateway/assignments/{assignmentId}/trace",
+                "GET /api/channels/{channelId}/linked-projects",
+                "GET /api/projects/{projectId}/linked-channels",
+                "POST /api/channel-project-links",
+                "DELETE /api/channel-project-links"
             ])));
 
         // -----------------------------------------------------------------------
@@ -73,6 +77,12 @@ public static class GatewayRoutes
             {
                 var channels = await repository.ListChannelsAsync(projectId, "project_default", 1, cancellationToken);
                 channel = channels.Count > 0 ? channels[0] : null;
+                // Fallback: check channel-project links for shared ops channels
+                if (channel is null && !string.IsNullOrWhiteSpace(projectId))
+                {
+                    var linkedChannels = await repository.GetLinkedChannelsForProjectAsync(projectId, cancellationToken);
+                    channel = linkedChannels.Count > 0 ? linkedChannels[0] : null;
+                }
                 if (channel is null)
                     return Results.NotFound(new GatewayErrorDto("channel_not_found",
                         $"No default channel found for project '{projectId}'."));
@@ -681,7 +691,18 @@ public static class GatewayRoutes
             return await repository.GetChannelAsync(channelId.Value, cancellationToken);
 
         var channels = await repository.ListChannelsAsync(projectId, "project_default", 1, cancellationToken);
-        return channels.Count > 0 ? channels[0] : null;
+        if (channels.Count > 0)
+            return channels[0];
+
+        // Fallback: check channel-project links for shared operations channels
+        if (!string.IsNullOrWhiteSpace(projectId))
+        {
+            var linkedChannels = await repository.GetLinkedChannelsForProjectAsync(projectId, cancellationToken);
+            if (linkedChannels.Count > 0)
+                return linkedChannels[0];
+        }
+
+        return null;
     }
 
     private static async Task<ChannelMembershipDto?> FindActiveAgentMemberAsync(ChannelsRepository repository,

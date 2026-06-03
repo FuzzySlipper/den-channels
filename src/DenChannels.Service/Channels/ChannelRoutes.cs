@@ -428,6 +428,54 @@ public static class ChannelRoutes
             }
         });
 
+        // -----------------------------------------------------------------------
+        // Channel-project link endpoints (task #1874)
+        // -----------------------------------------------------------------------
+
+        api.MapGet("/channels/{channelId:long}/linked-projects", async (
+            ChannelsRepository repository, long channelId, CancellationToken cancellationToken) =>
+        {
+            var channel = await repository.GetChannelAsync(channelId, cancellationToken);
+            if (channel is null)
+                return Results.NotFound();
+            var links = await repository.GetChannelProjectLinksAsync(channelId, cancellationToken);
+            return Results.Ok(links);
+        });
+
+        api.MapGet("/projects/{projectId}/linked-channels", async (
+            ChannelsRepository repository, string projectId, CancellationToken cancellationToken) =>
+        {
+            var channels = await repository.GetLinkedChannelsForProjectAsync(projectId, cancellationToken);
+            return Results.Ok(channels);
+        });
+
+        api.MapPost("/channel-project-links", async (
+            ChannelsRepository repository, UpsertChannelProjectLinkRequest request,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                var channel = await repository.GetChannelAsync(request.ChannelId, cancellationToken);
+                if (channel is null)
+                    return Results.NotFound(new { code = "channel_not_found", message = $"Channel {request.ChannelId} not found." });
+
+                var link = await repository.UpsertChannelProjectLinkAsync(request, cancellationToken);
+                return Results.Ok(link);
+            }
+            catch (SqliteException ex) when (IsConstraintFailure(ex))
+            {
+                return Results.Conflict(new ProblemDetailsDto("link_constraint_failed", ex.SqliteErrorCode, ex.Message));
+            }
+        });
+
+        api.MapDelete("/channel-project-links", async (
+            ChannelsRepository repository, long channelId, string projectId,
+            CancellationToken cancellationToken) =>
+        {
+            await repository.RemoveChannelProjectLinkAsync(channelId, projectId, cancellationToken);
+            return Results.NoContent();
+        });
+
         return api;
     }
 

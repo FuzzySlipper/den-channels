@@ -358,3 +358,31 @@ public sealed record PostWorkerPoolLobbyStatusRequest(
     string? CurrentAssignmentId,
     string? CurrentTaskId,
     string? CurrentProjectId);
+
+// =========================================================================
+// Channel-project link DTOs (task #1874)
+// =========================================================================
+
+/// <summary>
+/// A link between a channel and a project, allowing many projects to share
+/// one operations channel (e.g., den-system) while each project also has
+/// its own default channel for backward compatibility.
+/// </summary>
+public sealed record ChannelProjectLinkDto(
+    long Id,
+    long ChannelId,
+    string ProjectId,
+    string RelationKind,
+    bool IsPrimary,
+    string? SettingsJson,
+    string CreatedAt);
+
+/// <summary>
+/// Request to create or update a channel-project link.
+/// </summary>
+public sealed record UpsertChannelProjectLinkRequest(
+    long ChannelId,
+    string ProjectId,
+    string? RelationKind,
+    bool? IsPrimary,
+    string? SettingsJson);

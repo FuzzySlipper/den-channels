@@ -21,6 +21,7 @@ public sealed class ChannelsDatabaseInitializerTests
         Assert.Contains("channel_activity_events", tables);
         Assert.Contains("channel_read_cursors", tables);
         Assert.Contains("schema_migrations", tables);
+        Assert.Contains("channel_project_links", tables);
 
         var messageColumns = await ListColumnsAsync(connection, "channel_messages");
         Assert.Contains("source_kind", messageColumns);
@@ -52,7 +53,7 @@ public sealed class ChannelsDatabaseInitializerTests
         await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
         await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
 
-        Assert.Equal(4, await CountRowsAsync(connection, "schema_migrations"));
+        Assert.Equal(5, await CountRowsAsync(connection, "schema_migrations"));
     }
 
     [Fact]

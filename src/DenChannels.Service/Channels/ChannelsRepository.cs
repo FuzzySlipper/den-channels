@@ -903,6 +903,118 @@ public sealed partial class ChannelsRepository
         reader.IsDBNull(ordinal) ? null : reader.GetInt64(ordinal);
 
     // =========================================================================
+    // Channel-project link operations (task #1874)
+    // =========================================================================
+
+    /// <summary>
+    /// Get all project links for a given channel.
+    /// </summary>
+    public async Task<IReadOnlyList<ChannelProjectLinkDto>> GetChannelProjectLinksAsync(
+        long channelId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, channel_id, project_id, relation_kind, is_primary, settings_json, created_at
+            FROM channel_project_links
+            WHERE channel_id = $channelId
+            ORDER BY is_primary DESC, project_id ASC;
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        var rows = new List<ChannelProjectLinkDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadProjectLink(reader));
+        return rows;
+    }
+
+    /// <summary>
+    /// Get all channels linked to a given project.
+    /// </summary>
+    public async Task<IReadOnlyList<ChannelDto>> GetLinkedChannelsForProjectAsync(
+        string projectId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT c.id, c.slug, c.display_name, c.kind, c.project_id, c.space_id,
+                   c.created_by, c.visibility, c.settings_json, c.created_at, c.updated_at, c.archived_at
+            FROM channels c
+            JOIN channel_project_links cpl ON cpl.channel_id = c.id
+            WHERE cpl.project_id = $projectId
+            ORDER BY cpl.is_primary DESC, c.id ASC;
+            """;
+        command.Parameters.AddWithValue("$projectId", projectId);
+        var rows = new List<ChannelDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadChannel(reader));
+        return rows;
+    }
+
+    /// <summary>
+    /// Upsert a channel-project link. Creates the link or updates the relation_kind,
+    /// is_primary, and settings_json if it already exists.
+    /// </summary>
+    public async Task<ChannelProjectLinkDto> UpsertChannelProjectLinkAsync(
+        UpsertChannelProjectLinkRequest request, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO channel_project_links(channel_id, project_id, relation_kind, is_primary, settings_json)
+            VALUES ($channelId, $projectId, $relationKind, $isPrimary, $settingsJson)
+            ON CONFLICT(channel_id, project_id)
+            DO UPDATE SET
+                relation_kind = CASE
+                    WHEN $relationKind IS NOT NULL THEN $relationKind
+                    ELSE channel_project_links.relation_kind
+                END,
+                is_primary = CASE
+                    WHEN $isPrimary IS NOT NULL THEN $isPrimary
+                    ELSE channel_project_links.is_primary
+                END,
+                settings_json = COALESCE($settingsJson, channel_project_links.settings_json)
+            RETURNING id, channel_id, project_id, relation_kind, is_primary, settings_json, created_at;
+            """;
+        command.Parameters.AddWithValue("$channelId", request.ChannelId);
+        command.Parameters.AddWithValue("$projectId", request.ProjectId);
+        command.Parameters.AddWithValue("$relationKind", (object?)request.RelationKind ?? "linked");
+        command.Parameters.AddWithValue("$isPrimary", request.IsPrimary ?? false ? 1 : 0);
+        command.Parameters.AddWithValue("$settingsJson", (object?)request.SettingsJson ?? DBNull.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        return ReadProjectLink(reader);
+    }
+
+    /// <summary>
+    /// Remove a channel-project link.
+    /// </summary>
+    public async Task RemoveChannelProjectLinkAsync(
+        long channelId, string projectId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            DELETE FROM channel_project_links
+            WHERE channel_id = $channelId
+              AND project_id = $projectId;
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$projectId", projectId);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static ChannelProjectLinkDto ReadProjectLink(SqliteDataReader reader) => new(
+        reader.GetInt64(0),
+        reader.GetInt64(1),
+        reader.GetString(2),
+        reader.GetString(3),
+        reader.GetBoolean(4),
+        GetNullableString(reader, 5),
+        reader.GetString(6));
+
+    // =========================================================================
     // Agents Overview read queries
     // =========================================================================
 

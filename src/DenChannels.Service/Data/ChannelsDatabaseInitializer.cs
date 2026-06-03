@@ -7,7 +7,7 @@ namespace DenChannels.Service.Data;
 
 public sealed class ChannelsDatabaseInitializer
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
 
     private readonly IOptions<DenChannelsOptions> _options;
     private readonly ILogger<ChannelsDatabaseInitializer> _logger;
@@ -67,6 +67,13 @@ public sealed class ChannelsDatabaseInitializer
             await SetSchemaVersionAsync(connection, 4, "membership_purpose", cancellationToken);
         }
 
+        if (currentVersion < 5)
+        {
+            logger?.LogInformation("Applying Den Channels database migration 5: channel-project links");
+            await ExecuteNonQueryAsync(connection, MigrationV5Sql, cancellationToken);
+            await SetSchemaVersionAsync(connection, 5, "channel_project_links", cancellationToken);
+        }
+
         await EnsureChannelsCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureChannelMessageCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureChannelMessagesSourceKindConstraintAsync(connection, cancellationToken);
@@ -78,6 +85,7 @@ public sealed class ChannelsDatabaseInitializer
         await EnsureChannelMembershipsMembershipPurposeColumnAsync(connection, cancellationToken);
         await EnsureAgentCommonsSeedAsync(connection, cancellationToken);
         await EnsureWorkerPoolLobbySeedAsync(connection, cancellationToken);
+        await EnsureDenSystemChannelSeedAsync(connection, cancellationToken);
         await EnsureWorkerPoolLobbyPresenceConcreteConstraintAsync(connection, logger, cancellationToken);
         await ExecuteNonQueryAsync(connection, PostCreateIndexesSql, cancellationToken);
     }
@@ -895,6 +903,81 @@ public sealed class ChannelsDatabaseInitializer
     {
         await EnsureColumnAsync(connection, "channel_memberships", "membership_purpose", "TEXT", cancellationToken);
     }
+
+    /// <summary>
+    /// Migration v5: Channel-project links table.
+    /// Allows many projects to share one operations channel (e.g., den-system)
+    /// while each project retains its own default channel.
+    /// </summary>
+    private const string MigrationV5Sql = """
+        CREATE TABLE IF NOT EXISTS channel_project_links (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id    INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+            project_id    TEXT NOT NULL,
+            relation_kind TEXT NOT NULL DEFAULT 'linked',
+            is_primary    INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            settings_json TEXT,
+            UNIQUE(channel_id, project_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_channel_project_links_channel
+            ON channel_project_links(channel_id);
+        CREATE INDEX IF NOT EXISTS idx_channel_project_links_project
+            ON channel_project_links(project_id);
+        """;
+
+    /// <summary>
+    /// Ensures the den-system shared operations channel exists and is linked
+    /// to Den constellation projects. Idempotent — safe to run on every startup.
+    /// </summary>
+    private static async Task EnsureDenSystemChannelSeedAsync(SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "channels", cancellationToken) ||
+            !await TableExistsAsync(connection, "channel_project_links", cancellationToken))
+        {
+            return;
+        }
+
+        await ExecuteNonQueryAsync(connection, DenSystemChannelSeedSql, cancellationToken);
+    }
+
+    /// <summary>
+    /// Seed SQL to create the den-system shared operations channel and link
+    /// Den constellation projects to it. The channel uses slug='den-system' with
+    /// kind='system'. Each project gets a linked relation; the first project
+    /// is marked as primary.
+    /// </summary>
+    private const string DenSystemChannelSeedSql = """
+        INSERT INTO channels(slug, display_name, kind, created_by, visibility, settings_json)
+        VALUES ('den-system', '#den-system', 'system', 'system', 'normal',
+                '{"systemManaged":true,"channelRole":"den_system_ops","description":"Shared operations channel for Den constellation projects (den-core, den-mcp, den-channels, etc.)."}')
+        ON CONFLICT(slug) DO UPDATE SET
+            display_name = '#den-system',
+            kind = 'system',
+            visibility = 'normal',
+            settings_json = COALESCE(channels.settings_json, excluded.settings_json),
+            updated_at = datetime('now');
+
+        INSERT INTO channel_project_links(channel_id, project_id, relation_kind, is_primary)
+        SELECT c.id, 'den-core', 'linked', 1
+        FROM channels c WHERE c.slug = 'den-system'
+        ON CONFLICT(channel_id, project_id) DO UPDATE SET
+            is_primary = CASE WHEN excluded.is_primary = 1 THEN 1 ELSE channel_project_links.is_primary END;
+
+        INSERT INTO channel_project_links(channel_id, project_id, relation_kind, is_primary)
+        SELECT c.id, 'den-mcp', 'linked', 0
+        FROM channels c WHERE c.slug = 'den-system'
+        ON CONFLICT(channel_id, project_id) DO UPDATE SET
+            relation_kind = excluded.relation_kind;
+
+        INSERT INTO channel_project_links(channel_id, project_id, relation_kind, is_primary)
+        SELECT c.id, 'den-channels', 'linked', 0
+        FROM channels c WHERE c.slug = 'den-system'
+        ON CONFLICT(channel_id, project_id) DO UPDATE SET
+            relation_kind = excluded.relation_kind;
+        """;
 
     /// <summary>
     /// Rebuild worker_pool_lobby_presence with concrete-identity-scoped UNIQUE
