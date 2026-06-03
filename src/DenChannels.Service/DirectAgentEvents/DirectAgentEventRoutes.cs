@@ -117,7 +117,7 @@ public static class DirectAgentEventRoutes
                 CheckpointType: request.CheckpointType,
                 CheckpointHandle: request.CheckpointHandle), cancellationToken);
 
-            var parsedAssignmentId = request.AssignmentId is not null && int.TryParse(request.AssignmentId, out var aid) ? aid : (int?)null;
+
             var eventUrl = $"/api/direct-agent-events/{msg.Id}";
             var eventsUrl = $"/api/gateway/events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10";
 
@@ -131,7 +131,7 @@ public static class DirectAgentEventRoutes
                 SourceProjectId: resolvedSourceProjectId,
                 TargetProjectId: request.TargetProjectId,
                 TargetTaskId: request.TargetTaskId,
-                AssignmentId: parsedAssignmentId,
+                AssignmentId: request.AssignmentId,
                 WorkerRunId: request.WorkerRunId,
                 WorkerRole: request.WorkerRole,
                 ProfileIdentity: request.ProfileIdentity,

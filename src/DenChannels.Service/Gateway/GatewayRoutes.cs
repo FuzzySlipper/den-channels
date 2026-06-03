@@ -477,7 +477,6 @@ public static class GatewayRoutes
                 evidenceSummary = $"{evidenceSummary} Delivery-loop trigger note: {pollObservation.Message}";
             }
 
-            var parsedAssignmentId = request.AssignmentId is not null && int.TryParse(request.AssignmentId, out var aid) ? aid : (int?)null;
             return Results.Created(gatewayMessageUrl, new GatewayDirectAgentMessageDto(
                 Status: "recorded",
                 DeliveryStatus: deliveryObservation.DeliveryStatus,
@@ -492,7 +491,7 @@ public static class GatewayRoutes
                 SourceProjectId: resolvedSourceProjectId,
                 TargetProjectId: request.TargetProjectId,
                 TargetTaskId: request.TargetTaskId,
-                AssignmentId: parsedAssignmentId,
+                AssignmentId: request.AssignmentId,
                 WorkerRunId: request.WorkerRunId,
                 WorkerRole: request.WorkerRole,
                 ProfileIdentity: request.ProfileIdentity,
