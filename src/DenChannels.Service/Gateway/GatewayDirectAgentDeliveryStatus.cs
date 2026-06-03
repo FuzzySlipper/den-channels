@@ -123,7 +123,7 @@ public static class GatewayDirectAgentDeliveryStatus
     public static string NormalizeWaitFor(string? waitFor)
     {
         if (string.IsNullOrWhiteSpace(waitFor))
-            return "claim";
+            return "none";
         return waitFor.Trim().ToLowerInvariant() switch
         {
             "none" => "none",

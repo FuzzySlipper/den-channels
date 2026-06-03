@@ -37,6 +37,8 @@ public static class GatewayRoutes
                 "POST /api/gateway/system-messages",
                 "POST /api/gateway/channel-activity-events",
                 "POST /api/gateway/direct-agent-messages",
+                "POST /api/direct-agent-events",
+                "GET /api/direct-agent-events/{eventId}",
                 "POST /api/gateway/test-wakes",
                 "GET /api/gateway/assignments/{assignmentId}/trace"
             ])));
@@ -324,6 +326,10 @@ public static class GatewayRoutes
 
         // -----------------------------------------------------------------------
         // POST /api/gateway/direct-agent-messages
+        // Compatibility alias: delegates durable recording to the Channels-owned
+        // /api/direct-agent-events endpoint shape. Gateway claim/spin-wait is now
+        // gated behind an explicit non-default waitFor value (task #1902).
+        // When waitFor is null/unset, returns immediately like the Channels-owned route.
         // -----------------------------------------------------------------------
         gw.MapPost("/direct-agent-messages", async (
             ChannelsRepository repository,
@@ -429,20 +435,44 @@ public static class GatewayRoutes
 
             var gatewayMessageUrl = $"/api/gateway/messages/{msg.Id}";
             gatewayEventsUrl = $"/api/gateway/events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10";
+
+            // Gateway claim/spin-wait is gated behind an explicit waitFor value (task #1902).
+            // When waitFor is null/unset, the endpoint returns immediately after durable
+            // recording, matching the Channels-owned /api/direct-agent-events behavior.
+            // Only callers that explicitly set waitFor=claim/ack/completion will trigger
+            // the legacy Gateway poll + spin-wait path.
             var deliveryProjectId = channel.ProjectId ?? request.ProjectId;
-            var pollObservation = await gatewayStateClient.TriggerDeliveryLoopPollAsync(
-                deliveryProjectId,
-                cancellationToken: cancellationToken);
-            var deliveryObservation = await gatewayStateClient.WaitForDirectAgentDeliveryStatusAsync(
-                deliveryProjectId,
-                member.MemberIdentity,
-                requestId,
-                request.WaitFor,
-                request.TimeoutMs,
-                cancellationToken);
+            var waitForTarget = GatewayDirectAgentDeliveryStatus.NormalizeWaitFor(request.WaitFor);
+            var triggeredLegacySpinWait = waitForTarget != "none";
+
+            DirectAgentDeliveryObservation deliveryObservation;
+            GatewayDeliveryLoopPollObservation? pollObservation = null;
+
+            if (triggeredLegacySpinWait)
+            {
+                // Legacy path: trigger Gateway delivery-loop poll + spin-wait
+                pollObservation = await gatewayStateClient.TriggerDeliveryLoopPollAsync(
+                    deliveryProjectId,
+                    cancellationToken: cancellationToken);
+                deliveryObservation = await gatewayStateClient.WaitForDirectAgentDeliveryStatusAsync(
+                    deliveryProjectId,
+                    member.MemberIdentity,
+                    requestId,
+                    request.WaitFor,
+                    request.TimeoutMs,
+                    cancellationToken);
+            }
+            else
+            {
+                // New default: return immediately with recorded status.
+                // No Gateway claim wait was requested.
+                deliveryObservation = DirectAgentDeliveryObservation.RecordedPending(
+                    "Direct agent wake_event recorded; no Gateway claim wait requested.");
+            }
+
             var evidenceSummary = deliveryObservation.EvidenceSummary
                 ?? "Direct agent wake_event recorded; Gateway evidence URL exposes delivery request status and follow-up claim/completion/suppression events.";
-            if (!pollObservation.Triggered && !string.IsNullOrWhiteSpace(pollObservation.Message))
+            if (pollObservation is not null && !pollObservation.Triggered && !string.IsNullOrWhiteSpace(pollObservation.Message))
             {
                 evidenceSummary = $"{evidenceSummary} Delivery-loop trigger note: {pollObservation.Message}";
             }

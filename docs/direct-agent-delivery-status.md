@@ -1,10 +1,10 @@
 # Direct-agent delivery status contract
 
-Den Channels records direct-agent messages as `wake_event` channel messages, but Den Gateway owns runtime delivery truth. The `POST /api/gateway/direct-agent-messages` response therefore returns both the Channels recording handle and a bounded observation of Gateway state.
+Den Channels owns direct-agent event creation. The primary recording API is `POST /api/direct-agent-events`, which writes a durable `wake_event` channel message and returns immediately with `{ eventId, status: "recorded" }` plus readback handles. Den Gateway / den-host owns runtime claim, delivery, acknowledgement, and completion truth after that record exists. The older `POST /api/gateway/direct-agent-messages` route remains a compatibility alias; it now returns immediately by default and only performs the legacy Gateway poll/spin-wait when callers explicitly set `waitFor=claim`, `waitFor=ack`, or `waitFor=completion`.
 
 ## Request fields
 
-Existing callers may continue sending:
+Primary Channels-owned callers should send:
 
 ```json
 {
@@ -15,19 +15,22 @@ Existing callers may continue sending:
 }
 ```
 
-Optional backwards-compatible acknowledgement controls:
+The Channels-owned route has no `waitFor` control and never depends on Gateway availability.
 
-- `waitFor`: `none`, `claim`, `ack`, or `completion`; default `claim`.
+Optional backwards-compatible acknowledgement controls on the compatibility route only (`POST /api/gateway/direct-agent-messages`):
+
+- `waitFor`: `none`, `claim`, `ack`, or `completion`; default `none`.
 - `timeoutMs`: bounded wait in milliseconds; clamped to `0..5000`; default `1500`.
 
-The wait is best-effort and bounded. It never proves task completion, and it never blocks indefinitely.
+The compatibility wait is best-effort and bounded. It never proves task completion, and it never blocks indefinitely.
 
 ## Response handles
 
 The response includes stable handles for follow-up diagnostics:
 
-- `messageId` / `gatewayMessageUrl`: the Channels wake-event message that was recorded.
-- `requestId`: stable source id shaped `direct-agent-message:{channelId}:{memberIdentity}:{timestamp}`.
+- `eventId` / `eventUrl`: the Channels wake-event message that was recorded and can be read via `GET /api/direct-agent-events/{eventId}`.
+- `messageId` / `gatewayMessageUrl`: compatibility names for the same Channels wake-event record when using `/api/gateway/direct-agent-messages`.
+- `requestId`: stable source id shaped `direct-agent-message:{channelId}:{memberIdentity}:{guid}`.
 - `gatewayEventsUrl`: Channels event cursor near the recorded message.
 - `deliveryRequestId`: Gateway delivery request id when Gateway has created one for this request.
 - `attemptId`: latest Gateway delivery attempt id when an adapter/runtime has attempted or claimed delivery.

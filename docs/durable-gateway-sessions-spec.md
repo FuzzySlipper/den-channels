@@ -20,8 +20,9 @@ automatically a runtime session lane and must not be treated as the agent sessio
   message was sent, a wake was triggered, or activity was recorded). It is for reply routing,
   activity display, authorization, and audit.
 - `agent_instance_id` / `session_owner_id` / `session_id` identify the target durable agent
-  instance and its runtime session. These fields are carried in direct-agent/wake payloads
-  (e.g. `POST /api/gateway/direct-agent-messages`) so Bridge can use one active session
+  instance and its runtime session. These fields are carried in Channels-owned direct-agent
+  event payloads (primary: `POST /api/direct-agent-events`; compatibility alias:
+  `POST /api/gateway/direct-agent-messages`) so den-host/Gateway consumers can use one active session
   across channels for the same concrete agent instance.
 - The same target agent instance receiving messages from two source channels carries the
   same `session_owner_id` and `session_id` regardless of which channel originated the
