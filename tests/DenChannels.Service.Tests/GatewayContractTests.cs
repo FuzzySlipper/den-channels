@@ -952,6 +952,9 @@ public sealed class GatewayContractTests : IDisposable
         string? WorkerRole,
         string? ProfileIdentity,
         string? PoolMemberId,
+        string? AgentInstanceId,
+        string? SessionOwnerId,
+        string? SessionId,
         long? DeliveryRequestId,
         long? AttemptId,
         string? GatewayDeliveryState,
@@ -1101,6 +1104,195 @@ public sealed class GatewayContractTests : IDisposable
         Assert.Equal("pool-member-81", eventItem.PoolMemberId);
     }
 
+    /// <summary>
+    /// Two source channels targeting the same durable agent should carry the same concrete
+    /// instance/session owner fields, so Bridge can reuse one active session across channels.
+    /// </summary>
+    [Fact]
+    public async Task GatewayDirectAgentMessages_SameInstanceOwner_TwoSourceChannels_PreservesConcreteIdentity()
+    {
+        // Channel A (source project "den-channels")
+        var channelA = await EnsureDefaultChannelAsync("gw-da-instance-proj-a");
+        await UpsertMembershipAsync(channelA.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "den-channels-runner",
+            wakePolicy = "all_messages_except_self"
+        });
+
+        // Channel B (source project "den-core") — different source channel
+        var channelB = await EnsureDefaultChannelAsync("gw-da-instance-proj-b");
+        await UpsertMembershipAsync(channelB.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "den-channels-runner",
+            wakePolicy = "all_messages_except_self"
+        });
+
+        // Same concrete session owner identity across both channels
+        const string sharedInstanceId = "inst-runner-001";
+        const string sharedSessionOwnerId = "runner-profile";
+        const string sharedSessionId = "session-abc-123";
+
+        // Post from channel A with session-owner metadata
+        using var responseA = await _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
+        {
+            channelId = channelA.Id,
+            memberIdentity = "den-channels-runner",
+            senderIdentity = "operator",
+            body = "Direct message from channel A",
+            sourceProjectId = "den-channels",
+            agentInstanceId = sharedInstanceId,
+            sessionOwnerId = sharedSessionOwnerId,
+            sessionId = sharedSessionId,
+            workerRunId = "run-001",
+            workerRole = "spawned-coder",
+            waitFor = "none"
+        });
+        Assert.Equal(HttpStatusCode.Created, responseA.StatusCode);
+        var payloadA = await responseA.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
+        Assert.NotNull(payloadA);
+        Assert.Equal(sharedInstanceId, payloadA.AgentInstanceId);
+        Assert.Equal(sharedSessionOwnerId, payloadA.SessionOwnerId);
+        Assert.Equal(sharedSessionId, payloadA.SessionId);
+
+        // Post from channel B with the SAME session-owner metadata
+        using var responseB = await _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
+        {
+            channelId = channelB.Id,
+            memberIdentity = "den-channels-runner",
+            senderIdentity = "ui-user",
+            body = "Direct message from channel B",
+            sourceProjectId = "den-core",
+            agentInstanceId = sharedInstanceId,
+            sessionOwnerId = sharedSessionOwnerId,
+            sessionId = sharedSessionId,
+            workerRunId = "run-002",
+            workerRole = "spawned-coder",
+            waitFor = "none"
+        });
+        Assert.Equal(HttpStatusCode.Created, responseB.StatusCode);
+        var payloadB = await responseB.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
+        Assert.NotNull(payloadB);
+        Assert.Equal(sharedInstanceId, payloadB.AgentInstanceId);
+        Assert.Equal(sharedSessionOwnerId, payloadB.SessionOwnerId);
+        Assert.Equal(sharedSessionId, payloadB.SessionId);
+
+        // Source channel identity must differ
+        Assert.NotEqual(payloadA.ChannelId, payloadB.ChannelId);
+        Assert.NotEqual(payloadA.SourceProjectId, payloadB.SourceProjectId);
+
+        // But session owner identity must be identical
+        Assert.Equal(payloadA.AgentInstanceId, payloadB.AgentInstanceId);
+        Assert.Equal(payloadA.SessionOwnerId, payloadB.SessionOwnerId);
+        Assert.Equal(payloadA.SessionId, payloadB.SessionId);
+
+        // Verify stored messages in each channel carry their own source context
+        // but share the same session-owner identity
+        var msgA = await _client.GetFromJsonAsync<GatewayMessagePayload>(payloadA.GatewayMessageUrl);
+        Assert.NotNull(msgA);
+        Assert.Equal("den-channels", msgA.SourceProjectId);
+        Assert.Equal(sharedInstanceId, msgA.AgentInstanceId);
+        Assert.Equal(sharedSessionOwnerId, msgA.SessionOwnerId);
+        Assert.Equal(sharedSessionId, msgA.SessionId);
+
+        var msgB = await _client.GetFromJsonAsync<GatewayMessagePayload>(payloadB.GatewayMessageUrl);
+        Assert.NotNull(msgB);
+        Assert.Equal("den-core", msgB.SourceProjectId);
+        Assert.Equal(sharedInstanceId, msgB.AgentInstanceId);
+        Assert.Equal(sharedSessionOwnerId, msgB.SessionOwnerId);
+        Assert.Equal(sharedSessionId, msgB.SessionId);
+    }
+
+    /// <summary>
+    /// Two worker instances sharing a profile identity must carry distinct
+    /// agent_instance_id/pool_member_id/session_owner so they remain isolated
+    /// even when profile config is shared.
+    /// </summary>
+    [Fact]
+    public async Task GatewayDirectAgentMessages_TwoInstancesSharedProfile_DistinctSessionOwners()
+    {
+        var channel = await EnsureDefaultChannelAsync("gw-da-shared-profile");
+        await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "spawned-coder",
+            wakePolicy = "all_messages_except_self"
+        });
+
+        // Instance A: spawned-coder assignment 141
+        using var responseA = await _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
+        {
+            channelId = channel.Id,
+            memberIdentity = "spawned-coder",
+            senderIdentity = "orch-runner",
+            body = "Assignment 141: implement task #1887",
+            sourceProjectId = "den-channels",
+            profileIdentity = "den-hermes-coder",
+            agentInstanceId = "inst-runner-141",
+            poolMemberId = "pool-member-141",
+            sessionOwnerId = "runner-inst-141",
+            sessionId = "session-runner-141",
+            workerRunId = "dc-1887-run-141",
+            workerRole = "spawned-coder",
+            assignmentId = "141",
+            waitFor = "none"
+        });
+        Assert.Equal(HttpStatusCode.Created, responseA.StatusCode);
+        var payloadA = await responseA.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
+        Assert.NotNull(payloadA);
+        Assert.Equal("inst-runner-141", payloadA.AgentInstanceId);
+        Assert.Equal("pool-member-141", payloadA.PoolMemberId);
+        Assert.Equal("runner-inst-141", payloadA.SessionOwnerId);
+        Assert.Equal("session-runner-141", payloadA.SessionId);
+
+        // Instance B: spawned-coder assignment 188 — same profile, distinct instance
+        using var responseB = await _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
+        {
+            channelId = channel.Id,
+            memberIdentity = "spawned-coder",
+            senderIdentity = "orch-runner",
+            body = "Assignment 188: implement task #1890",
+            sourceProjectId = "den-channels",
+            profileIdentity = "den-hermes-coder",
+            agentInstanceId = "inst-runner-188",
+            poolMemberId = "pool-member-188",
+            sessionOwnerId = "runner-inst-188",
+            sessionId = "session-runner-188",
+            workerRunId = "dc-1890-run-188",
+            workerRole = "spawned-coder",
+            assignmentId = "188",
+            waitFor = "none"
+        });
+        Assert.Equal(HttpStatusCode.Created, responseB.StatusCode);
+        var payloadB = await responseB.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
+        Assert.NotNull(payloadB);
+        Assert.Equal("inst-runner-188", payloadB.AgentInstanceId);
+        Assert.Equal("pool-member-188", payloadB.PoolMemberId);
+        Assert.Equal("runner-inst-188", payloadB.SessionOwnerId);
+        Assert.Equal("session-runner-188", payloadB.SessionId);
+
+        // Same profile identity but distinct instance/session-owner fields
+        Assert.Equal(payloadA.ProfileIdentity, payloadB.ProfileIdentity);
+        Assert.NotEqual(payloadA.AgentInstanceId, payloadB.AgentInstanceId);
+        Assert.NotEqual(payloadA.PoolMemberId, payloadB.PoolMemberId);
+        Assert.NotEqual(payloadA.SessionOwnerId, payloadB.SessionOwnerId);
+        Assert.NotEqual(payloadA.SessionId, payloadB.SessionId);
+        Assert.NotEqual(payloadA.WorkerRunId, payloadB.WorkerRunId);
+        Assert.NotEqual(payloadA.AssignmentId, payloadB.AssignmentId);
+
+        // Verify stored messages carry distinct instance identity
+        var msgA = await _client.GetFromJsonAsync<GatewayMessagePayload>(payloadA.GatewayMessageUrl);
+        Assert.NotNull(msgA);
+        Assert.Equal("inst-runner-141", msgA.AgentInstanceId);
+        Assert.Equal("runner-inst-141", msgA.SessionOwnerId);
+
+        var msgB = await _client.GetFromJsonAsync<GatewayMessagePayload>(payloadB.GatewayMessageUrl);
+        Assert.NotNull(msgB);
+        Assert.Equal("inst-runner-188", msgB.AgentInstanceId);
+        Assert.Equal("runner-inst-188", msgB.SessionOwnerId);
+    }
+
     private static GatewayStateDto BuildGatewayState(string sourceId, string deliveryStatus, long deliveryRequestId, long? attemptId)
     {
         var delivery = new GatewayDeliveryDto(
@@ -1161,6 +1353,9 @@ public sealed class GatewayContractTests : IDisposable
         string? WorkerRole,
         string? ProfileIdentity,
         string? PoolMemberId,
+        string? AgentInstanceId,
+        string? SessionOwnerId,
+        string? SessionId,
         string? DedupeKey,
         string? DeepLink,
         string? Summary,
@@ -1198,6 +1393,9 @@ public sealed class GatewayContractTests : IDisposable
         string? WorkerRole,
         string? ProfileIdentity,
         string? PoolMemberId,
+        string? AgentInstanceId,
+        string? SessionOwnerId,
+        string? SessionId,
         string? DedupeKey,
         string? DeepLink,
         string? Summary,

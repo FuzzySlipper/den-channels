@@ -131,6 +131,8 @@ public sealed class ChannelsDatabaseInitializer
     {
         await EnsureColumnAsync(connection, "channel_messages", "agent_instance_id", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_messages", "pool_member_id", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_messages", "session_owner_id", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_messages", "session_id", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "agent_instance_id", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "pool_member_id", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_read_cursors", "instance_id", "TEXT", cancellationToken);

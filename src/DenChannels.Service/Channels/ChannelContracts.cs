@@ -31,9 +31,11 @@ public sealed record EnsureProjectDefaultChannelRequest(
 
 /// <summary>
 /// A channel message with full attribution fields.
-/// SourceProjectId is the source/control project (transport attribution).
+/// SourceProjectId/ChannelId are the source/control context (where the interaction happened).
 /// TargetProjectId is the target work project (workflow attribution).
 /// These may differ when e.g. a shared worker-control channel delivers work for a different project.
+/// SessionOwnerId/SessionId identify the agent session that owns this message, independent of
+/// which channel the message appears in.
 /// </summary>
 public sealed record ChannelMessageDto(
     long Id,
@@ -62,15 +64,19 @@ public sealed record ChannelMessageDto(
     string? CheckpointHandle,
     string? AgentInstanceId,
     string? PoolMemberId,
+    string? SessionOwnerId,
+    string? SessionId,
     string CreatedAt,
     string? EditedAt,
     string? DeletedAt);
 
 /// <summary>
 /// Request to post a new channel message.
-/// SourceProjectId is the source/control project (transport attribution).
+/// SourceProjectId/ChannelId are the source/control context (transport attribution).
 /// Target-work fields (TargetProjectId, TargetTaskId, WorkerRunId, WorkerRole, ProfileIdentity)
 /// are workflow attribution and must not be inferred only from the channel project.
+/// Session-owner fields (SessionOwnerId, SessionId) identify the agent session that owns
+/// this message, separate from the channel where it is posted.
 /// </summary>
 public sealed record PostChannelMessageRequest(
     string SenderType,
@@ -96,7 +102,9 @@ public sealed record PostChannelMessageRequest(
     string? CheckpointType = null,
     string? CheckpointHandle = null,
     string? AgentInstanceId = null,
-    string? PoolMemberId = null);
+    string? PoolMemberId = null,
+    string? SessionOwnerId = null,
+    string? SessionId = null);
 
 public sealed record ChannelMembershipDto(
     long Id,

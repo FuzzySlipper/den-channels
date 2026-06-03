@@ -319,6 +319,75 @@ public sealed class SharedProfileInstanceTests
         Assert.Equal("spawned-coder", activity["agent_identity"]);
     }
 
+    /// <summary>
+    /// Two same-profile instances posting messages in the same channel carry
+    /// distinct session_owner_id/session_id so runtime sessions stay isolated.
+    /// </summary>
+    [Fact]
+    public async Task TwoSameProfileInstances_DistinctSessionOwnerFields()
+    {
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        await ExecuteAsync(connection, """
+            INSERT INTO channels(slug, display_name, kind, project_id)
+            VALUES ('project-session-owner-test', 'Session Owner Test', 'project_default', 'session-owner-test');
+            """);
+
+        // Instance A: runner assignment 141
+        await ExecuteAsync(connection, """
+            INSERT INTO channel_messages(
+                channel_id, sender_type, sender_identity, body, message_kind,
+                agent_instance_id, pool_member_id, session_owner_id, session_id, assignment_id)
+            VALUES (1, 'agent', 'spawned-coder', 'Instance A message', 'agent_text',
+                    'inst-runner-141', 'pool-member-141', 'runner-inst-141', 'session-runner-141', '141');
+            """);
+
+        // Instance B: runner assignment 188 — same profile, distinct session
+        await ExecuteAsync(connection, """
+            INSERT INTO channel_messages(
+                channel_id, sender_type, sender_identity, body, message_kind,
+                agent_instance_id, pool_member_id, session_owner_id, session_id, assignment_id)
+            VALUES (1, 'agent', 'spawned-coder', 'Instance B message', 'agent_text',
+                    'inst-runner-188', 'pool-member-188', 'runner-inst-188', 'session-runner-188', '188');
+            """);
+
+        // Verify: distinct session_owner_id per instance
+        var msgA = await QuerySingleAsync(connection, """
+            SELECT agent_instance_id, session_owner_id, session_id, assignment_id, sender_identity
+            FROM channel_messages
+            WHERE channel_id = 1
+              AND agent_instance_id = 'inst-runner-141';
+            """);
+        Assert.Equal("inst-runner-141", msgA["agent_instance_id"]);
+        Assert.Equal("runner-inst-141", msgA["session_owner_id"]);
+        Assert.Equal("session-runner-141", msgA["session_id"]);
+        Assert.Equal("141", msgA["assignment_id"]);
+        Assert.Equal("spawned-coder", msgA["sender_identity"]);
+
+        var msgB = await QuerySingleAsync(connection, """
+            SELECT agent_instance_id, session_owner_id, session_id, assignment_id, sender_identity
+            FROM channel_messages
+            WHERE channel_id = 1
+              AND agent_instance_id = 'inst-runner-188';
+            """);
+        Assert.Equal("inst-runner-188", msgB["agent_instance_id"]);
+        Assert.Equal("runner-inst-188", msgB["session_owner_id"]);
+        Assert.Equal("session-runner-188", msgB["session_id"]);
+        Assert.Equal("188", msgB["assignment_id"]);
+        Assert.Equal("spawned-coder", msgB["sender_identity"]);
+
+        // Same profile (sender_identity) but distinct sessions
+        Assert.Equal(msgA["sender_identity"], msgB["sender_identity"]);
+        Assert.NotEqual(msgA["agent_instance_id"], msgB["agent_instance_id"]);
+        Assert.NotEqual(msgA["session_owner_id"], msgB["session_owner_id"]);
+        Assert.NotEqual(msgA["session_id"], msgB["session_id"]);
+
+        // Verify total count: 2 messages
+        var count = await CountRowsAsync(connection, "channel_messages");
+        Assert.Equal(2, count);
+    }
+
     private static async Task<SqliteConnection> OpenInMemoryDatabaseAsync()
     {
         var connection = new SqliteConnection("Data Source=:memory:");

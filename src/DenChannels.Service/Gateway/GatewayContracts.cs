@@ -49,10 +49,13 @@ public sealed record GatewayTestWakeDto(
 
 /// <summary>
 /// Request to record a direct targeted message as a Gateway-visible wake request.
-/// SourceProjectId is the source/control project (transport attribution) — may differ from target work project.
+/// SourceProjectId/ChannelId are the source/control context (where the interaction happened) —
+/// these identify the transport origin and must never be treated as the agent session owner.
 /// Target-work fields (TargetProjectId, TargetTaskId, AssignmentId, WorkerRunId, WorkerRole, ProfileIdentity, PoolMemberId)
 /// are workflow attribution and must not be inferred only from the channel or source project.
-/// All target-work fields are optional for backward compatibility.
+/// Session-owner fields (AgentInstanceId, SessionOwnerId, SessionId) identify the target durable
+/// agent instance/session so Bridge can reuse one active session across channels for that instance.
+/// All target-work and session-owner fields are optional for backward compatibility.
 /// </summary>
 public sealed record PostGatewayDirectAgentMessageRequest(
     long? ChannelId,
@@ -68,6 +71,9 @@ public sealed record PostGatewayDirectAgentMessageRequest(
     string? WorkerRole = null,
     string? ProfileIdentity = null,
     string? PoolMemberId = null,
+    string? AgentInstanceId = null,
+    string? SessionOwnerId = null,
+    string? SessionId = null,
     string? CheckpointType = null,
     string? CheckpointHandle = null,
     string? WaitFor = null,
@@ -75,10 +81,12 @@ public sealed record PostGatewayDirectAgentMessageRequest(
 
 /// <summary>
 /// Result of a direct targeted message request with delivery/evidence status links.
-/// SourceProjectId is the source/control project (transport attribution).
+/// SourceProjectId/ChannelId are the source/control context (where the interaction happened).
 /// Target-work fields (TargetProjectId, TargetTaskId, WorkerRunId, WorkerRole, ProfileIdentity, PoolMemberId)
 /// are workflow attribution and may differ from the transport/control project.
-/// All target-work fields are nullable for backward compatibility.
+/// Session-owner fields (AgentInstanceId, SessionOwnerId, SessionId) identify the target durable
+/// agent instance/session for session reuse across channels.
+/// All target-work and session-owner fields are nullable for backward compatibility.
 /// </summary>
 public sealed record GatewayDirectAgentMessageDto(
     string Status,
@@ -99,6 +107,9 @@ public sealed record GatewayDirectAgentMessageDto(
     string? WorkerRole,
     string? ProfileIdentity,
     string? PoolMemberId,
+    string? AgentInstanceId,
+    string? SessionOwnerId,
+    string? SessionId,
     long? DeliveryRequestId,
     long? AttemptId,
     string? GatewayDeliveryState,
@@ -111,10 +122,12 @@ public sealed record GatewayDirectAgentMessageDto(
 
 /// <summary>
 /// Single channel message suitable for Gateway routing/simulation decisions.
-/// SourceProjectId is the source/control project (transport attribution).
+/// SourceProjectId/ChannelId are the source/control context (transport attribution).
 /// Target-work fields (TargetProjectId, TargetTaskId, WorkerRunId, WorkerRole, ProfileIdentity, PoolMemberId)
 /// are workflow attribution for the target project work, not inferred from the channel project.
-/// All target-work fields are nullable for backward compatibility.
+/// Session-owner fields (AgentInstanceId, SessionOwnerId, SessionId) identify the target durable
+/// agent instance/session for session reuse across channels.
+/// All target-work and session-owner fields are nullable for backward compatibility.
 /// </summary>
 public sealed record GatewayMessageDto(
     long Id,
@@ -132,6 +145,9 @@ public sealed record GatewayMessageDto(
     string? WorkerRole,
     string? ProfileIdentity,
     string? PoolMemberId,
+    string? AgentInstanceId,
+    string? SessionOwnerId,
+    string? SessionId,
     string? DeliveryRequestId,
     string? DedupeKey,
     string? DeepLink,
@@ -147,10 +163,12 @@ public sealed record GatewayEventsDto(
 
 /// <summary>
 /// Single event item within the Gateway events cursor response.
-/// SourceProjectId is the source/control project (transport attribution).
+/// SourceProjectId/ChannelId are the source/control context (transport attribution).
 /// Target-work fields (TargetProjectId, TargetTaskId, WorkerRunId, WorkerRole, ProfileIdentity, PoolMemberId)
 /// are workflow attribution, surfaced as structured fields rather than only body-embedded metadata.
-/// All target-work fields are nullable for backward compatibility.
+/// Session-owner fields (AgentInstanceId, SessionOwnerId, SessionId) identify the target durable
+/// agent instance/session for session reuse across channels.
+/// All target-work and session-owner fields are nullable for backward compatibility.
 /// </summary>
 public sealed record GatewayEventItemDto(
     long Id,
@@ -168,6 +186,9 @@ public sealed record GatewayEventItemDto(
     string? WorkerRole,
     string? ProfileIdentity,
     string? PoolMemberId,
+    string? AgentInstanceId,
+    string? SessionOwnerId,
+    string? SessionId,
     string? DeliveryRequestId,
     string? DedupeKey,
     string? DeepLink,

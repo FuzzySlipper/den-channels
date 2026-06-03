@@ -182,6 +182,9 @@ public static class GatewayRoutes
                 m.WorkerRole,
                 m.ProfileIdentity,
                 m.PoolMemberId,
+                m.AgentInstanceId,
+                m.SessionOwnerId,
+                m.SessionId,
                 m.DeliveryRequestId,
                 m.DedupeKey,
                 m.DeepLink,
@@ -388,6 +391,12 @@ public static class GatewayRoutes
                 metadataPayload["profileIdentity"] = request.ProfileIdentity;
             if (request.PoolMemberId is not null)
                 metadataPayload["poolMemberId"] = request.PoolMemberId;
+            if (request.AgentInstanceId is not null)
+                metadataPayload["agentInstanceId"] = request.AgentInstanceId;
+            if (request.SessionOwnerId is not null)
+                metadataPayload["sessionOwnerId"] = request.SessionOwnerId;
+            if (request.SessionId is not null)
+                metadataPayload["sessionId"] = request.SessionId;
             var metadataJson = JsonSerializer.Serialize(metadataPayload);
 
             var msg = await repository.PostMessageAsync(channel.Id, new PostChannelMessageRequest(
@@ -404,6 +413,9 @@ public static class GatewayRoutes
                 WorkerRole: request.WorkerRole,
                 ProfileIdentity: request.ProfileIdentity,
                 PoolMemberId: request.PoolMemberId,
+                AgentInstanceId: request.AgentInstanceId,
+                SessionOwnerId: request.SessionOwnerId,
+                SessionId: request.SessionId,
                 Summary: $"Direct agent request to {member.MemberIdentity}: recorded, pending claim/completion",
                 DeepLink: null,
                 ThreadRootMessageId: null,
@@ -455,6 +467,9 @@ public static class GatewayRoutes
                 WorkerRole: request.WorkerRole,
                 ProfileIdentity: request.ProfileIdentity,
                 PoolMemberId: request.PoolMemberId,
+                AgentInstanceId: request.AgentInstanceId,
+                SessionOwnerId: request.SessionOwnerId,
+                SessionId: request.SessionId,
                 DeliveryRequestId: deliveryObservation.DeliveryRequestId,
                 AttemptId: deliveryObservation.AttemptId,
                 GatewayDeliveryState: deliveryObservation.GatewayDeliveryState,
@@ -589,6 +604,9 @@ public static class GatewayRoutes
         m.WorkerRole,
         m.ProfileIdentity,
         m.PoolMemberId,
+        m.AgentInstanceId,
+        m.SessionOwnerId,
+        m.SessionId,
         m.DeliveryRequestId,
         m.DedupeKey,
         m.DeepLink,

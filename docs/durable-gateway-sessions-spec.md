@@ -1,6 +1,6 @@
 # Durable Den Channels Gateway Sessions and Focused Session UI Spec
 
-Status: implemented and live. Tasks #1495/#1498/#1499 cut over Den Channels to the durable Hermes Gateway `den_channels` adapter; task #1496 archived the legacy one-shot wake/heartbeat systemd path.
+Status: implemented and live. Tasks #1495/#1498/#1499 cut over Den Channels to the durable Hermes Gateway `den_channels` adapter; task #1496 archived the legacy one-shot wake/heartbeat systemd path. Task #1887 added session-owner identity fields to separate channel context from agent session ownership.
 
 Related Den records:
 
@@ -9,6 +9,30 @@ Related Den records:
 - Task #1494: this spec
 - Task #1495: implementation of the durable Gateway session path
 - Task #1496: cleanup of test-only heartbeat / one-shot wake scaffolding
+- Task #1887: separate source channel context from agent session ownership
+
+## 0. Channel ≠ Hermes session
+
+A **channel** (or control room, message source) is where an interaction happened — it is not
+automatically a runtime session lane and must not be treated as the agent session owner.
+
+- `channel_id` / `source_channel_id` identifies the transport origin (the channel where a
+  message was sent, a wake was triggered, or activity was recorded). It is for reply routing,
+  activity display, authorization, and audit.
+- `agent_instance_id` / `session_owner_id` / `session_id` identify the target durable agent
+  instance and its runtime session. These fields are carried in direct-agent/wake payloads
+  (e.g. `POST /api/gateway/direct-agent-messages`) so Bridge can use one active session
+  across channels for the same concrete agent instance.
+- The same target agent instance receiving messages from two source channels carries the
+  same `session_owner_id` and `session_id` regardless of which channel originated the
+  request. See `GatewayDirectAgentMessages_SameInstanceOwner_TwoSourceChannels_PreservesConcreteIdentity` test.
+- Two worker instances sharing a profile identity carry distinct `agent_instance_id`,
+  `pool_member_id`, `session_owner_id`, and `session_id` values so runtime sessions
+  remain isolated. See `GatewayDirectAgentMessages_TwoInstancesSharedProfile_DistinctSessionOwners` test.
+
+Do not infer a session-lane key solely from channel_id. Gateway/bridge consumers should use
+the explicit `session_owner_id` and `session_id` fields to decide which Hermes session
+should handle a delivery.
 
 ## 1. Decision summary
 
