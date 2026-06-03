@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://den-channels.nousresearch.com/schemas/direct-delivery-contract-v0.json",
+  "title": "Direct Delivery / Channels Operations Contract v0",
+  "description": "Frozen v0 contract for cross-boundary Direct Delivery and Channels operations. Gateway* names are transitional compatibility aliases. Core remains workflow truth.",
+  "version": "0.1.0",
+  "task": "#1848",
+  "frozenAt": "2026-06-03",
+
+  "definitions": {
+    "deliveryStatus": {
+      "type": "string",
+      "enum": [
+        "recorded_but_not_claimed_yet",
+        "enqueued",
+        "claimed",
+        "received",
+        "acknowledged",
+        "completed",
+        "suppressed",
+        "failed",
+        "expired"
+      ],
+      "description": "Operator-facing delivery status for direct-agent events."
+    },
+
+    "claimStatus": {
+      "type": "string",
+      "enum": ["unclaimed", "claimed"],
+      "description": "Whether the delivery has been claimed by target runtime."
+    },
+
+    "completionStatus": {
+      "type": "string",
+      "enum": ["pending", "completed", "failed", "expired", "suppressed"],
+      "description": "Terminal completion state. 'pending' is non-terminal."
+    },
+
+    "suppressionStatus": {
+      "type": "string",
+      "enum": ["not_suppressed", "suppressed"],
+      "description": "Whether the delivery was suppressed."
+    },
+
+    "waitForTarget": {
+      "type": "string",
+      "enum": ["none", "claim", "ack", "completion"],
+      "description": "Wait target for Gateway compatibility spin-wait path."
+    },
+
+    "messageKind": {
+      "type": "string",
+      "enum": ["human_text", "agent_text", "system_event", "mirror_summary", "command", "command_result"],
+      "description": "Channel message kinds. Matches SQLite CHECK constraint."
+    },
+
+    "sourceKind": {
+      "type": "string",
+      "enum": [
+        "wake_event",
+        "gateway_delivery",
+        "task_message",
+        "agent_stream_entry",
+        "notification",
+        "worker_run",
+        "review_round",
+        "review_finding",
+        "external_adapter_message"
+      ],
+      "description": "Source origin system/event type for channel messages."
+    },
+
+    "wakePolicy": {
+      "type": "string",
+      "enum": [
+        "all_messages",
+        "all_messages_except_self",
+        "all_human_messages",
+        "direct_questions_only",
+        "mentions_only",
+        "never"
+      ],
+      "description": "Wake policy controlling when agent membership generates wake pulse."
+    },
+
+    "memberType": {
+      "type": "string",
+      "enum": ["agent", "user", "system"],
+      "description": "Channel membership member type."
+    },
+
+    "membershipStatus": {
+      "type": "string",
+      "enum": ["active", "muted", "left"],
+      "description": "Channel membership status."
+    },
+
+    "senderType": {
+      "type": "string",
+      "enum": ["user", "agent", "system"],
+      "description": "Channel message sender type."
+    },
+
+    "channelKind": {
+      "type": "string",
+      "enum": ["project_default", "ad_hoc", "system", "worker_pool_lobby"],
+      "description": "Channel type identifier."
+    },
+
+    "eventRecordingStatus": {
+      "type": "string",
+      "enum": ["recorded"],
+      "description": "Top-level status for event recording responses."
+    },
+
+    "workerPoolLobbyStatus": {
+      "type": "string",
+      "enum": ["idle", "leased", "draining", "released", "quarantined", "offline"],
+      "description": "Worker-pool lobby presence status."
+    },
+
+    "traceSourceAvailability": {
+      "type": "string",
+      "enum": [
+        "available",
+        "core_unavailable",
+        "gateway_unavailable",
+        "no_assignment_messages",
+        "no_activity_events",
+        "delivery_missing",
+        "pending"
+      ],
+      "description": "Source availability signals for assignment trace."
+    },
+
+    "deliveryMode": {
+      "type": "string",
+      "enum": ["direct_agent_message"],
+      "description": "Delivery mode in direct-agent event metadata."
+    }
+  },
+
+  "fieldGroups": {
+    "sourceContext": {
+      "description": "Source/control context: where the interaction happened.",
+      "fields": ["sourceProjectId", "channelId"]
+    },
+    "targetWork": {
+      "description": "Workflow attribution for the target project work.",
+      "fields": ["targetProjectId", "targetTaskId", "assignmentId", "workerRunId", "workerRole", "profileIdentity", "poolMemberId"]
+    },
+    "sessionOwner": {
+      "description": "Target durable agent instance/session for session reuse across channels.",
+      "fields": ["agentInstanceId", "sessionOwnerId", "sessionId"]
+    },
+    "deliveryObservation": {
+      "description": "Delivery/checkpoint visibility fields.",
+      "fields": ["deliveryStatus", "claimStatus", "completionStatus", "suppressionStatus"]
+    }
+  },
+
+  "boundaryDecisions": {
+    "v0": {
+      "contractOwner": "Den Channels",
+      "gatewayCompatibility": "transitional",
+      "coreTruth": "Core remains workflow truth for assignments, leases, runs, completion, release, quarantine.",
+      "naming": "Gateway* DTO names are transitional compatibility aliases; semantics are Direct Delivery / Channels operations.",
+      "useStubProjectMetadata": "Separate Channels↔Core integration concern; does not block Direct Delivery contract hardening."
+    }
+  }
+}

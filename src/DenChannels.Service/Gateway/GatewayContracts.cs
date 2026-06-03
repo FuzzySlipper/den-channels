@@ -1,3 +1,5 @@
+using DenChannels.Service.Channels;
+
 namespace DenChannels.Service.Gateway;
 
 /// <summary>Machine-readable Gateway dependency probe response.</summary>
@@ -232,12 +234,19 @@ public static class TraceSourceAvailability
     public const string NoActivityEvents = "no_activity_events";
     public const string DeliveryMissing = "delivery_missing";
     public const string Pending = "pending";
+
+    public static readonly string[] All =
+    [
+        Available, CoreUnavailable, GatewayUnavailable,
+        NoAssignmentMessages, NoActivityEvents, DeliveryMissing, Pending
+    ];
 }
 
 /// <summary>
 /// Aggregated assignment trace response composed from Core worker-pool state,
 /// Channels messages, and Gateway evidence (task #1737).
 /// Den Web consumer: https://github.com/nousresearch/den-web/blob/main/src/api/gateway/types.ts
+/// ChannelMessages and ActivityEvents are now typed DTOs (v0 contract hardening, task #1848).
 /// </summary>
 public sealed record AssignmentTraceResponse(
     string AssignmentId,
@@ -254,8 +263,8 @@ public sealed record AssignmentTraceResponse(
     string ActivityAvailability,
     AssignmentCoreStateDto? CoreState,
     AssignmentGatewayEvidenceDto? GatewayEvidence,
-    IReadOnlyList<object> ChannelMessages,
-    IReadOnlyList<object> ActivityEvents,
+    IReadOnlyList<GatewayEventItemDto> ChannelMessages,
+    IReadOnlyList<ChannelActivityEventDto> ActivityEvents,
     string? Summary);
 
 /// <summary>Core worker-pool assignment state projected for trace display.</summary>

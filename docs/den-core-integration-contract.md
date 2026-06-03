@@ -2,6 +2,8 @@
 
 Status: draft for standalone service milestone
 
+**Note (task #1848):** The Direct Delivery / Channels Operations Contract v0 is now frozen at `docs/direct-delivery-contract-v0.md` with machine-readable schema at `docs/schemas/direct-delivery-contract-v0.json`. Vocabulary is pinned in `DirectDeliveryContractV0.cs`. Gateway compatibility is transitional; Core remains workflow truth.
+
 Related work:
 
 - den-channels #1323 — define this contract

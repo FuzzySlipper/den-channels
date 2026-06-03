@@ -2,6 +2,12 @@ using DenChannels.Service.AgentsOverview;
 
 namespace DenChannels.Service.Gateway;
 
+using DS = DenChannels.Service.DeliveryStatus;
+using CS = DenChannels.Service.ClaimStatus;
+using CompS = DenChannels.Service.CompletionStatus;
+using SupS = DenChannels.Service.SuppressionStatus;
+using WFT = DenChannels.Service.WaitForTarget;
+
 /// <summary>
 /// Bounded observation of Gateway-owned delivery state for a Channels direct-agent message.
 /// This is intentionally an observation, not final task completion truth.
@@ -21,10 +27,10 @@ public sealed record DirectAgentDeliveryObservation(
 {
     public static DirectAgentDeliveryObservation RecordedPending(string? evidenceSummary = null, bool gatewayUnavailable = false) =>
         new(
-            DeliveryStatus: "recorded_but_not_claimed_yet",
-            ClaimStatus: "unclaimed",
-            CompletionStatus: "pending",
-            SuppressionStatus: "not_suppressed",
+            DeliveryStatus: DS.RecordedNotClaimedYet,
+            ClaimStatus: CS.Unclaimed,
+            CompletionStatus: CompS.Pending,
+            SuppressionStatus: SupS.NotSuppressed,
             EvidenceSummary: evidenceSummary ?? "Direct agent wake_event recorded; no Gateway delivery request/claim evidence observed yet.",
             GatewayUnavailable: gatewayUnavailable);
 
@@ -55,43 +61,43 @@ public static class GatewayDirectAgentDeliveryStatus
         }
 
         var status = (delivery.Status ?? string.Empty).Trim().ToLowerInvariant();
-        var suppressionStatus = status == "suppressed" ? "suppressed" : "not_suppressed";
+        var suppressionStatus = status == "suppressed" ? SupS.Suppressed : SupS.NotSuppressed;
         var claimStatus = status switch
         {
-            "delivering" or "delivered" or "acknowledged" or "completed" => "claimed",
-            "failed" or "expired" or "suppressed" when delivery.AttemptCount > 0 || delivery.LastAttempt is not null => "claimed",
-            _ => "unclaimed"
+            "delivering" or "delivered" or "acknowledged" or "completed" => CS.Claimed,
+            "failed" or "expired" or "suppressed" when delivery.AttemptCount > 0 || delivery.LastAttempt is not null => CS.Claimed,
+            _ => CS.Unclaimed
         };
         var completionStatus = status switch
         {
-            "completed" => "completed",
-            "failed" => "failed",
-            "expired" => "expired",
-            "suppressed" => "suppressed",
-            _ => "pending"
+            "completed" => CompS.Completed,
+            "failed" => CompS.Failed,
+            "expired" => CompS.Expired,
+            "suppressed" => CompS.Suppressed,
+            _ => CompS.Pending
         };
         var deliveryStatus = status switch
         {
-            "pending" => "enqueued",
-            "delivering" => "claimed",
-            "delivered" => "received",
-            "acknowledged" => "acknowledged",
-            "completed" => "completed",
-            "failed" => "failed",
-            "expired" => "expired",
-            "suppressed" => "suppressed",
-            _ => string.IsNullOrEmpty(status) ? "recorded_but_not_claimed_yet" : status
+            "pending" => DS.Enqueued,
+            "delivering" => DS.Claimed,
+            "delivered" => DS.Received,
+            "acknowledged" => DS.Acknowledged,
+            "completed" => DS.Completed,
+            "failed" => DS.Failed,
+            "expired" => DS.Expired,
+            "suppressed" => DS.Suppressed,
+            _ => string.IsNullOrEmpty(status) ? DS.RecordedNotClaimedYet : status
         };
 
         var evidence = deliveryStatus switch
         {
-            "enqueued" => "Gateway delivery request exists but has not been claimed by the target runtime yet.",
-            "claimed" => "Gateway delivery request was claimed by the target runtime/adapter.",
-            "received" => "Target runtime/adapter reported the delivery as delivered/received.",
-            "acknowledged" => "Target runtime/session acknowledged accepting the delivery.",
-            "completed" => "Target runtime reported final delivery completion.",
-            "suppressed" => "Gateway recorded the direct-agent delivery as suppressed.",
-            "failed" or "expired" => "Gateway recorded a terminal delivery failure/expiry.",
+            DS.Enqueued => "Gateway delivery request exists but has not been claimed by the target runtime yet.",
+            DS.Claimed => "Gateway delivery request was claimed by the target runtime/adapter.",
+            DS.Received => "Target runtime/adapter reported the delivery as delivered/received.",
+            DS.Acknowledged => "Target runtime/session acknowledged accepting the delivery.",
+            DS.Completed => "Target runtime reported final delivery completion.",
+            DS.Suppressed => "Gateway recorded the direct-agent delivery as suppressed.",
+            DS.Failed or DS.Expired => "Gateway recorded a terminal delivery failure/expiry.",
             _ => "Gateway delivery state observed."
         };
 
@@ -112,10 +118,10 @@ public static class GatewayDirectAgentDeliveryStatus
         var target = NormalizeWaitFor(waitFor);
         return target switch
         {
-            "none" => true,
-            "claim" => observation.ClaimStatus == "claimed" || IsTerminal(observation.CompletionStatus) || observation.DeliveryStatus is "claimed" or "received" or "acknowledged" or "completed",
-            "ack" => observation.DeliveryStatus is "acknowledged" or "completed" || IsTerminal(observation.CompletionStatus),
-            "completion" => IsTerminal(observation.CompletionStatus),
+            WFT.None => true,
+            WFT.Claim => observation.ClaimStatus == CS.Claimed || IsTerminal(observation.CompletionStatus) || observation.DeliveryStatus is DS.Claimed or DS.Received or DS.Acknowledged or DS.Completed,
+            WFT.Ack => observation.DeliveryStatus is DS.Acknowledged or DS.Completed || IsTerminal(observation.CompletionStatus),
+            WFT.Completion => IsTerminal(observation.CompletionStatus),
             _ => false
         };
     }
@@ -123,22 +129,22 @@ public static class GatewayDirectAgentDeliveryStatus
     public static string NormalizeWaitFor(string? waitFor)
     {
         if (string.IsNullOrWhiteSpace(waitFor))
-            return "none";
+            return WFT.None;
         return waitFor.Trim().ToLowerInvariant() switch
         {
-            "none" => "none",
-            "no_wait" => "none",
-            "enqueue" => "none",
-            "claim" => "claim",
-            "received" => "claim",
-            "ack" => "ack",
-            "acknowledged" => "ack",
-            "complete" => "completion",
-            "completed" => "completion",
-            "completion" => "completion",
-            _ => "claim"
+            "none" => WFT.None,
+            "no_wait" => WFT.None,
+            "enqueue" => WFT.None,
+            "claim" => WFT.Claim,
+            "received" => WFT.Claim,
+            "ack" => WFT.Ack,
+            "acknowledged" => WFT.Ack,
+            "complete" => WFT.Completion,
+            "completed" => WFT.Completion,
+            "completion" => WFT.Completion,
+            _ => WFT.Claim
         };
     }
 
-    private static bool IsTerminal(string status) => status is "completed" or "failed" or "expired" or "suppressed";
+    private static bool IsTerminal(string status) => status is CompS.Completed or CompS.Failed or CompS.Expired or CompS.Suppressed;
 }

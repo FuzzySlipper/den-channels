@@ -1,5 +1,7 @@
 # Direct-agent delivery status contract
 
+**Note (task #1848):** The full Direct Delivery / Channels Operations Contract v0 is frozen at `docs/direct-delivery-contract-v0.md` with machine-readable schema at `docs/schemas/direct-delivery-contract-v0.json`. Vocabulary constants are in `DirectDeliveryContractV0.cs`. This document remains as a focused reference for delivery status semantics.
+
 Den Channels owns direct-agent event creation. The primary recording API is `POST /api/direct-agent-events`, which writes a durable `wake_event` channel message and returns immediately with `{ eventId, status: "recorded" }` plus readback handles. Den Gateway / den-host owns runtime claim, delivery, acknowledgement, and completion truth after that record exists. The older `POST /api/gateway/direct-agent-messages` route remains a compatibility alias; it now returns immediately by default and only performs the legacy Gateway poll/spin-wait when callers explicitly set `waitFor=claim`, `waitFor=ack`, or `waitFor=completion`.
 
 ## Request fields

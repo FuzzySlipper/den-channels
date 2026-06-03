@@ -2,6 +2,14 @@ using System.Text.Json;
 using DenChannels.Service.Channels;
 using DenChannels.Service.AgentsOverview;
 
+using static DenChannels.Service.MessageKind;
+using static DenChannels.Service.EventRecordingStatus;
+using static DenChannels.Service.SourceKind;
+using static DenChannels.Service.WaitForTarget;
+using CS = DenChannels.Service.ClaimStatus;
+using CompS = DenChannels.Service.CompletionStatus;
+using SupS = DenChannels.Service.SuppressionStatus;
+
 namespace DenChannels.Service.Gateway;
 
 public static class GatewayRoutes
@@ -10,10 +18,7 @@ public static class GatewayRoutes
     /// Valid message kinds that Gateway is allowed to post via system-messages.
     /// Matches the SQLite CHECK constraint on channel_messages.message_kind.
     /// </summary>
-    private static readonly HashSet<string> ValidMessageKinds =
-    [
-        "human_text", "agent_text", "system_event", "mirror_summary", "command", "command_result"
-    ];
+    private static readonly HashSet<string> ValidMessageKinds = new(MessageKind.All);
 
     public static RouteGroupBuilder MapGatewayRoutes(this IEndpointRouteBuilder endpoints)
     {
@@ -215,7 +220,7 @@ public static class GatewayRoutes
                     "Provide channelId or projectId."));
 
             // Validate messageKind if provided.
-            var messageKind = request.MessageKind ?? "system_event";
+            var messageKind = request.MessageKind ?? SystemEvent;
             if (!ValidMessageKinds.Contains(messageKind))
                 return Results.BadRequest(new GatewayErrorDto("invalid_message_kind",
                     $"messageKind '{messageKind}' is not valid. Must be one of: {string.Join(", ", ValidMessageKinds)}."));
@@ -321,7 +326,7 @@ public static class GatewayRoutes
 
             var activityEvent = await repository.AppendActivityEventAsync(resolvedChannelId, request, cancellationToken);
             return Results.Created($"/api/channels/{resolvedChannelId}/activity-events/{activityEvent.Id}",
-                new { status = "recorded", activityEvent });
+                new { status = Recorded, activityEvent });
         });
 
         // -----------------------------------------------------------------------
@@ -376,9 +381,9 @@ public static class GatewayRoutes
                 ["wakePolicy"] = member.WakePolicy,
                 ["deliveryMode"] = "direct_agent_message",
                 ["deliveryStatus"] = "recorded_pending_claim",
-                ["claimStatus"] = "unclaimed",
-                ["completionStatus"] = "pending",
-                ["suppressionStatus"] = "not_suppressed",
+                ["claimStatus"] = CS.Unclaimed,
+                ["completionStatus"] = CompS.Pending,
+                ["suppressionStatus"] = SupS.NotSuppressed,
                 ["evidence"] = new { gatewayEventsUrl }
             };
             if (request.SourceProjectId is not null)
@@ -409,8 +414,8 @@ public static class GatewayRoutes
                 SenderType: "user",
                 SenderIdentity: request.SenderIdentity.Trim(),
                 Body: request.Body.Trim(),
-                MessageKind: "human_text",
-                SourceKind: "wake_event",
+                MessageKind: HumanText,
+                SourceKind: WakeEvent,
                 SourceId: requestId,
                 SourceProjectId: resolvedSourceProjectId,
                 TargetProjectId: request.TargetProjectId,
@@ -443,7 +448,7 @@ public static class GatewayRoutes
             // the legacy Gateway poll + spin-wait path.
             var deliveryProjectId = channel.ProjectId ?? request.ProjectId;
             var waitForTarget = GatewayDirectAgentDeliveryStatus.NormalizeWaitFor(request.WaitFor);
-            var triggeredLegacySpinWait = waitForTarget != "none";
+            var triggeredLegacySpinWait = waitForTarget != WaitForTarget.None;
 
             DirectAgentDeliveryObservation deliveryObservation;
             GatewayDeliveryLoopPollObservation? pollObservation = null;
@@ -478,7 +483,7 @@ public static class GatewayRoutes
             }
 
             return Results.Created(gatewayMessageUrl, new GatewayDirectAgentMessageDto(
-                Status: "recorded",
+                Status: Recorded,
                 DeliveryStatus: deliveryObservation.DeliveryStatus,
                 ClaimStatus: deliveryObservation.ClaimStatus,
                 CompletionStatus: deliveryObservation.CompletionStatus,
@@ -570,8 +575,8 @@ public static class GatewayRoutes
                 SenderType: "system",
                 SenderIdentity: "den-gateway",
                 Body: body,
-                MessageKind: "system_event",
-                SourceKind: "wake_event",
+                MessageKind: SystemEvent,
+                SourceKind: WakeEvent,
                 SourceId: sourceId,
                 SourceProjectId: channel.ProjectId,
                 Summary: $"Test wake for {member.MemberIdentity}",
@@ -583,7 +588,7 @@ public static class GatewayRoutes
                 DedupeKey: null), cancellationToken);
 
             return Results.Created($"/api/gateway/messages/{msg.Id}", new GatewayTestWakeDto(
-                Status: "recorded",
+                Status: Recorded,
                 MemberIdentity: member.MemberIdentity,
                 WakePolicy: member.WakePolicy,
                 MessageId: msg.Id,
@@ -618,6 +623,32 @@ public static class GatewayRoutes
     // -------------------------------------------------------------------------
 
     private static GatewayMessageDto ToGatewayMessageDto(ChannelMessageDto m) => new(
+        m.Id,
+        m.ChannelId,
+        m.MessageKind,
+        m.SenderType,
+        m.SenderIdentity,
+        m.SourceKind,
+        m.SourceId,
+        m.SourceProjectId,
+        m.TargetProjectId,
+        m.TargetTaskId,
+        m.AssignmentId,
+        m.WorkerRunId,
+        m.WorkerRole,
+        m.ProfileIdentity,
+        m.PoolMemberId,
+        m.AgentInstanceId,
+        m.SessionOwnerId,
+        m.SessionId,
+        m.DeliveryRequestId,
+        m.DedupeKey,
+        m.DeepLink,
+        m.Summary,
+        m.Body,
+        m.CreatedAt);
+
+    private static GatewayEventItemDto ToGatewayEventItemDto(ChannelMessageDto m) => new(
         m.Id,
         m.ChannelId,
         m.MessageKind,
@@ -969,8 +1000,8 @@ public static class GatewayRoutes
             ActivityAvailability: activityAvailability,
             CoreState: coreStateDto,
             GatewayEvidence: gatewayEvidence,
-            ChannelMessages: channelMessages.Cast<object>().ToList(),
-            ActivityEvents: activityEvents.Cast<object>().ToList(),
+            ChannelMessages: [.. channelMessages.Select(ToGatewayEventItemDto)],
+            ActivityEvents: activityEvents,
             Summary: summary));
     }
 }

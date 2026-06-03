@@ -1,6 +1,13 @@
 using System.Text.Json;
 using DenChannels.Service.Channels;
 
+using static DenChannels.Service.EventRecordingStatus;
+using static DenChannels.Service.SourceKind;
+using static DenChannels.Service.MessageKind;
+using CS = DenChannels.Service.ClaimStatus;
+using CompS = DenChannels.Service.CompletionStatus;
+using SupS = DenChannels.Service.SuppressionStatus;
+
 namespace DenChannels.Service.DirectAgentEvents;
 
 public static class DirectAgentEventRoutes
@@ -59,9 +66,9 @@ public static class DirectAgentEventRoutes
                 ["wakePolicy"] = member.WakePolicy,
                 ["deliveryMode"] = "direct_agent_message",
                 ["deliveryStatus"] = "recorded_pending_claim",
-                ["claimStatus"] = "unclaimed",
-                ["completionStatus"] = "pending",
-                ["suppressionStatus"] = "not_suppressed",
+                ["claimStatus"] = CS.Unclaimed,
+                ["completionStatus"] = CompS.Pending,
+                ["suppressionStatus"] = SupS.NotSuppressed,
                 ["evidence"] = new { gatewayEventsUrl = $"/api/gateway/events?channelId={channel.Id}&afterId=0&limit=50" }
             };
             if (request.SourceProjectId is not null)
@@ -93,8 +100,8 @@ public static class DirectAgentEventRoutes
                 SenderType: "user",
                 SenderIdentity: request.SenderIdentity.Trim(),
                 Body: request.Body.Trim(),
-                MessageKind: "human_text",
-                SourceKind: "wake_event",
+                MessageKind: HumanText,
+                SourceKind: WakeEvent,
                 SourceId: requestId,
                 SourceProjectId: resolvedSourceProjectId,
                 TargetProjectId: request.TargetProjectId,
@@ -122,7 +129,7 @@ public static class DirectAgentEventRoutes
             var eventsUrl = $"/api/gateway/events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10";
 
             return Results.Created(eventUrl, new DirectAgentEventDto(
-                Status: "recorded",
+                Status: Recorded,
                 EventId: msg.Id,
                 ChannelId: channel.Id,
                 RequestId: requestId,
@@ -160,7 +167,7 @@ public static class DirectAgentEventRoutes
                     $"Direct-agent event {eventId} not found."));
 
             // Only surface wake_event messages through this endpoint
-            if (!string.Equals(msg.SourceKind, "wake_event", StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(msg.SourceKind, WakeEvent, StringComparison.OrdinalIgnoreCase))
                 return Results.NotFound(new DirectAgentEventErrorDto("not_a_direct_agent_event",
                     $"Message {eventId} is not a direct-agent event."));
 
