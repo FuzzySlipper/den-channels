@@ -284,14 +284,14 @@ public sealed partial class ChannelsRepository
         limit = Math.Clamp(limit, 1, 500);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = """
+        command.CommandText = """"
             SELECT id, channel_id, member_type, member_identity, membership_status, wake_policy, can_send, can_react, can_invite,
-                cooldown_seconds, max_auto_replies_per_window, settings_json, created_at, updated_at
+                cooldown_seconds, max_auto_replies_per_window, settings_json, membership_purpose, created_at, updated_at
             FROM channel_memberships
             WHERE channel_id = $channelId
             ORDER BY id ASC
             LIMIT $limit;
-            """;
+            """";
         command.Parameters.AddWithValue("$channelId", channelId);
         command.Parameters.AddWithValue("$limit", limit);
         var rows = new List<ChannelMembershipDto>();
@@ -327,12 +327,12 @@ public sealed partial class ChannelsRepository
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = """
+        command.CommandText = """"
             INSERT INTO channel_memberships(
                 channel_id, member_type, member_identity, membership_status, wake_policy, can_send, can_react, can_invite,
-                cooldown_seconds, max_auto_replies_per_window, settings_json)
+                cooldown_seconds, max_auto_replies_per_window, settings_json, membership_purpose)
             VALUES ($channelId, $memberType, $memberIdentity, $membershipStatus, $wakePolicy, $canSend, $canReact, $canInvite,
-                $cooldownSeconds, $maxAutoRepliesPerWindow, $settingsJson)
+                $cooldownSeconds, $maxAutoRepliesPerWindow, $settingsJson, $membershipPurpose)
             ON CONFLICT(channel_id, member_type, member_identity)
             DO UPDATE SET
                 membership_status = excluded.membership_status,
@@ -343,10 +343,14 @@ public sealed partial class ChannelsRepository
                 cooldown_seconds = excluded.cooldown_seconds,
                 max_auto_replies_per_window = excluded.max_auto_replies_per_window,
                 settings_json = COALESCE(excluded.settings_json, channel_memberships.settings_json),
+                membership_purpose = CASE
+                    WHEN $membershipPurpose IS NOT NULL THEN $membershipPurpose
+                    ELSE channel_memberships.membership_purpose
+                END,
                 updated_at = datetime('now')
             RETURNING id, channel_id, member_type, member_identity, membership_status, wake_policy, can_send, can_react, can_invite,
-                cooldown_seconds, max_auto_replies_per_window, settings_json, created_at, updated_at;
-            """;
+                cooldown_seconds, max_auto_replies_per_window, settings_json, membership_purpose, created_at, updated_at;
+            """";
         command.Parameters.AddWithValue("$channelId", channelId);
         command.Parameters.AddWithValue("$memberType", request.MemberType);
         command.Parameters.AddWithValue("$memberIdentity", request.MemberIdentity);
@@ -358,6 +362,7 @@ public sealed partial class ChannelsRepository
         command.Parameters.AddWithValue("$cooldownSeconds", request.CooldownSeconds ?? 60);
         command.Parameters.AddWithValue("$maxAutoRepliesPerWindow", request.MaxAutoRepliesPerWindow ?? 1);
         command.Parameters.AddWithValue("$settingsJson", (object?)request.SettingsJson ?? DBNull.Value);
+        command.Parameters.AddWithValue("$membershipPurpose", (object?)request.MembershipPurpose ?? DBNull.Value);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         await reader.ReadAsync(cancellationToken);
         var membership = ReadMembership(reader);
@@ -383,11 +388,11 @@ public sealed partial class ChannelsRepository
         const string defaultSettingsJson = "{\"systemManaged\":true,\"source\":\"agent-commons-auto-membership\"}";
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = """
+        command.CommandText = """"
             INSERT INTO channel_memberships(
                 channel_id, member_type, member_identity, membership_status, wake_policy, can_send, can_react, can_invite,
-                cooldown_seconds, max_auto_replies_per_window, settings_json)
-            VALUES ($channelId, 'agent', $agentIdentity, 'active', 'mentions_only', 1, 1, 0, 60, 1, $settingsJson)
+                cooldown_seconds, max_auto_replies_per_window, settings_json, membership_purpose)
+            VALUES ($channelId, 'agent', $agentIdentity, 'active', 'mentions_only', 1, 1, 0, 60, 1, $settingsJson, 'agent_commons')
             ON CONFLICT(channel_id, member_type, member_identity)
             DO UPDATE SET
                 membership_status = CASE
@@ -403,10 +408,11 @@ public sealed partial class ChannelsRepository
                 END,
                 can_send = 1,
                 can_react = 1,
+                membership_purpose = 'agent_commons',
                 updated_at = datetime('now')
             RETURNING id, channel_id, member_type, member_identity, membership_status, wake_policy, can_send, can_react, can_invite,
-                cooldown_seconds, max_auto_replies_per_window, settings_json, created_at, updated_at;
-            """;
+                cooldown_seconds, max_auto_replies_per_window, settings_json, membership_purpose, created_at, updated_at;
+            """";
         command.Parameters.AddWithValue("$channelId", commons.Id);
         command.Parameters.AddWithValue("$agentIdentity", agentIdentity.Trim());
         command.Parameters.AddWithValue("$settingsJson", string.IsNullOrWhiteSpace(sourceSettingsJson) ? defaultSettingsJson : sourceSettingsJson);
@@ -832,8 +838,9 @@ public sealed partial class ChannelsRepository
         reader.GetInt32(9),
         reader.GetInt32(10),
         GetNullableString(reader, 11),
-        reader.GetString(12),
-        reader.GetString(13));
+        GetNullableString(reader, 12),
+        reader.GetString(13),
+        reader.GetString(14));
 
     private static ChannelReactionDto ReadReaction(SqliteDataReader reader) => new(
         reader.GetInt64(0),
@@ -921,10 +928,10 @@ public sealed partial class ChannelsRepository
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = """
+        command.CommandText = """"
             SELECT m.id, m.channel_id, m.member_type, m.member_identity, m.membership_status, m.wake_policy,
                    m.can_send, m.can_react, m.can_invite, m.cooldown_seconds, m.max_auto_replies_per_window,
-                   m.settings_json, m.created_at, m.updated_at
+                   m.settings_json, m.membership_purpose, m.created_at, m.updated_at
             FROM channel_memberships m
             JOIN channels c ON c.id = m.channel_id
             WHERE m.member_type = 'agent'
@@ -933,7 +940,7 @@ public sealed partial class ChannelsRepository
               AND ($agentIdentity IS NULL OR m.member_identity = $agentIdentity)
               AND ($includeLeft = 1 OR m.membership_status != 'left')
             ORDER BY m.member_identity, m.channel_id;
-            """;
+            """";
         command.Parameters.AddWithValue("$projectId", (object?)projectId ?? DBNull.Value);
         command.Parameters.AddWithValue("$channelId", (object?)channelId ?? DBNull.Value);
         command.Parameters.AddWithValue("$agentIdentity", (object?)agentIdentity ?? DBNull.Value);
@@ -1403,4 +1410,80 @@ public sealed partial class ChannelsRepository
         GetNullableString(reader, 11),
         reader.GetString(12),
         reader.GetString(13));
+
+    // =========================================================================
+    // Worker-pool membership lifecycle (task #1880)
+    // =========================================================================
+
+    /// <summary>
+    /// Ensure the worker has an active membership in the #worker-pool control channel
+    /// with purpose 'worker_pool_control'. This is the idle home for pool workers.
+    /// Idempotent — reactivates 'left' memberships back to 'active'.
+    /// Does NOT touch the lobby presence table (that's handled separately via lobby endpoints).
+    /// </summary>
+    public async Task<ChannelMembershipDto> EnsureWorkerPoolControlMembershipAsync(
+        string agentIdentity, CancellationToken cancellationToken = default)
+    {
+        var lobby = await EnsureWorkerPoolLobbyChannelAsync(cancellationToken);
+        const string settingsJson = "{\"systemManaged\":true,\"source\":\"worker-pool-control-auto-membership\"}";
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """"
+            INSERT INTO channel_memberships(
+                channel_id, member_type, member_identity, membership_status, wake_policy, can_send, can_react, can_invite,
+                cooldown_seconds, max_auto_replies_per_window, settings_json, membership_purpose)
+            VALUES ($channelId, 'agent', $agentIdentity, 'active', 'mentions_only', 1, 1, 0, 60, 1, $settingsJson, 'worker_pool_control')
+            ON CONFLICT(channel_id, member_type, member_identity)
+            DO UPDATE SET
+                membership_status = CASE
+                    WHEN channel_memberships.membership_status IN ('muted', 'banned') THEN channel_memberships.membership_status
+                    ELSE 'active'
+                END,
+                wake_policy = 'mentions_only',
+                can_send = 1,
+                can_react = 1,
+                membership_purpose = 'worker_pool_control',
+                updated_at = datetime('now')
+            RETURNING id, channel_id, member_type, member_identity, membership_status, wake_policy, can_send, can_react, can_invite,
+                cooldown_seconds, max_auto_replies_per_window, settings_json, membership_purpose, created_at, updated_at;
+            """";
+        command.Parameters.AddWithValue("$channelId", lobby.Id);
+        command.Parameters.AddWithValue("$agentIdentity", agentIdentity.Trim());
+        command.Parameters.AddWithValue("$settingsJson", settingsJson);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        return ReadMembership(reader);
+    }
+
+    /// <summary>
+    /// Release a worker's target-work membership in a project channel.
+    /// Sets membership_status to 'left' when the worker is released from an assignment.
+    /// Only affects memberships with purpose 'target_work' (or legacy null) that are 'active'.
+    /// Does NOT touch worker_pool_control or agent_commons memberships.
+    /// Returns the updated membership or null if none found.
+    /// </summary>
+    public async Task<ChannelMembershipDto?> ReleaseTargetWorkMembershipAsync(
+        long channelId, string agentIdentity, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """"
+            UPDATE channel_memberships
+            SET membership_status = 'left',
+                updated_at = datetime('now')
+            WHERE channel_id = $channelId
+              AND member_type = 'agent'
+              AND member_identity = $agentIdentity
+              AND membership_status = 'active'
+              AND (membership_purpose = 'target_work' OR membership_purpose IS NULL)
+              AND (membership_purpose IS NULL OR membership_purpose != 'worker_pool_control')
+              AND (membership_purpose IS NULL OR membership_purpose != 'agent_commons')
+            RETURNING id, channel_id, member_type, member_identity, membership_status, wake_policy, can_send, can_react, can_invite,
+                cooldown_seconds, max_auto_replies_per_window, settings_json, membership_purpose, created_at, updated_at;
+            """";
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$agentIdentity", agentIdentity.Trim());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadMembership(reader) : null;
+    }
 }

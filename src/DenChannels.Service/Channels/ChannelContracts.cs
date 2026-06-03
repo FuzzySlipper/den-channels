@@ -111,6 +111,7 @@ public sealed record ChannelMembershipDto(
     int CooldownSeconds,
     int MaxAutoRepliesPerWindow,
     string? SettingsJson,
+    string? MembershipPurpose,
     string CreatedAt,
     string UpdatedAt);
 
@@ -124,7 +125,8 @@ public sealed record UpsertChannelMembershipRequest(
     bool? CanInvite,
     int? CooldownSeconds,
     int? MaxAutoRepliesPerWindow,
-    string? SettingsJson);
+    string? SettingsJson,
+    string? MembershipPurpose = null);
 
 public sealed record AgentCommonsBrakeRequest(
     string? MembershipStatus,

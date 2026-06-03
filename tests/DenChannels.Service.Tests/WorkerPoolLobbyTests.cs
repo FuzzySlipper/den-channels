@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using DenChannels.Service.AgentsOverview;
 using DenChannels.Service.Channels;
 using DenChannels.Service.Configuration;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -583,8 +584,247 @@ public sealed class WorkerPoolLobbyTests : IDisposable
     }
 
     // =========================================================================
-    // Helpers
+    // Membership lifecycle tests (task #1880 — neutral worker-pool control channel)
     // =========================================================================
+
+    [Fact]
+    public async Task EnsureWorkerPoolControlMembership_JoinsControlChannel()
+    {
+        var membership = await EnsureWorkerPoolControlMembershipAsync("pool-worker-alpha");
+        Assert.NotNull(membership);
+        Assert.Equal("pool-worker-alpha", membership.MemberIdentity);
+        Assert.Equal("active", membership.MembershipStatus);
+        Assert.Equal("worker_pool_control", membership.MembershipPurpose);
+
+        // Verify the membership appears in the worker-pool channel
+        var lobby = await EnsureLobbyChannelAsync();
+        Assert.Equal(lobby.Id, membership.ChannelId);
+    }
+
+    [Fact]
+    public async Task EnsureWorkerPoolControlMembership_IsIdempotent()
+    {
+        var first = await EnsureWorkerPoolControlMembershipAsync("pool-worker-beta");
+        var second = await EnsureWorkerPoolControlMembershipAsync("pool-worker-beta");
+        Assert.Equal(first.Id, second.Id);
+        Assert.Equal("active", second.MembershipStatus);
+        Assert.Equal("worker_pool_control", second.MembershipPurpose);
+    }
+
+    [Fact]
+    public async Task EnsureWorkerPoolControlMembership_ReactivatesLeftWorker()
+    {
+        var worker = "pool-worker-reactivate";
+
+        // Join control channel
+        var first = await EnsureWorkerPoolControlMembershipAsync(worker);
+        Assert.Equal("active", first.MembershipStatus);
+
+        // Manually leave the membership (simulating release)
+        var lobby = await EnsureLobbyChannelAsync();
+        await _client.PutAsJsonAsync($"/api/channels/{lobby.Id}/memberships", new
+        {
+            memberType = "agent",
+            memberIdentity = worker,
+            membershipStatus = "left",
+            wakePolicy = "never"
+        });
+
+        // Re-join should reactivate
+        var reactivated = await EnsureWorkerPoolControlMembershipAsync(worker);
+        Assert.Equal("active", reactivated.MembershipStatus);
+        Assert.Equal("worker_pool_control", reactivated.MembershipPurpose);
+    }
+
+    [Fact]
+    public async Task UpsertMembership_WithTargetWorkPurpose()
+    {
+        var channel = await EnsureDefaultChannelAsync("purp-proj");
+        var membership = await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "purp-worker",
+            wakePolicy = "mentions_only",
+            membershipPurpose = "target_work"
+        });
+
+        Assert.Equal("active", membership.MembershipStatus);
+        Assert.Equal("target_work", membership.MembershipPurpose);
+    }
+
+    [Fact]
+    public async Task UpsertMembership_WithNullPurpose_PreservesExisting()
+    {
+        var channel = await EnsureDefaultChannelAsync("null-purp-proj");
+        // First create with specific purpose
+        var first = await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "null-purp-worker",
+            wakePolicy = "mentions_only",
+            membershipPurpose = "target_work"
+        });
+        Assert.Equal("target_work", first.MembershipPurpose);
+
+        // Update without specifying purpose — should preserve existing
+        var updated = await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "null-purp-worker",
+            wakePolicy = "all_messages_except_self",
+            membershipPurpose = (string?)null
+        });
+        Assert.Equal("target_work", updated.MembershipPurpose);
+    }
+
+    [Fact]
+    public async Task ReleaseTargetWorkMembership_SetsToLeft()
+    {
+        var channel = await EnsureDefaultChannelAsync("release-proj");
+
+        // Join with target_work purpose
+        await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "release-worker",
+            wakePolicy = "mentions_only",
+            membershipPurpose = "target_work"
+        });
+
+        // Release via the API
+        var response = await _client.PostAsync(
+            $"/api/channels/{channel.Id}/memberships/release-worker/release-target-work", null);
+        response.EnsureSuccessStatusCode();
+
+        var membership = await response.Content.ReadFromJsonAsync<ChannelMembershipDto>();
+        Assert.NotNull(membership);
+        Assert.Equal("left", membership.MembershipStatus);
+        Assert.Equal("target_work", membership.MembershipPurpose);
+    }
+
+    [Fact]
+    public async Task ReleaseTargetWorkMembership_DoesNotTouchWorkerPoolControl()
+    {
+        var worker = "safe-release-worker";
+
+        // Join control channel (worker_pool_control purpose)
+        var controlMembership = await EnsureWorkerPoolControlMembershipAsync(worker);
+        var controlChannelId = controlMembership.ChannelId;
+
+        // Try to release it via the target-work release endpoint — should NOT match
+        var response = await _client.PostAsync(
+            $"/api/channels/{controlChannelId}/memberships/{worker}/release-target-work", null);
+
+        // Should return 404 because no 'target_work' membership exists (it's worker_pool_control)
+        Assert.Equal(System.Net.HttpStatusCode.NotFound, response.StatusCode);
+
+        // Verify the control membership is still active
+        var stillActive = await EnsureWorkerPoolControlMembershipAsync(worker);
+        Assert.Equal("active", stillActive.MembershipStatus);
+    }
+
+    [Fact]
+    public async Task FullWorkerLifecycle_ControlToTargetToRelease()
+    {
+        var worker = "lifecycle-worker";
+        var projectChannel = await EnsureDefaultChannelAsync("lifecycle-proj");
+
+        // Phase 1: Worker joins control channel (idle)
+        var controlMembership = await EnsureWorkerPoolControlMembershipAsync(worker);
+        Assert.Equal("worker_pool_control", controlMembership.MembershipPurpose);
+        Assert.Equal("active", controlMembership.MembershipStatus);
+
+        // Phase 2: Worker is assigned to a project — join target work channel
+        var targetMembership = await UpsertMembershipAsync(projectChannel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = worker,
+            wakePolicy = "mentions_only",
+            membershipPurpose = "target_work"
+        });
+        Assert.Equal("target_work", targetMembership.MembershipPurpose);
+        Assert.Equal("active", targetMembership.MembershipStatus);
+
+        // Phase 3: Worker is released — leave target work channel
+        var releaseResponse = await _client.PostAsync(
+            $"/api/channels/{projectChannel.Id}/memberships/{worker}/release-target-work", null);
+        releaseResponse.EnsureSuccessStatusCode();
+        var releasedMembership = await releaseResponse.Content.ReadFromJsonAsync<ChannelMembershipDto>();
+        Assert.Equal("left", releasedMembership!.MembershipStatus);
+
+        // Phase 4: Control channel membership should still be active
+        var controlAfterRelease = await EnsureWorkerPoolControlMembershipAsync(worker);
+        Assert.Equal("active", controlAfterRelease.MembershipStatus);
+        Assert.Equal("worker_pool_control", controlAfterRelease.MembershipPurpose);
+    }
+
+    [Fact]
+    public async Task OverviewShowsMembershipPurpose()
+    {
+        var worker = "overview-purpose-worker";
+        var projectChannel = await EnsureDefaultChannelAsync("overview-proj");
+
+        // Join control channel and target work channel
+        await EnsureWorkerPoolControlMembershipAsync(worker);
+        await UpsertMembershipAsync(projectChannel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = worker,
+            wakePolicy = "mentions_only",
+            membershipPurpose = "target_work"
+        });
+
+        // Get overview for this agent
+        var overviewResponse = await _client.GetAsync($"/api/agents/overview?agentIdentity={worker}");
+        overviewResponse.EnsureSuccessStatusCode();
+        var overview = await overviewResponse.Content.ReadFromJsonAsync<AgentsOverviewResponse>();
+        Assert.NotNull(overview);
+
+        var agent = Assert.Single(overview!.Agents);
+        Assert.NotNull(agent.Memberships);
+        // Expect 3: worker_pool_control + target_work + agent_commons (auto-enrolled)
+        Assert.Equal(3, agent.Memberships.Count);
+
+        // Should find both a worker_pool_control and a target_work membership
+        var controlMembership = Assert.Single(agent.Memberships, m => m.MembershipPurpose == "worker_pool_control");
+        Assert.Equal("worker-pool", controlMembership.ChannelSlug);
+
+        var targetMembership = Assert.Single(agent.Memberships, m => m.MembershipPurpose == "target_work");
+        Assert.Equal("project-overview-proj", targetMembership.ChannelSlug);
+
+        var commonsMembership = Assert.Single(agent.Memberships, m => m.MembershipPurpose == "agent_commons");
+        Assert.Equal("agent-commons", commonsMembership.ChannelSlug);
+    }
+
+    // =========================================================================
+    // Private helpers
+    // =========================================================================
+
+    private async Task<ChannelMembershipDto> EnsureWorkerPoolControlMembershipAsync(string agentIdentity)
+    {
+        var response = await _client.PutAsync(
+            $"/api/worker-pool/control/membership?agentIdentity={Uri.EscapeDataString(agentIdentity)}", null);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<ChannelMembershipDto>())!;
+    }
+
+    private async Task<ChannelDto> EnsureDefaultChannelAsync(string projectId)
+    {
+        var response = await _client.PutAsJsonAsync($"/api/projects/{projectId}/default-channel", new
+        {
+            displayName = $"Project {projectId}",
+            createdBy = "test-harness"
+        });
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<ChannelDto>())!;
+    }
+
+    private async Task<ChannelMembershipDto> UpsertMembershipAsync(long channelId, object request)
+    {
+        var response = await _client.PutAsJsonAsync($"/api/channels/{channelId}/memberships", request);
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<ChannelMembershipDto>())!;
+    }
 
     private async Task<ChannelDto> EnsureLobbyChannelAsync()
     {

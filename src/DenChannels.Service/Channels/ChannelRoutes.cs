@@ -380,6 +380,54 @@ public static class ChannelRoutes
             return Results.Ok(new { childRuns, count = childRuns.Count });
         });
 
+        /// <summary>
+        /// Ensure worker-pool control channel membership for an agent.
+        /// Idle workers join the #worker-pool control channel with purpose 'worker_pool_control'.
+        /// Task #1880.
+        /// </summary>
+        api.MapPut("/worker-pool/control/membership", async (
+            ChannelsRepository repository,
+            string agentIdentity,
+            CancellationToken cancellationToken) =>
+        {
+            if (string.IsNullOrWhiteSpace(agentIdentity))
+                return Results.BadRequest(new { error = "agentIdentity is required" });
+
+            try
+            {
+                var membership = await repository.EnsureWorkerPoolControlMembershipAsync(agentIdentity, cancellationToken);
+                return Results.Ok(membership);
+            }
+            catch (SqliteException ex) when (IsConstraintFailure(ex))
+            {
+                return Results.Conflict(new ProblemDetailsDto("membership_constraint_failed", ex.SqliteErrorCode, ex.Message));
+            }
+        });
+
+        /// <summary>
+        /// Release a worker's target-work membership in a project channel.
+        /// Sets membership_status to 'left' when a worker is released from an assignment.
+        /// Task #1880.
+        /// </summary>
+        api.MapPost("/channels/{channelId:long}/memberships/{agentIdentity}/release-target-work", async (
+            ChannelsRepository repository,
+            long channelId,
+            string agentIdentity,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                var membership = await repository.ReleaseTargetWorkMembershipAsync(channelId, agentIdentity, cancellationToken);
+                return membership is null
+                    ? Results.NotFound(new { code = "no_target_work_membership", message = $"No active target-work membership found for '{agentIdentity}' in channel {channelId}." })
+                    : Results.Ok(membership);
+            }
+            catch (SqliteException ex) when (IsConstraintFailure(ex))
+            {
+                return Results.Conflict(new ProblemDetailsDto("membership_constraint_failed", ex.SqliteErrorCode, ex.Message));
+            }
+        });
+
         return api;
     }
 

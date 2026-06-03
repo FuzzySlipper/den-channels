@@ -182,7 +182,8 @@ public sealed record ChannelMembershipOverviewDto(
     string MembershipStatus,
     string WakePolicy,
     bool CanSend,
-    string? SettingsLabel);
+    string? SettingsLabel,
+    string? MembershipPurpose = null);
 
 public sealed record GatewayBindingOverviewDto(
     string? AgentKey,

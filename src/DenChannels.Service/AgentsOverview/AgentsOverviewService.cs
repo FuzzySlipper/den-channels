@@ -187,7 +187,8 @@ public sealed class AgentsOverviewService
                         m.MembershipStatus,
                         m.WakePolicy,
                         m.CanSend,
-                        SafeSettingsLabel(m.SettingsJson));
+                        SafeSettingsLabel(m.SettingsJson),
+                        m.MembershipPurpose);
                 })
                 .ToList();
 
@@ -402,7 +403,8 @@ public sealed class AgentsOverviewService
                     m.MembershipStatus,
                     m.WakePolicy,
                     m.CanSend,
-                    SafeSettingsLabel(m.SettingsJson));
+                    SafeSettingsLabel(m.SettingsJson),
+                    m.MembershipPurpose);
             })
             .ToList();
 

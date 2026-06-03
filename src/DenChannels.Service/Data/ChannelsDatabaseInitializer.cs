@@ -7,7 +7,7 @@ namespace DenChannels.Service.Data;
 
 public sealed class ChannelsDatabaseInitializer
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     private readonly IOptions<DenChannelsOptions> _options;
     private readonly ILogger<ChannelsDatabaseInitializer> _logger;
@@ -60,6 +60,13 @@ public sealed class ChannelsDatabaseInitializer
             await SetSchemaVersionAsync(connection, 3, "worker_pool_lobby_presence", cancellationToken);
         }
 
+        if (currentVersion < 4)
+        {
+            logger?.LogInformation("Applying Den Channels database migration 4: membership purpose");
+            await ExecuteNonQueryAsync(connection, MigrationV4Sql, cancellationToken);
+            await SetSchemaVersionAsync(connection, 4, "membership_purpose", cancellationToken);
+        }
+
         await EnsureChannelsCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureChannelMessageCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureChannelMessagesSourceKindConstraintAsync(connection, cancellationToken);
@@ -68,6 +75,7 @@ public sealed class ChannelsDatabaseInitializer
         await EnsureAssignmentCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureSharedProfileInstanceColumnsAsync(connection, cancellationToken);
         await EnsureChannelReadCursorsInstanceConstraintAsync(connection, logger, cancellationToken);
+        await EnsureChannelMembershipsMembershipPurposeColumnAsync(connection, cancellationToken);
         await EnsureAgentCommonsSeedAsync(connection, cancellationToken);
         await EnsureWorkerPoolLobbySeedAsync(connection, cancellationToken);
         await EnsureWorkerPoolLobbyPresenceConcreteConstraintAsync(connection, logger, cancellationToken);
@@ -554,9 +562,9 @@ public sealed class ChannelsDatabaseInitializer
 
         INSERT INTO channel_memberships(
             channel_id, member_type, member_identity, membership_status, wake_policy, can_send, can_react, can_invite,
-            cooldown_seconds, max_auto_replies_per_window, settings_json)
+            cooldown_seconds, max_auto_replies_per_window, settings_json, membership_purpose)
         SELECT commons.id, 'agent', agents.member_identity, 'active', 'mentions_only', 1, 1, 0, 60, 1,
-            '{"systemManaged":true,"source":"agent-commons-backfill"}'
+            '{"systemManaged":true,"source":"agent-commons-backfill"}', 'agent_commons'
         FROM channels commons
         JOIN (
             SELECT DISTINCT member_identity
@@ -576,6 +584,7 @@ public sealed class ChannelsDatabaseInitializer
                 WHEN channel_memberships.settings_json LIKE '%"systemManaged":true%' THEN 'mentions_only'
                 ELSE channel_memberships.wake_policy
             END,
+            membership_purpose = 'agent_commons',
             updated_at = datetime('now');
         """;
 
@@ -770,6 +779,17 @@ public sealed class ChannelsDatabaseInitializer
         """";
 
     /// <summary>
+    /// Migration v4: Add membership_purpose column to channel_memberships.
+    /// Distinguishes why a member is in a channel: worker_pool_control (idle pool home),
+    /// target_work (active assignment participation), agent_commons (system commons).
+    /// NULL = legacy/unspecified purpose.
+    /// </summary>
+    private const string MigrationV4Sql = """"
+        -- membership_purpose column added via C# EnsureColumnAsync (safe for legacy DBs)
+        -- See EnsureChannelMembershipsMembershipPurposeColumnAsync
+        """";
+
+    /// <summary>
     /// Seed SQL to ensure the #worker-pool lobby channel exists.
     /// Uses slug='worker-pool' with kind='system' for simplicity;
     /// distinct from agent-commons via slug.
@@ -858,6 +878,20 @@ public sealed class ChannelsDatabaseInitializer
         // Old constraint detected — rebuild table with concrete_identity in UNIQUE
         await ExecuteNonQueryAsync(connection, RebuildWorkerPoolLobbyPresenceForConcreteConstraintSql, cancellationToken);
         logger?.LogInformation("Rebuilt worker_pool_lobby_presence table with concrete-identity-scoped UNIQUE constraint");
+    }
+
+    /// <summary>
+    /// Ensures the membership_purpose column exists on channel_memberships.
+    /// Safe for legacy databases where channel_memberships may not exist yet.
+    /// Uses EnsureColumnAsync which only adds the column if the table exists.
+    /// CHECK constraint is not enforced via this path (SQLite doesn't support
+    /// ALTER TABLE ADD COLUMN with CHECK in a backward-compatible way for
+    /// existing tables); validation is enforced at the application layer.
+    /// </summary>
+    private static async Task EnsureChannelMembershipsMembershipPurposeColumnAsync(SqliteConnection connection,
+        CancellationToken cancellationToken = default)
+    {
+        await EnsureColumnAsync(connection, "channel_memberships", "membership_purpose", "TEXT", cancellationToken);
     }
 
     /// <summary>
