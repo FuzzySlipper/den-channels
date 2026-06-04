@@ -24,7 +24,7 @@ Workers discover pollable channels with:
 GET /api/channel-memberships?memberIdentity=<agent>&membershipPurpose=<optional>&includeLeft=false
 ```
 
-The endpoint returns only memberships for the requested `memberIdentity`, with channel metadata and sanitized membership labels. Runtime adapters should treat active memberships as the source of truth for the set of channels to poll.
+The endpoint returns only memberships for the requested `memberIdentity`, with channel metadata and sanitized membership labels. Runtime adapters should treat active memberships as the source of truth for the set of channels to poll. When no `membershipPurpose` filter is supplied, the endpoint is intentionally bounded to pollable worker purposes: `worker_pool_control` and `target_work`. This keeps ordinary memberships such as `agent_commons` out of the direct-event polling set.
 
 Useful filters:
 

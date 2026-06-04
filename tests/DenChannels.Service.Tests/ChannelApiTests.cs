@@ -252,7 +252,7 @@ public sealed class ChannelApiTests : IDisposable
     public async Task ChannelMemberships_ByMemberIdentityDiscoversActiveWorkerChannelsAndSanitizesSettings()
     {
         using var client = _factory.CreateClient();
-        var workerPool = await PutJsonAsync<ChannelPayload>(client, "/api/worker-pool/control", new { });
+        var workerPool = await PutJsonAsync<ChannelPayload>(client, "/api/worker-pool/lobby", new { });
         var projectChannel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/agora-os/default-channel", new
         {
             displayName = "Agora OS"
@@ -313,6 +313,14 @@ public sealed class ChannelApiTests : IDisposable
         Assert.Equal("binding: task-1945", discovered.Memberships[1].SettingsLabel);
         Assert.DoesNotContain(discovered.Memberships, m => m.ChannelId == otherChannel.Id);
         Assert.DoesNotContain(discovered.Memberships, m => m.MemberIdentity == "spawned-reviewer");
+        Assert.DoesNotContain(discovered.Memberships, m => m.MembershipPurpose == "agent_commons");
+
+        var commonsOnly = await client.GetFromJsonAsync<ChannelMembershipDiscoveryPayload>(
+            "/api/channel-memberships?memberIdentity=spawned-coder&membershipPurpose=agent_commons");
+        Assert.NotNull(commonsOnly);
+        var commonsMembership = Assert.Single(commonsOnly.Memberships);
+        Assert.Equal("agent_commons", commonsMembership.MembershipPurpose);
+        Assert.Equal("agent-commons", commonsMembership.ChannelSlug);
 
         var targetOnly = await client.GetFromJsonAsync<ChannelMembershipDiscoveryPayload>(
             "/api/channel-memberships?memberIdentity=spawned-coder&membershipPurpose=target_work");

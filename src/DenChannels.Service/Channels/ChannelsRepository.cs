@@ -1106,6 +1106,10 @@ public sealed partial class ChannelsRepository
             WHERE m.member_identity = $memberIdentity
               AND ($projectId IS NULL OR c.project_id = $projectId)
               AND ($channelId IS NULL OR m.channel_id = $channelId)
+              AND (
+                    $membershipPurpose IS NOT NULL
+                    OR m.membership_purpose IN ('worker_pool_control', 'target_work')
+                  )
               AND ($membershipPurpose IS NULL OR m.membership_purpose = $membershipPurpose)
               AND ($includeLeft = 1 OR m.membership_status != 'left')
             ORDER BY CASE m.membership_purpose
