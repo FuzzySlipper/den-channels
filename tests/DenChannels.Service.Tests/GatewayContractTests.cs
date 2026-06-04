@@ -5,6 +5,7 @@ using DenChannels.Service.AgentsOverview;
 using DenChannels.Service.Configuration;
 using DenChannels.Service.Gateway;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -141,6 +142,59 @@ public sealed class GatewayContractTests : IDisposable
         Assert.Equal("profile: den-hermes-coder · binding: safe-binding", member.SettingsLabel);
         Assert.True(member.CanReact);
         Assert.False(member.CanInvite);
+    }
+
+    [Fact]
+    public async Task GatewayMemberships_CanFilterLeftMembersByGracePeriodAndExposeAgeFields()
+    {
+        var channel = await EnsureDefaultChannelAsync("gw-test-left-grace");
+        await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "active-agent",
+            wakePolicy = "mentions_only",
+            membershipPurpose = "target_work"
+        });
+        await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "recent-left-agent",
+            membershipStatus = "left",
+            wakePolicy = "never",
+            membershipPurpose = "target_work"
+        });
+        await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "stale-left-agent",
+            membershipStatus = "left",
+            wakePolicy = "never",
+            membershipPurpose = "target_work"
+        });
+        await SetMembershipUpdatedAtMinutesAgoAsync(channel.Id, "stale-left-agent", 45);
+
+        var defaultPayload = await _client.GetFromJsonAsync<GatewayMembershipsPayload>(
+            $"/api/gateway/memberships?channelId={channel.Id}");
+        Assert.NotNull(defaultPayload);
+        Assert.Equal(3, defaultPayload.Members.Count);
+
+        var gracePayload = await _client.GetFromJsonAsync<GatewayMembershipsPayload>(
+            $"/api/gateway/memberships?channelId={channel.Id}&leftGraceMinutes=30");
+        Assert.NotNull(gracePayload);
+        Assert.DoesNotContain(gracePayload.Members, m => m.MemberIdentity == "stale-left-agent");
+        Assert.Contains(gracePayload.Members, m => m.MemberIdentity == "active-agent");
+        var recentLeft = Assert.Single(gracePayload.Members, m => m.MemberIdentity == "recent-left-agent");
+        Assert.Equal("left", recentLeft.MembershipStatus);
+        Assert.Equal("target_work", recentLeft.MembershipPurpose);
+        Assert.False(string.IsNullOrWhiteSpace(recentLeft.UpdatedAt));
+        Assert.Equal(recentLeft.UpdatedAt, recentLeft.LeftAt);
+
+        var activeOnlyPayload = await _client.GetFromJsonAsync<GatewayMembershipsPayload>(
+            $"/api/gateway/memberships?channelId={channel.Id}&includeLeft=false");
+        Assert.NotNull(activeOnlyPayload);
+        var activeOnly = Assert.Single(activeOnlyPayload.Members);
+        Assert.Equal("active-agent", activeOnly.MemberIdentity);
+        Assert.Null(activeOnly.LeftAt);
     }
 
     [Fact]
@@ -771,6 +825,24 @@ public sealed class GatewayContractTests : IDisposable
         response.EnsureSuccessStatusCode();
     }
 
+    private async Task SetMembershipUpdatedAtMinutesAgoAsync(long channelId, string memberIdentity, int minutesAgo)
+    {
+        await using var connection = new SqliteConnection($"Data Source={_databasePath}");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE channel_memberships
+            SET updated_at = datetime('now', '-' || $minutesAgo || ' minutes')
+            WHERE channel_id = $channelId
+              AND member_identity = $memberIdentity;
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$memberIdentity", memberIdentity);
+        command.Parameters.AddWithValue("$minutesAgo", minutesAgo);
+        var updated = await command.ExecuteNonQueryAsync();
+        Assert.Equal(1, updated);
+    }
+
     private async Task<MessageStub> PostMessageAsync(long channelId, object request)
     {
         using var response = await _client.PostAsJsonAsync($"/api/channels/{channelId}/messages", request);
@@ -813,7 +885,11 @@ public sealed class GatewayContractTests : IDisposable
         bool CanInvite,
         int CooldownSeconds,
         int MaxAutoRepliesPerWindow,
-        string? SettingsLabel);
+        string? SettingsLabel,
+        string? MembershipPurpose,
+        string CreatedAt,
+        string UpdatedAt,
+        string? LeftAt);
 
     private sealed record GatewayDirectAgentMessagePayload(
         string Status,

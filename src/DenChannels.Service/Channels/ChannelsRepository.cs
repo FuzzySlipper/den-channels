@@ -287,9 +287,10 @@ public sealed partial class ChannelsRepository
     }
 
     public async Task<IReadOnlyList<ChannelMembershipDto>> ListMembershipsAsync(long channelId, int limit = 200,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool includeLeft = true, int? leftGraceMinutes = null)
     {
         limit = Math.Clamp(limit, 1, 500);
+        var clampedLeftGraceMinutes = leftGraceMinutes.HasValue ? Math.Clamp(leftGraceMinutes.Value, 0, 10080) : (int?)null;
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """"
@@ -297,11 +298,18 @@ public sealed partial class ChannelsRepository
                 cooldown_seconds, max_auto_replies_per_window, settings_json, membership_purpose, created_at, updated_at
             FROM channel_memberships
             WHERE channel_id = $channelId
+              AND (
+                    membership_status != 'left'
+                    OR ($includeLeft = 1 AND $leftGraceMinutes IS NULL)
+                    OR ($includeLeft = 1 AND $leftGraceMinutes IS NOT NULL AND updated_at >= datetime('now', '-' || $leftGraceMinutes || ' minutes'))
+                  )
             ORDER BY id ASC
             LIMIT $limit;
             """";
         command.Parameters.AddWithValue("$channelId", channelId);
         command.Parameters.AddWithValue("$limit", limit);
+        command.Parameters.AddWithValue("$includeLeft", includeLeft ? 1 : 0);
+        command.Parameters.AddWithValue("$leftGraceMinutes", (object?)clampedLeftGraceMinutes ?? DBNull.Value);
         var rows = new List<ChannelMembershipDto>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))

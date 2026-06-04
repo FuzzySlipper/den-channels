@@ -58,6 +58,8 @@ public static class GatewayRoutes
             ChannelsRepository repository,
             long? channelId,
             string? projectId,
+            bool? includeLeft,
+            int? leftGraceMinutes,
             CancellationToken cancellationToken) =>
         {
             if (channelId is null && string.IsNullOrWhiteSpace(projectId))
@@ -87,19 +89,13 @@ public static class GatewayRoutes
                         $"No default channel found for project '{projectId}'."));
             }
 
-            var memberships = await repository.ListMembershipsAsync(channel.Id, 200, cancellationToken);
-            var members = memberships.Select(m => new GatewayMemberDto(
-                m.Id,
-                m.MemberType,
-                m.MemberIdentity,
-                m.MembershipStatus,
-                m.WakePolicy,
-                m.CanSend,
-                m.CanReact,
-                m.CanInvite,
-                m.CooldownSeconds,
-                m.MaxAutoRepliesPerWindow,
-                SafeSettingsLabel(m.SettingsJson))).ToList();
+            var memberships = await repository.ListMembershipsAsync(
+                channel.Id,
+                200,
+                cancellationToken,
+                includeLeft: includeLeft ?? true,
+                leftGraceMinutes: leftGraceMinutes);
+            var members = memberships.Select(ToGatewayMemberDto).ToList();
 
             return Results.Ok(new GatewayMembershipsDto(
                 channel.Id,
@@ -635,6 +631,23 @@ public static class GatewayRoutes
             string.Equals(m.MemberType, "agent", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(m.MembershipStatus, "active", StringComparison.OrdinalIgnoreCase));
     }
+
+    private static GatewayMemberDto ToGatewayMemberDto(ChannelMembershipDto m) => new(
+        m.Id,
+        m.MemberType,
+        m.MemberIdentity,
+        m.MembershipStatus,
+        m.WakePolicy,
+        m.CanSend,
+        m.CanReact,
+        m.CanInvite,
+        m.CooldownSeconds,
+        m.MaxAutoRepliesPerWindow,
+        SafeSettingsLabel(m.SettingsJson),
+        m.MembershipPurpose,
+        m.CreatedAt,
+        m.UpdatedAt,
+        string.Equals(m.MembershipStatus, "left", StringComparison.OrdinalIgnoreCase) ? m.UpdatedAt : null);
 
     private static string? SafeSettingsLabel(string? settingsJson)
     {

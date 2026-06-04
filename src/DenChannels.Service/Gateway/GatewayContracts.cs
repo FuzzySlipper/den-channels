@@ -63,7 +63,11 @@ public sealed record GatewayMemberDto(
     bool CanInvite,
     int CooldownSeconds,
     int MaxAutoRepliesPerWindow,
-    string? SettingsLabel);
+    string? SettingsLabel,
+    string? MembershipPurpose,
+    string CreatedAt,
+    string UpdatedAt,
+    string? LeftAt);
 
 /// <summary>Controlled low-risk wake probe request recorded through Gateway-visible channel state.</summary>
 public sealed record PostGatewayTestWakeRequest(
