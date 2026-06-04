@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
 namespace DenChannels.Service.Channels;
@@ -238,6 +239,27 @@ public static class ChannelRoutes
             {
                 return Results.Conflict(new ProblemDetailsDto("membership_constraint_failed", ex.SqliteErrorCode, ex.Message));
             }
+        });
+
+        api.MapGet("/channel-memberships", async Task<IResult> (ChannelsRepository repository,
+            string? memberIdentity, string? membershipPurpose, string? projectId, long? channelId, bool? includeLeft,
+            int? limit, CancellationToken cancellationToken) =>
+        {
+            if (string.IsNullOrWhiteSpace(memberIdentity))
+                return Results.BadRequest(new { code = "missing_parameter", message = "Provide memberIdentity." });
+
+            var rows = await repository.ListMembershipsByMemberIdentityAsync(
+                memberIdentity,
+                membershipPurpose,
+                projectId,
+                channelId,
+                includeLeft ?? false,
+                limit ?? 100,
+                cancellationToken);
+
+            return Results.Ok(new ChannelMembershipDiscoveryResponse(
+                memberIdentity.Trim(),
+                rows.Select(ToChannelMembershipDiscoveryDto).ToList()));
         });
 
         // -----------------------------------------------------------------------
@@ -497,6 +519,62 @@ public static class ChannelRoutes
 
     private static IResult ToActivityRouteHttpResult(ChannelActivityRouteResultDto result) =>
         result.Status == "rejected" ? Results.BadRequest(result) : Results.Ok(result);
+
+    private static ChannelMembershipDiscoveryDto ToChannelMembershipDiscoveryDto(ChannelMembershipDiscoveryRowDto row)
+    {
+        var m = row.Membership;
+        return new ChannelMembershipDiscoveryDto(
+            row.ChannelId,
+            row.ChannelSlug,
+            row.ChannelKind,
+            row.ProjectId,
+            m.Id,
+            m.MemberType,
+            m.MemberIdentity,
+            m.MembershipStatus,
+            m.WakePolicy,
+            m.CanSend,
+            m.CanReact,
+            m.CanInvite,
+            m.CooldownSeconds,
+            m.MaxAutoRepliesPerWindow,
+            SafeSettingsLabel(m.SettingsJson),
+            m.MembershipPurpose,
+            m.CreatedAt,
+            m.UpdatedAt,
+            string.Equals(m.MembershipStatus, "left", StringComparison.OrdinalIgnoreCase) ? m.UpdatedAt : null);
+    }
+
+    private static string? SafeSettingsLabel(string? settingsJson)
+    {
+        if (string.IsNullOrWhiteSpace(settingsJson)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(settingsJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Object) return null;
+
+            var parts = new List<string>();
+            AddAllowedSettingsPart(document.RootElement, parts, "profile", "profile");
+            AddAllowedSettingsPart(document.RootElement, parts, "profileName", "profile");
+            AddAllowedSettingsPart(document.RootElement, parts, "profile_id", "profile");
+            AddAllowedSettingsPart(document.RootElement, parts, "binding", "binding");
+            AddAllowedSettingsPart(document.RootElement, parts, "bindingName", "binding");
+            AddAllowedSettingsPart(document.RootElement, parts, "sessionId", "session");
+            return parts.Count == 0 ? null : string.Join(" · ", parts.Distinct());
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static void AddAllowedSettingsPart(JsonElement root, ICollection<string> parts, string propertyName, string label)
+    {
+        if (!root.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.String) return;
+        var text = value.GetString()?.Trim();
+        if (!string.IsNullOrWhiteSpace(text))
+            parts.Add($"{label}: {text}");
+    }
 
     private static bool IsConstraintFailure(SqliteException ex) => ex.SqliteErrorCode == 19;
 

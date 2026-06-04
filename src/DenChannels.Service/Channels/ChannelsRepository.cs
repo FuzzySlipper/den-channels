@@ -1084,6 +1084,76 @@ public sealed partial class ChannelsRepository
     }
 
     /// <summary>
+    /// List channel memberships for one member identity across channels, including channel metadata.
+    /// Used by direct-event pollers to discover worker_pool_control and target_work channels.
+    /// </summary>
+    public async Task<IReadOnlyList<ChannelMembershipDiscoveryRowDto>> ListMembershipsByMemberIdentityAsync(
+        string memberIdentity, string? membershipPurpose = null, string? projectId = null, long? channelId = null,
+        bool includeLeft = false, int limit = 100, CancellationToken cancellationToken = default)
+    {
+        var normalizedMemberIdentity = memberIdentity.Trim();
+        var normalizedPurpose = string.IsNullOrWhiteSpace(membershipPurpose) ? null : membershipPurpose.Trim();
+        var clampedLimit = Math.Clamp(limit, 1, 500);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """"
+            SELECT c.id, c.slug, c.kind, c.project_id,
+                   m.id, m.channel_id, m.member_type, m.member_identity, m.membership_status, m.wake_policy,
+                   m.can_send, m.can_react, m.can_invite, m.cooldown_seconds, m.max_auto_replies_per_window,
+                   m.settings_json, m.membership_purpose, m.created_at, m.updated_at
+            FROM channel_memberships m
+            JOIN channels c ON c.id = m.channel_id
+            WHERE m.member_identity = $memberIdentity
+              AND ($projectId IS NULL OR c.project_id = $projectId)
+              AND ($channelId IS NULL OR m.channel_id = $channelId)
+              AND ($membershipPurpose IS NULL OR m.membership_purpose = $membershipPurpose)
+              AND ($includeLeft = 1 OR m.membership_status != 'left')
+            ORDER BY CASE m.membership_purpose
+                       WHEN 'worker_pool_control' THEN 0
+                       WHEN 'target_work' THEN 1
+                       ELSE 2
+                     END,
+                     c.id ASC
+            LIMIT $limit;
+            """";
+        command.Parameters.AddWithValue("$memberIdentity", normalizedMemberIdentity);
+        command.Parameters.AddWithValue("$membershipPurpose", (object?)normalizedPurpose ?? DBNull.Value);
+        command.Parameters.AddWithValue("$projectId", (object?)projectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$channelId", (object?)channelId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$includeLeft", includeLeft ? 1 : 0);
+        command.Parameters.AddWithValue("$limit", clampedLimit);
+
+        var rows = new List<ChannelMembershipDiscoveryRowDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var membership = new ChannelMembershipDto(
+                reader.GetInt64(4),
+                reader.GetInt64(5),
+                reader.GetString(6),
+                reader.GetString(7),
+                reader.GetString(8),
+                reader.GetString(9),
+                reader.GetBoolean(10),
+                reader.GetBoolean(11),
+                reader.GetBoolean(12),
+                reader.GetInt32(13),
+                reader.GetInt32(14),
+                GetNullableString(reader, 15),
+                GetNullableString(reader, 16),
+                reader.GetString(17),
+                reader.GetString(18));
+            rows.Add(new ChannelMembershipDiscoveryRowDto(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                GetNullableString(reader, 3),
+                membership));
+        }
+        return rows;
+    }
+
+    /// <summary>
     /// List recent activity events across multi-channel scope, optionally filtered.
     /// Returns most recent events bounded by the per-agent limit.
     /// </summary>
