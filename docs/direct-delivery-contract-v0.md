@@ -207,7 +207,8 @@ The `AssignmentTraceResponse` now uses typed DTOs:
 | `GET /api/direct-agent-events/{eventId}` | Channels | Readback for a single direct-agent event. |
 | `POST /api/gateway/direct-agent-messages` | Channels (compat) | Alias returning immediately by default. Legacy spin-wait gated behind explicit `waitFor`. |
 | `POST /api/gateway/system-messages` | Channels (compat) | Gateway-generated channel messages. |
-| `POST /api/gateway/channel-activity-events` | Channels (compat) | Non-waking progress/activity events. |
+| `POST /api/channel-activity-events` | Channels (compat) | Gateway-shaped non-waking progress/activity writer with Channels-owned validation/defaulting/status diagnostics. Prefer `POST /api/channels/{channelId}/activity-events` for new callers. |
+| `POST /api/gateway/channel-activity-events` | Channels (migration alias) | Temporary alias for older Gateway-era callers; remove after adapters target Channels directly. |
 | `GET /api/gateway/assignments/{assignmentId}/trace` | Channels | Assignment trace aggregate from Core + Channels + Gateway evidence. |
 | `GET /api/assignments/{assignmentId}/trace` | Channels | Den Web alias for assignment trace. |
 | `GET /api/gateway/events` | Channels | Cursor-paged event subscription. |

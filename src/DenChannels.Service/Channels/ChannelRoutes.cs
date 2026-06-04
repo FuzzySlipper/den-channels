@@ -147,6 +147,22 @@ public static class ChannelRoutes
         });
 
         // -----------------------------------------------------------------------
+        // Gateway-shaped activity/breadcrumb compatibility route.
+        // Canonical Channels ownership is /api/channels/{channelId}/activity-events;
+        // this alias accepts the old body/query channelId shape while preserving
+        // non-waking soft-failure diagnostics for breadcrumb writes.
+        // -----------------------------------------------------------------------
+        api.MapPost("/channel-activity-events", async Task<IResult> (ChannelActivityEventRoutingService activityRouter,
+            string? channelId, ChannelActivityRouteRequest request, CancellationToken cancellationToken) =>
+        {
+            var result = await activityRouter.RouteAsync(request, channelId, cancellationToken);
+            return ToActivityRouteHttpResult(result);
+        });
+
+        api.MapGet("/channel-activity-events/status", (ChannelActivityEventRoutingService activityRouter) =>
+            Results.Ok(activityRouter.GetStatus()));
+
+        // -----------------------------------------------------------------------
         // Read cursor endpoints (task #1769 shared-profile instance support)
         // -----------------------------------------------------------------------
 
@@ -478,6 +494,9 @@ public static class ChannelRoutes
 
         return api;
     }
+
+    private static IResult ToActivityRouteHttpResult(ChannelActivityRouteResultDto result) =>
+        result.Status == "rejected" ? Results.BadRequest(result) : Results.Ok(result);
 
     private static bool IsConstraintFailure(SqliteException ex) => ex.SqliteErrorCode == 19;
 

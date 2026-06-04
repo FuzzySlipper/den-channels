@@ -32,6 +32,7 @@ builder.Services.AddHttpClient<IWorkerPoolStateClient, WorkerPoolStateClient>(cl
 });
 builder.Services.AddSingleton<AgentsOverviewService>();
 builder.Services.AddSingleton<ActiveWorkRoutingService>();
+builder.Services.AddSingleton<ChannelActivityEventRoutingService>();
 
 var app = builder.Build();
 

@@ -8,10 +8,13 @@ ADR `adr-activity-render-block-correlation`.
 
 ## Ownership
 
-- `den-channels` owns persistence and HTTP API contracts for activity events.
-- `den-gateway` will route non-waking activity writes and maintain delivery/run association.
-- `den-hermes-bridge` will summarize Hermes tool calls into bounded activity events.
-- `den-desktop` will render activity breadcrumbs from the read API.
+- `den-channels` owns persistence, request validation/defaulting, HTTP API contracts,
+  and recent write-failure diagnostics for activity events.
+- The primary write API is Channels-native. Gateway-shaped routes are compatibility
+  aliases only while older Hermes/Gateway-era callers migrate.
+- `den-hermes-bridge` summarizes Hermes tool calls into bounded activity events and
+  should post them to Channels, not to `den-gateway`.
+- `den-desktop` / Den Web render activity breadcrumbs from the Channels read APIs.
 
 ## Schema
 
@@ -51,18 +54,35 @@ Supported statuses:
 
 ## API contract
 
-Append/upsert an activity event:
+Append/upsert an activity event through the canonical Channels route:
 
 ```http
 POST /api/channels/{channelId}/activity-events
 ```
 
-Gateway-facing non-waking append/upsert seam (resolves `channelId` or a project default channel):
+Gateway-shaped compatibility write surface (task #1944) for older callers that still
+send `channelId` in the JSON body:
+
+```http
+POST /api/channel-activity-events
+GET /api/channel-activity-events/status
+```
+
+The compatibility writer rejects missing `channelId` / `agentIdentity`, defaults blank
+`eventType` to `lifecycle_status`, defaults blank `status` to `interim`, and returns
+soft `degraded` results plus recent-failure diagnostics when persistence fails. It is
+still non-waking observability; it does not create messages or delivery requests.
+
+Gateway-prefixed compatibility aliases are available only for migration/readback and
+should not be the target for new callers:
 
 ```http
 POST /api/gateway/channel-activity-events?channelId=...
-POST /api/gateway/channel-activity-events?projectId=...
+GET /api/gateway/channel-activity-events/status
 ```
+
+Remove the Gateway-prefixed alias once Hermes/bridge callers no longer emit to the old
+Gateway-shaped base path.
 
 Use `terminal=false` and a non-final `deliveryStage` such as `assistant_interim`, `tool`, `status`, or `compression` for pre-tool text/status/progress. Reserve `terminal=true` for explicit terminal outcome breadcrumbs; the actual human-visible assistant answer remains a normal `channel_message` row with the `gateway-delivery:<delivery_id>:final` dedupe key.
 
@@ -106,6 +126,7 @@ block. There is no `displayDeliveryRequestId` field or fallback dependency.
 Focused validation commands:
 
 ```bash
+dotnet test DenChannels.slnx --filter "FullyQualifiedName~ChannelApiTests&FullyQualifiedName~Activity"
 dotnet test DenChannels.slnx --filter ChannelApiTests
 ```
 

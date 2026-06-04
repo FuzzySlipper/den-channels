@@ -40,6 +40,8 @@ public static class GatewayRoutes
                 "GET /api/gateway/events?channelId={id}&afterId={id}&limit={n} (compatibility alias)",
                 "GET /api/gateway/events?projectId={projectId}&afterId={id}&limit={n} (compatibility alias)",
                 "POST /api/gateway/system-messages",
+                "POST /api/gateway/channel-activity-events (compatibility alias)",
+                "GET /api/gateway/channel-activity-events/status (compatibility alias)",
                 "POST /api/gateway/direct-agent-messages (compatibility alias)",
                 "POST /api/direct-agent-events",
                 "GET /api/direct-agent-events/{eventId}",
@@ -208,6 +210,25 @@ public static class GatewayRoutes
 
             return Results.Ok(new GatewayEventsDto(eventItems, nextAfterId, hasMore));
         });
+
+        // -----------------------------------------------------------------------
+        // POST /api/gateway/channel-activity-events
+        // Compatibility alias for the old Gateway breadcrumb router. Channels owns
+        // persistence and diagnostics; callers should migrate to
+        // /api/channel-activity-events or /api/channels/{channelId}/activity-events.
+        // -----------------------------------------------------------------------
+        gw.MapPost("/channel-activity-events", async Task<IResult> (
+            ChannelActivityEventRoutingService activityRouter,
+            string? channelId,
+            ChannelActivityRouteRequest request,
+            CancellationToken cancellationToken) =>
+        {
+            var result = await activityRouter.RouteAsync(request, channelId, cancellationToken);
+            return result.Status == "rejected" ? Results.BadRequest(result) : Results.Ok(result);
+        });
+
+        gw.MapGet("/channel-activity-events/status", (ChannelActivityEventRoutingService activityRouter) =>
+            Results.Ok(activityRouter.GetStatus()));
 
         // -----------------------------------------------------------------------
         // POST /api/gateway/system-messages

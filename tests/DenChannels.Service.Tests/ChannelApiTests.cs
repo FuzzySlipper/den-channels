@@ -547,7 +547,7 @@ public sealed class ChannelApiTests : IDisposable
             displayName = "Den Channels"
         });
 
-        var recorded = await PostJsonAsync<GatewayActivityResultPayload>(client,
+        var recorded = await PostJsonAsync<ChannelActivityRouteResultPayload>(client,
             $"/api/gateway/channel-activity-events?channelId={channel.Id}", new
             {
                 projectId = "den-channels",
@@ -563,6 +563,9 @@ public sealed class ChannelApiTests : IDisposable
             });
 
         Assert.Equal("recorded", recorded.Status);
+        Assert.True(recorded.Recorded);
+        Assert.Equal(recorded.ActivityEventId, recorded.ActivityEvent?.Id.ToString());
+        Assert.NotNull(recorded.ActivityEvent);
         Assert.Equal("assistant_interim", recorded.ActivityEvent.DeliveryStage);
         Assert.False(recorded.ActivityEvent.Terminal);
         Assert.Equal("delivery-1546", recorded.ActivityEvent.DeliveryRequestId);
@@ -570,6 +573,155 @@ public sealed class ChannelApiTests : IDisposable
         var messages = await client.GetFromJsonAsync<List<MessagePayload>>($"/api/channels/{channel.Id}/messages?afterId=0&limit=10");
         Assert.NotNull(messages);
         Assert.Empty(messages);
+    }
+
+    [Fact]
+    public async Task ChannelActivityEventsGatewayShapeRoute_DefaultsAndPreservesFieldsWithoutCreatingMessages()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+        var parentMessage = await PostJsonAsync<GatewayMessageDto>(client, "/api/gateway/system-messages", new
+        {
+            channelId = channel.Id,
+            body = "Parent #1944 display block",
+            sourceKind = "gateway_delivery",
+            sourceId = "parent-1944-source",
+            deliveryRequestId = "parent-1944",
+            dedupeKey = "gateway-delivery:parent-1944"
+        });
+
+        var recorded = await PostJsonAsync<ChannelActivityRouteResultPayload>(client,
+            "/api/channel-activity-events", new
+            {
+                channelId = channel.Id.ToString(),
+                projectId = "den-channels",
+                agentIdentity = "den-coder-profile",
+                deliveryRequestId = "coder-1944",
+                displayBlockId = "parent-1944",
+                hermesSessionKey = "session-coder-1944",
+                parentHermesSessionKey = "session-parent-1944",
+                parentAgentIdentity = "den-mcp-planner",
+                workerRunId = "coder-1944",
+                workerRole = "coder",
+                taskId = 1944,
+                threadId = 10691,
+                anchorMessageId = parentMessage.Id,
+                eventType = "",
+                status = "",
+                sequence = 7,
+                title = "terminal",
+                summary = "dotnet test breadcrumbs",
+                previewJson = "{\"command\":\"dotnet test\"}",
+                metadataJson = "{\"phase\":\"coder\"}",
+                dedupeKey = "activity:coder-1944:7"
+            });
+
+        Assert.Equal("recorded", recorded.Status);
+        Assert.True(recorded.Recorded);
+        Assert.NotNull(recorded.ActivityEvent);
+        Assert.Equal(channel.Id, recorded.ActivityEvent.ChannelId);
+        Assert.Equal("den-coder-profile", recorded.ActivityEvent.AgentIdentity);
+        Assert.Equal("coder-1944", recorded.ActivityEvent.DeliveryRequestId);
+        Assert.Equal("parent-1944", recorded.ActivityEvent.DisplayBlockId);
+        Assert.Equal("session-coder-1944", recorded.ActivityEvent.HermesSessionKey);
+        Assert.Equal("session-parent-1944", recorded.ActivityEvent.ParentHermesSessionKey);
+        Assert.Equal("den-mcp-planner", recorded.ActivityEvent.ParentAgentIdentity);
+        Assert.Equal("coder-1944", recorded.ActivityEvent.WorkerRunId);
+        Assert.Equal("coder", recorded.ActivityEvent.WorkerRole);
+        Assert.Equal(parentMessage.Id, recorded.ActivityEvent.AnchorMessageId);
+        Assert.Equal("lifecycle_status", recorded.ActivityEvent.EventType);
+        Assert.Equal("interim", recorded.ActivityEvent.Status);
+        Assert.Equal(7, recorded.ActivityEvent.Sequence);
+        Assert.Contains("dotnet test", recorded.ActivityEvent.Summary);
+
+        var duplicate = await PostJsonAsync<ChannelActivityRouteResultPayload>(client,
+            "/api/channel-activity-events", new
+            {
+                channelId = channel.Id,
+                projectId = "den-channels",
+                agentIdentity = "den-coder-profile",
+                deliveryRequestId = "coder-1944",
+                eventType = "tool_call_completed",
+                status = "completed",
+                sequence = 7,
+                summary = "same dedupe key completed",
+                dedupeKey = "activity:coder-1944:7"
+            });
+
+        Assert.Equal(recorded.ActivityEvent.Id, duplicate.ActivityEvent?.Id);
+        Assert.Equal("completed", duplicate.ActivityEvent?.Status);
+        Assert.Equal("parent-1944", duplicate.ActivityEvent?.DisplayBlockId);
+        Assert.True(duplicate.ActivityEvent?.UpdateVersion > recorded.ActivityEvent.UpdateVersion);
+
+        var messages = await client.GetFromJsonAsync<List<MessagePayload>>($"/api/channels/{channel.Id}/messages?afterId=0&limit=10");
+        Assert.NotNull(messages);
+        var onlyMessage = Assert.Single(messages);
+        Assert.Equal(parentMessage.Id, onlyMessage.Id);
+        Assert.Equal("parent-1944", onlyMessage.DeliveryRequestId);
+    }
+
+    [Fact]
+    public async Task ChannelActivityEventsGatewayShapeRoute_RejectsMissingRequiredFields()
+    {
+        using var client = _factory.CreateClient();
+
+        using var missingChannel = await client.PostAsJsonAsync("/api/channel-activity-events", new
+        {
+            agentIdentity = "den-mcp-planner"
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, missingChannel.StatusCode);
+        var missingChannelResult = await missingChannel.Content.ReadFromJsonAsync<ChannelActivityRouteResultPayload>();
+        Assert.NotNull(missingChannelResult);
+        Assert.Equal("rejected", missingChannelResult.Status);
+        Assert.False(missingChannelResult.Recorded);
+        Assert.Equal("missing_channel_id", missingChannelResult.ErrorCode);
+
+        using var missingAgent = await client.PostAsJsonAsync("/api/channel-activity-events", new
+        {
+            channelId = "42"
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, missingAgent.StatusCode);
+        var missingAgentResult = await missingAgent.Content.ReadFromJsonAsync<ChannelActivityRouteResultPayload>();
+        Assert.NotNull(missingAgentResult);
+        Assert.Equal("rejected", missingAgentResult.Status);
+        Assert.False(missingAgentResult.Recorded);
+        Assert.Equal("missing_agent_identity", missingAgentResult.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ChannelActivityEventsStatus_ReportsRecentSoftWriteFailures()
+    {
+        using var client = _factory.CreateClient();
+
+        var degraded = await PostJsonAsync<ChannelActivityRouteResultPayload>(client,
+            "/api/channel-activity-events", new
+            {
+                channelId = "999999",
+                projectId = "den-channels",
+                agentIdentity = "den-mcp-planner",
+                deliveryRequestId = "delivery-1944",
+                displayBlockId = "display-1944",
+                workerRunId = "worker-1944",
+                eventType = "tool_call_failed"
+            });
+
+        Assert.Equal("degraded", degraded.Status);
+        Assert.False(degraded.Recorded);
+        Assert.Equal("activity_record_failed", degraded.ErrorCode);
+
+        var status = await client.GetFromJsonAsync<ChannelActivityRouterStatusPayload>("/api/channel-activity-events/status");
+        Assert.NotNull(status);
+        var failure = Assert.Single(status.RecentFailures);
+        Assert.Equal("999999", failure.ChannelId);
+        Assert.Equal("den-channels", failure.ProjectId);
+        Assert.Equal("den-mcp-planner", failure.AgentIdentity);
+        Assert.Equal("delivery-1944", failure.DeliveryRequestId);
+        Assert.Equal("display-1944", failure.DisplayBlockId);
+        Assert.Equal("worker-1944", failure.WorkerRunId);
+        Assert.Equal("activity_record_failed", failure.ErrorCode);
     }
 
     [Fact]
@@ -906,7 +1058,25 @@ public sealed class ChannelApiTests : IDisposable
     private sealed record ReactionSummaryPayload(long ChannelMessageId, string ReactionKey, int Count,
         string[] Reactors);
 
-    private sealed record GatewayActivityResultPayload(string Status, ActivityEventPayload ActivityEvent);
+    private sealed record ChannelActivityRouteResultPayload(
+        string Status,
+        bool Recorded,
+        string? ActivityEventId,
+        string? ErrorCode,
+        string? Message,
+        ActivityEventPayload? ActivityEvent);
+
+    private sealed record ChannelActivityRouterStatusPayload(IReadOnlyList<ChannelActivityDiagnosticPayload> RecentFailures);
+
+    private sealed record ChannelActivityDiagnosticPayload(
+        string ChannelId,
+        string? ProjectId,
+        string? AgentIdentity,
+        string? DeliveryRequestId,
+        string? DisplayBlockId,
+        string? WorkerRunId,
+        string ErrorCode,
+        string Message);
 
     private sealed record ActivityEventPayload(long Id, long ChannelId, string? ProjectId, string AgentIdentity,
         string? DeliveryRequestId, string? HermesSessionKey, string? DisplayBlockId, string? ParentHermesSessionKey,
