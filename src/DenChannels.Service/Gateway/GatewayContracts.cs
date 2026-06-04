@@ -120,15 +120,7 @@ public sealed record PostGatewayDirectAgentMessageRequest(
     string? WaitFor = null,
     int? TimeoutMs = null);
 
-/// <summary>
-/// Result of a direct targeted message request with delivery/evidence status links.
-/// SourceProjectId/ChannelId are the source/control context (where the interaction happened).
-/// Target-work fields (TargetProjectId, TargetTaskId, WorkerRunId, WorkerRole, ProfileIdentity, PoolMemberId)
-/// are workflow attribution and may differ from the transport/control project.
-/// Session-owner fields (AgentInstanceId, SessionOwnerId, SessionId) identify the target durable
-/// agent instance/session for session reuse across channels.
-/// All target-work and session-owner fields are nullable for backward compatibility.
-/// </summary>
+/// <inheritdoc cref="PostGatewayDirectAgentMessageRequest"/>
 public sealed record GatewayDirectAgentMessageDto(
     string Status,
     string DeliveryStatus,
@@ -161,15 +153,7 @@ public sealed record GatewayDirectAgentMessageDto(
     string GatewayEventsUrl,
     string EvidenceSummary);
 
-/// <summary>
-/// Single channel message suitable for Gateway routing/simulation decisions.
-/// SourceProjectId/ChannelId are the source/control context (transport attribution).
-/// Target-work fields (TargetProjectId, TargetTaskId, WorkerRunId, WorkerRole, ProfileIdentity, PoolMemberId)
-/// are workflow attribution for the target project work, not inferred from the channel project.
-/// Session-owner fields (AgentInstanceId, SessionOwnerId, SessionId) identify the target durable
-/// agent instance/session for session reuse across channels.
-/// All target-work and session-owner fields are nullable for backward compatibility.
-/// </summary>
+/// <inheritdoc cref="PostGatewayDirectAgentMessageRequest"/>
 public sealed record GatewayMessageDto(
     long Id,
     long ChannelId,
@@ -202,15 +186,7 @@ public sealed record GatewayEventsDto(
     long? NextAfterId,
     bool HasMore);
 
-/// <summary>
-/// Single event item within the Gateway events cursor response.
-/// SourceProjectId/ChannelId are the source/control context (transport attribution).
-/// Target-work fields (TargetProjectId, TargetTaskId, WorkerRunId, WorkerRole, ProfileIdentity, PoolMemberId)
-/// are workflow attribution, surfaced as structured fields rather than only body-embedded metadata.
-/// Session-owner fields (AgentInstanceId, SessionOwnerId, SessionId) identify the target durable
-/// agent instance/session for session reuse across channels.
-/// All target-work and session-owner fields are nullable for backward compatibility.
-/// </summary>
+/// <inheritdoc cref="PostGatewayDirectAgentMessageRequest"/>
 public sealed record GatewayEventItemDto(
     long Id,
     long ChannelId,
