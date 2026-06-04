@@ -249,6 +249,87 @@ public sealed class ChannelApiTests : IDisposable
     }
 
     [Fact]
+    public async Task ChannelMemberships_ByMemberIdentityDiscoversActiveWorkerChannelsAndSanitizesSettings()
+    {
+        using var client = _factory.CreateClient();
+        var workerPool = await PutJsonAsync<ChannelPayload>(client, "/api/worker-pool/control", new { });
+        var projectChannel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/agora-os/default-channel", new
+        {
+            displayName = "Agora OS"
+        });
+        var otherChannel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/pi-crew/default-channel", new
+        {
+            displayName = "Pi Crew"
+        });
+
+        await PutJsonAsync<MembershipPayload>(client, $"/api/channels/{workerPool.Id}/memberships", new
+        {
+            memberType = "agent",
+            memberIdentity = "spawned-coder",
+            wakePolicy = "mentions_only",
+            membershipPurpose = "worker_pool_control",
+            settingsJson = "{\"profile\":\"spawned-coder\",\"apiKey\":\"sk-secret\"}"
+        });
+        await PutJsonAsync<MembershipPayload>(client, $"/api/channels/{projectChannel.Id}/memberships", new
+        {
+            memberType = "agent",
+            memberIdentity = "spawned-coder",
+            wakePolicy = "mentions_only",
+            membershipPurpose = "target_work",
+            settingsJson = "{\"bindingName\":\"task-1945\",\"token\":\"secret\"}"
+        });
+        await PutJsonAsync<MembershipPayload>(client, $"/api/channels/{otherChannel.Id}/memberships", new
+        {
+            memberType = "agent",
+            memberIdentity = "spawned-coder",
+            membershipStatus = "left",
+            wakePolicy = "never",
+            membershipPurpose = "target_work"
+        });
+        await PutJsonAsync<MembershipPayload>(client, $"/api/channels/{projectChannel.Id}/memberships", new
+        {
+            memberType = "agent",
+            memberIdentity = "spawned-reviewer",
+            wakePolicy = "mentions_only",
+            membershipPurpose = "target_work"
+        });
+
+        using var missingResponse = await client.GetAsync("/api/channel-memberships");
+        Assert.Equal(HttpStatusCode.BadRequest, missingResponse.StatusCode);
+
+        var discovered = await client.GetFromJsonAsync<ChannelMembershipDiscoveryPayload>(
+            "/api/channel-memberships?memberIdentity=spawned-coder");
+        Assert.NotNull(discovered);
+        Assert.Equal("spawned-coder", discovered.MemberIdentity);
+        Assert.Equal(2, discovered.Memberships.Count);
+        Assert.Equal(workerPool.Id, discovered.Memberships[0].ChannelId);
+        Assert.Equal("worker-pool", discovered.Memberships[0].ChannelSlug);
+        Assert.Equal("system", discovered.Memberships[0].ChannelKind);
+        Assert.Null(discovered.Memberships[0].ProjectId);
+        Assert.Equal("worker_pool_control", discovered.Memberships[0].MembershipPurpose);
+        Assert.Equal("profile: spawned-coder", discovered.Memberships[0].SettingsLabel);
+        Assert.Equal(projectChannel.Id, discovered.Memberships[1].ChannelId);
+        Assert.Equal("target_work", discovered.Memberships[1].MembershipPurpose);
+        Assert.Equal("binding: task-1945", discovered.Memberships[1].SettingsLabel);
+        Assert.DoesNotContain(discovered.Memberships, m => m.ChannelId == otherChannel.Id);
+        Assert.DoesNotContain(discovered.Memberships, m => m.MemberIdentity == "spawned-reviewer");
+
+        var targetOnly = await client.GetFromJsonAsync<ChannelMembershipDiscoveryPayload>(
+            "/api/channel-memberships?memberIdentity=spawned-coder&membershipPurpose=target_work");
+        Assert.NotNull(targetOnly);
+        var targetMembership = Assert.Single(targetOnly.Memberships);
+        Assert.Equal(projectChannel.Id, targetMembership.ChannelId);
+        Assert.Equal("agora-os", targetMembership.ProjectId);
+
+        var includeLeft = await client.GetFromJsonAsync<ChannelMembershipDiscoveryPayload>(
+            "/api/channel-memberships?memberIdentity=spawned-coder&includeLeft=true");
+        Assert.NotNull(includeLeft);
+        var leftMembership = Assert.Single(includeLeft.Memberships, m => m.ChannelId == otherChannel.Id);
+        Assert.Equal("left", leftMembership.MembershipStatus);
+        Assert.NotNull(leftMembership.LeftAt);
+    }
+
+    [Fact]
     public async Task AgentCommons_IsVisibleAndAutoIncludesActiveAgentsWithMentionsOnlyWakePolicy()
     {
         using var client = _factory.CreateClient();
@@ -878,6 +959,31 @@ public sealed class ChannelApiTests : IDisposable
 
     private sealed record MembershipPayload(long Id, long ChannelId, string MemberType, string MemberIdentity,
         string MembershipStatus, string WakePolicy);
+
+    private sealed record ChannelMembershipDiscoveryPayload(
+        string MemberIdentity,
+        List<ChannelMembershipDiscoveryItemPayload> Memberships);
+
+    private sealed record ChannelMembershipDiscoveryItemPayload(
+        long ChannelId,
+        string ChannelSlug,
+        string ChannelKind,
+        string? ProjectId,
+        long Id,
+        string MemberType,
+        string MemberIdentity,
+        string MembershipStatus,
+        string WakePolicy,
+        bool CanSend,
+        bool CanReact,
+        bool CanInvite,
+        int CooldownSeconds,
+        int MaxAutoRepliesPerWindow,
+        string? SettingsLabel,
+        string? MembershipPurpose,
+        string CreatedAt,
+        string UpdatedAt,
+        string? LeftAt);
 
     private sealed record AgentCommonsBrakePayload(string Status, long ChannelId, int UpdatedCount, string MembershipStatus, string WakePolicy);
 

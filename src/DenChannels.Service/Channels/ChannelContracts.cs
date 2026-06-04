@@ -125,6 +125,38 @@ public sealed record ChannelMembershipDto(
     string CreatedAt,
     string UpdatedAt);
 
+public sealed record ChannelMembershipDiscoveryRowDto(
+    long ChannelId,
+    string ChannelSlug,
+    string ChannelKind,
+    string? ProjectId,
+    ChannelMembershipDto Membership);
+
+public sealed record ChannelMembershipDiscoveryDto(
+    long ChannelId,
+    string ChannelSlug,
+    string ChannelKind,
+    string? ProjectId,
+    long Id,
+    string MemberType,
+    string MemberIdentity,
+    string MembershipStatus,
+    string WakePolicy,
+    bool CanSend,
+    bool CanReact,
+    bool CanInvite,
+    int CooldownSeconds,
+    int MaxAutoRepliesPerWindow,
+    string? SettingsLabel,
+    string? MembershipPurpose,
+    string CreatedAt,
+    string UpdatedAt,
+    string? LeftAt);
+
+public sealed record ChannelMembershipDiscoveryResponse(
+    string MemberIdentity,
+    IReadOnlyList<ChannelMembershipDiscoveryDto> Memberships);
+
 public sealed record UpsertChannelMembershipRequest(
     string MemberType,
     string MemberIdentity,
