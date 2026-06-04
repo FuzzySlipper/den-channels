@@ -1,13 +1,11 @@
 using System.Text.Json;
 using DenChannels.Service.AgentsOverview;
 using DenChannels.Service.Channels;
+using DenChannels.Service.DirectAgentEvents;
 
 using static DenChannels.Service.MessageKind;
 using static DenChannels.Service.EventRecordingStatus;
 using static DenChannels.Service.SourceKind;
-using CS = DenChannels.Service.ClaimStatus;
-using CompS = DenChannels.Service.CompletionStatus;
-using SupS = DenChannels.Service.SuppressionStatus;
 
 namespace DenChannels.Service.Gateway;
 
@@ -78,14 +76,8 @@ public static class GatewayRoutes
             }
             else
             {
-                var channels = await repository.ListChannelsAsync(projectId, "project_default", 1, cancellationToken);
-                channel = channels.Count > 0 ? channels[0] : null;
-                // Fallback: check channel-project links for shared ops channels
-                if (channel is null && !string.IsNullOrWhiteSpace(projectId))
-                {
-                    var linkedChannels = await repository.GetLinkedChannelsForProjectAsync(projectId, cancellationToken);
-                    channel = linkedChannels.Count > 0 ? linkedChannels[0] : null;
-                }
+                channel = await DirectAgentEventShared.ResolveChannelAsync(
+                    repository, null, projectId, cancellationToken);
                 if (channel is null)
                     return Results.NotFound(new GatewayErrorDto("channel_not_found",
                         $"No default channel found for project '{projectId}'."));
@@ -143,6 +135,7 @@ public static class GatewayRoutes
         // GET /api/gateway/events
         // Compatibility alias: lists channel messages as Gateway event items.
         // The Channels-owned /api/direct-agent-events endpoint is the primary path.
+        // Delegates channel resolution to the shared DirectAgentEventShared resolver.
         // -----------------------------------------------------------------------
         gw.MapGet("/events", async (
             ChannelsRepository repository,
@@ -156,27 +149,17 @@ public static class GatewayRoutes
                 return Results.BadRequest(new GatewayErrorDto("missing_parameter",
                     "Provide channelId or projectId."));
 
-            long resolvedChannelId;
-            if (channelId is not null)
-            {
-                resolvedChannelId = channelId.Value;
-            }
-            else
-            {
-                var channels = await repository.ListChannelsAsync(projectId, "project_default", 1, cancellationToken);
-                if (channels.Count == 0)
-                    return Results.NotFound(new GatewayErrorDto("channel_not_found",
-                        $"No default channel found for project '{projectId}'."));
-                resolvedChannelId = channels[0].Id;
-            }
+            var channel = await DirectAgentEventShared.ResolveChannelAsync(
+                repository, channelId, projectId, cancellationToken);
+            if (channel is null)
+                return Results.NotFound(new GatewayErrorDto("channel_not_found",
+                    channelId is not null
+                        ? $"Channel {channelId} not found."
+                        : $"No default channel found for project '{projectId}'."));
 
-            // Fetch one more than requested to determine HasMore.
-            // Use afterId ?? 0 so no-cursor requests start from the beginning
-            // (ascending cursor mode) rather than the latest-window mode used by
-            // the chat UI (which returns the most-recent N messages).
             var pageSize = Math.Clamp(limit ?? 50, 1, 200);
             var fetched = await repository.ListMessagesAsync(
-                resolvedChannelId, afterId ?? 0L, null, pageSize + 1, cancellationToken);
+                channel.Id, afterId ?? 0L, null, pageSize + 1, cancellationToken);
 
             var hasMore = fetched.Count > pageSize;
             var items = hasMore ? fetched.Take(pageSize).ToList() : fetched.ToList();
@@ -314,9 +297,10 @@ public static class GatewayRoutes
         // -----------------------------------------------------------------------
         // POST /api/gateway/direct-agent-messages
         // Compatibility alias: records a direct-agent wake event and returns
-        // immediately. The Channels-owned /api/direct-agent-events endpoint is
-        // the primary path. Gateway-specific spin-wait and delivery-loop poll
-        // have been removed; this route always returns recorded-pending status.
+        // immediately. Delegates core logic to DirectAgentEventShared helpers.
+        // The Channels-owned /api/direct-agent-events endpoint is the primary path.
+        // Gateway-specific spin-wait and delivery-loop poll have been removed;
+        // this route always returns recorded-pending status.
         // -----------------------------------------------------------------------
         gw.MapPost("/direct-agent-messages", async (
             ChannelsRepository repository,
@@ -339,85 +323,43 @@ public static class GatewayRoutes
                 return Results.BadRequest(new GatewayErrorDto("missing_body",
                     "Provide body for the direct message request."));
 
-            var channel = await ResolveChannelAsync(repository, request.ChannelId, request.ProjectId, cancellationToken);
+            var channel = await DirectAgentEventShared.ResolveChannelAsync(
+                repository, request.ChannelId, request.ProjectId, cancellationToken);
             if (channel is null)
                 return Results.NotFound(new GatewayErrorDto("channel_not_found",
                     request.ChannelId is not null
                         ? $"Channel {request.ChannelId} not found."
                         : $"No default channel found for project '{request.ProjectId}'."));
 
-            var member = await FindActiveAgentMemberAsync(repository, channel.Id, request.MemberIdentity, cancellationToken);
+            var member = await DirectAgentEventShared.FindActiveAgentMemberAsync(
+                repository, channel.Id, request.MemberIdentity, cancellationToken);
             if (member is null)
                 return Results.NotFound(new GatewayErrorDto("member_not_active_agent",
                     $"Active agent member '{request.MemberIdentity}' is not joined to channel {channel.Id}."));
 
             var requestId = $"direct-agent-message:{channel.Id}:{Uri.EscapeDataString(member.MemberIdentity)}:{Guid.NewGuid():N}";
-            var gatewayEventsUrl = $"/api/direct-agent-events?channelId={channel.Id}&afterId=0&limit=50";
             var resolvedSourceProjectId = request.SourceProjectId ?? channel.ProjectId;
-            var metadataPayload = new Dictionary<string, object?>
-            {
-                ["requestId"] = requestId,
-                ["targetMemberIdentity"] = member.MemberIdentity,
-                ["targetMemberType"] = member.MemberType,
-                ["wakePolicy"] = member.WakePolicy,
-                ["deliveryMode"] = "direct_agent_message",
-                ["deliveryStatus"] = "recorded_pending_claim",
-                ["claimStatus"] = CS.Unclaimed,
-                ["completionStatus"] = CompS.Pending,
-                ["suppressionStatus"] = SupS.NotSuppressed,
-                ["evidence"] = new { gatewayEventsUrl }
-            };
-            if (request.SourceProjectId is not null)
-                metadataPayload["sourceProjectId"] = request.SourceProjectId;
-            if (request.TargetProjectId is not null)
-                metadataPayload["targetProjectId"] = request.TargetProjectId;
-            if (request.TargetTaskId is not null)
-                metadataPayload["targetTaskId"] = request.TargetTaskId;
-            if (request.AssignmentId is not null)
-                metadataPayload["assignmentId"] = request.AssignmentId;
-            if (request.WorkerRunId is not null)
-                metadataPayload["workerRunId"] = request.WorkerRunId;
-            if (request.WorkerRole is not null)
-                metadataPayload["workerRole"] = request.WorkerRole;
-            if (request.ProfileIdentity is not null)
-                metadataPayload["profileIdentity"] = request.ProfileIdentity;
-            if (request.PoolMemberId is not null)
-                metadataPayload["poolMemberId"] = request.PoolMemberId;
-            if (request.AgentInstanceId is not null)
-                metadataPayload["agentInstanceId"] = request.AgentInstanceId;
-            if (request.SessionOwnerId is not null)
-                metadataPayload["sessionOwnerId"] = request.SessionOwnerId;
-            if (request.SessionId is not null)
-                metadataPayload["sessionId"] = request.SessionId;
+            var gatewayEventsUrl = $"/api/direct-agent-events?channelId={channel.Id}&afterId=0&limit=50";
+
+            var metadataPayload = DirectAgentEventShared.BuildWakeMetadata(
+                requestId, member, resolvedSourceProjectId,
+                request.SourceProjectId, request.TargetProjectId, request.TargetTaskId,
+                request.AssignmentId, request.WorkerRunId, request.WorkerRole,
+                request.ProfileIdentity, request.PoolMemberId,
+                request.AgentInstanceId, request.SessionOwnerId, request.SessionId,
+                gatewayEventsUrl);
+
             var metadataJson = JsonSerializer.Serialize(metadataPayload);
 
-            var msg = await repository.PostMessageAsync(channel.Id, new PostChannelMessageRequest(
-                SenderType: "user",
-                SenderIdentity: request.SenderIdentity.Trim(),
-                Body: request.Body.Trim(),
-                MessageKind: HumanText,
-                SourceKind: WakeEvent,
-                SourceId: requestId,
-                SourceProjectId: resolvedSourceProjectId,
-                TargetProjectId: request.TargetProjectId,
-                TargetTaskId: request.TargetTaskId,
-                WorkerRunId: request.WorkerRunId,
-                WorkerRole: request.WorkerRole,
-                ProfileIdentity: request.ProfileIdentity,
-                PoolMemberId: request.PoolMemberId,
-                AgentInstanceId: request.AgentInstanceId,
-                SessionOwnerId: request.SessionOwnerId,
-                SessionId: request.SessionId,
-                Summary: $"Direct agent request to {member.MemberIdentity}: recorded, pending claim/completion",
-                DeepLink: null,
-                ThreadRootMessageId: null,
-                ReplyToMessageId: null,
-                MetadataJson: metadataJson,
-                DeliveryRequestId: null,
-                DedupeKey: null,
-                AssignmentId: request.AssignmentId,
-                CheckpointType: request.CheckpointType,
-                CheckpointHandle: request.CheckpointHandle), cancellationToken);
+            var msg = await DirectAgentEventShared.PostWakeMessageAsync(
+                repository, channel.Id,
+                request.SenderIdentity, request.Body, requestId,
+                resolvedSourceProjectId, request.TargetProjectId, request.TargetTaskId,
+                request.WorkerRunId, request.WorkerRole,
+                request.ProfileIdentity, request.PoolMemberId,
+                request.AgentInstanceId, request.SessionOwnerId, request.SessionId,
+                request.AssignmentId, request.CheckpointType, request.CheckpointHandle,
+                member.MemberIdentity, metadataJson, cancellationToken);
 
             var gatewayMessageUrl = $"/api/gateway/messages/{msg.Id}";
             gatewayEventsUrl = $"/api/direct-agent-events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10";
@@ -567,7 +509,7 @@ public static class GatewayRoutes
     }
 
     // -------------------------------------------------------------------------
-    // Helpers
+    // Gateway-specific DTO mapping helpers
     // -------------------------------------------------------------------------
 
     private static GatewayMessageDto ToGatewayMessageDto(ChannelMessageDto m) => new(
@@ -621,37 +563,6 @@ public static class GatewayRoutes
         m.Summary,
         m.Body,
         m.CreatedAt);
-
-    private static async Task<ChannelDto?> ResolveChannelAsync(ChannelsRepository repository, long? channelId,
-        string? projectId, CancellationToken cancellationToken)
-    {
-        if (channelId is not null)
-            return await repository.GetChannelAsync(channelId.Value, cancellationToken);
-
-        var channels = await repository.ListChannelsAsync(projectId, "project_default", 1, cancellationToken);
-        if (channels.Count > 0)
-            return channels[0];
-
-        // Fallback: check channel-project links for shared operations channels
-        if (!string.IsNullOrWhiteSpace(projectId))
-        {
-            var linkedChannels = await repository.GetLinkedChannelsForProjectAsync(projectId, cancellationToken);
-            if (linkedChannels.Count > 0)
-                return linkedChannels[0];
-        }
-
-        return null;
-    }
-
-    private static async Task<ChannelMembershipDto?> FindActiveAgentMemberAsync(ChannelsRepository repository,
-        long channelId, string memberIdentity, CancellationToken cancellationToken)
-    {
-        var members = await repository.ListMembershipsAsync(channelId, 200, cancellationToken);
-        return members.FirstOrDefault(m =>
-            string.Equals(m.MemberIdentity, memberIdentity.Trim(), StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(m.MemberType, "agent", StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(m.MembershipStatus, "active", StringComparison.OrdinalIgnoreCase));
-    }
 
     private static GatewayMemberDto ToGatewayMemberDto(ChannelMembershipDto m) => new(
         m.Id,
@@ -837,28 +748,21 @@ public static class GatewayRoutes
             if (root.TryGetProperty("evidence", out var evidence)
                 && evidence.ValueKind == JsonValueKind.Object)
             {
-                gatewayEventsUrl = TryGetString(evidence, "gatewayEventsUrl");
+                gatewayEventsUrl = DirectAgentEventShared.TryGetString(evidence, "gatewayEventsUrl");
             }
 
             return new GatewayMetadata(
-                TryGetString(root, "requestId"),
-                TryGetString(root, "deliveryStatus"),
-                TryGetString(root, "claimStatus"),
-                TryGetString(root, "completionStatus"),
-                TryGetString(root, "suppressionStatus"),
+                DirectAgentEventShared.TryGetString(root, "requestId"),
+                DirectAgentEventShared.TryGetString(root, "deliveryStatus"),
+                DirectAgentEventShared.TryGetString(root, "claimStatus"),
+                DirectAgentEventShared.TryGetString(root, "completionStatus"),
+                DirectAgentEventShared.TryGetString(root, "suppressionStatus"),
                 gatewayEventsUrl);
         }
         catch (JsonException)
         {
             return new GatewayMetadata(null, null, null, null, null, null);
         }
-    }
-
-    private static string? TryGetString(JsonElement element, string propertyName)
-    {
-        return element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
     }
 
     private sealed record GatewayErrorDto(string Code, string Detail);
@@ -886,7 +790,8 @@ public static class GatewayRoutes
                 "Provide projectId or channelId."));
 
         // Resolve channel for scoped database queries.
-        var channel = await ResolveChannelAsync(repository, channelId, projectId, cancellationToken);
+        var channel = await DirectAgentEventShared.ResolveChannelAsync(
+            repository, channelId, projectId, cancellationToken);
         if (channel is null)
             return Results.NotFound(new GatewayErrorDto("channel_not_found",
                 "No channel found for the given projectId/channelId."));

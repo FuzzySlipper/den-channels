@@ -4,9 +4,6 @@ using DenChannels.Service.Channels;
 using static DenChannels.Service.EventRecordingStatus;
 using static DenChannels.Service.SourceKind;
 using static DenChannels.Service.MessageKind;
-using CS = DenChannels.Service.ClaimStatus;
-using CompS = DenChannels.Service.CompletionStatus;
-using SupS = DenChannels.Service.SuppressionStatus;
 
 namespace DenChannels.Service.DirectAgentEvents;
 
@@ -34,23 +31,17 @@ public static class DirectAgentEventRoutes
                 return Results.BadRequest(new DirectAgentEventErrorDto("missing_parameter",
                     "Provide channelId or projectId."));
 
-            long resolvedChannelId;
-            if (channelId is not null)
-            {
-                resolvedChannelId = channelId.Value;
-            }
-            else
-            {
-                var channels = await repository.ListChannelsAsync(projectId, "project_default", 1, cancellationToken);
-                if (channels.Count == 0)
-                    return Results.NotFound(new DirectAgentEventErrorDto("channel_not_found",
-                        $"No default channel found for project '{projectId}'."));
-                resolvedChannelId = channels[0].Id;
-            }
+            var channel = await DirectAgentEventShared.ResolveChannelAsync(
+                repository, channelId, projectId, cancellationToken);
+            if (channel is null)
+                return Results.NotFound(new DirectAgentEventErrorDto("channel_not_found",
+                    channelId is not null
+                        ? $"Channel {channelId} not found."
+                        : $"No default channel found for project '{projectId}'."));
 
             var pageSize = Math.Clamp(limit ?? 50, 1, 200);
             var fetched = await repository.ListMessagesAsync(
-                resolvedChannelId, afterId ?? 0L, null, pageSize + 1, cancellationToken);
+                channel.Id, afterId ?? 0L, null, pageSize + 1, cancellationToken);
 
             var hasMore = fetched.Count > pageSize;
             var items = hasMore ? fetched.Take(pageSize).ToList() : fetched.ToList();
@@ -94,88 +85,43 @@ public static class DirectAgentEventRoutes
                 return Results.BadRequest(new DirectAgentEventErrorDto("missing_body",
                     "Provide body for the direct message request."));
 
-            var channel = await ResolveChannelAsync(repository, request.ChannelId, request.ProjectId, cancellationToken);
+            var channel = await DirectAgentEventShared.ResolveChannelAsync(
+                repository, request.ChannelId, request.ProjectId, cancellationToken);
             if (channel is null)
                 return Results.NotFound(new DirectAgentEventErrorDto("channel_not_found",
                     request.ChannelId is not null
                         ? $"Channel {request.ChannelId} not found."
                         : $"No default channel found for project '{request.ProjectId}'."));
 
-            var member = await FindActiveAgentMemberAsync(repository, channel.Id, request.MemberIdentity, cancellationToken);
+            var member = await DirectAgentEventShared.FindActiveAgentMemberAsync(
+                repository, channel.Id, request.MemberIdentity, cancellationToken);
             if (member is null)
                 return Results.NotFound(new DirectAgentEventErrorDto("member_not_active_agent",
                     $"Active agent member '{request.MemberIdentity}' is not joined to channel {channel.Id}."));
 
             var requestId = $"direct-agent-message:{channel.Id}:{Uri.EscapeDataString(member.MemberIdentity)}:{Guid.NewGuid():N}";
             var resolvedSourceProjectId = request.SourceProjectId ?? channel.ProjectId;
+            var gatewayEventsUrl = $"/api/direct-agent-events?channelId={channel.Id}&afterId=0&limit=50";
 
-            // Build metadata payload with delivery tracking fields
-            var metadataPayload = new Dictionary<string, object?>
-            {
-                ["requestId"] = requestId,
-                ["targetMemberIdentity"] = member.MemberIdentity,
-                ["targetMemberType"] = member.MemberType,
-                ["wakePolicy"] = member.WakePolicy,
-                ["deliveryMode"] = "direct_agent_message",
-                ["deliveryStatus"] = "recorded_pending_claim",
-                ["claimStatus"] = CS.Unclaimed,
-                ["completionStatus"] = CompS.Pending,
-                ["suppressionStatus"] = SupS.NotSuppressed,
-                ["evidence"] = new { gatewayEventsUrl = $"/api/gateway/events?channelId={channel.Id}&afterId=0&limit=50" }
-            };
-            if (request.SourceProjectId is not null)
-                metadataPayload["sourceProjectId"] = request.SourceProjectId;
-            if (request.TargetProjectId is not null)
-                metadataPayload["targetProjectId"] = request.TargetProjectId;
-            if (request.TargetTaskId is not null)
-                metadataPayload["targetTaskId"] = request.TargetTaskId;
-            if (request.AssignmentId is not null)
-                metadataPayload["assignmentId"] = request.AssignmentId;
-            if (request.WorkerRunId is not null)
-                metadataPayload["workerRunId"] = request.WorkerRunId;
-            if (request.WorkerRole is not null)
-                metadataPayload["workerRole"] = request.WorkerRole;
-            if (request.ProfileIdentity is not null)
-                metadataPayload["profileIdentity"] = request.ProfileIdentity;
-            if (request.PoolMemberId is not null)
-                metadataPayload["poolMemberId"] = request.PoolMemberId;
-            if (request.AgentInstanceId is not null)
-                metadataPayload["agentInstanceId"] = request.AgentInstanceId;
-            if (request.SessionOwnerId is not null)
-                metadataPayload["sessionOwnerId"] = request.SessionOwnerId;
-            if (request.SessionId is not null)
-                metadataPayload["sessionId"] = request.SessionId;
+            var metadataPayload = DirectAgentEventShared.BuildWakeMetadata(
+                requestId, member, resolvedSourceProjectId,
+                request.SourceProjectId, request.TargetProjectId, request.TargetTaskId,
+                request.AssignmentId, request.WorkerRunId, request.WorkerRole,
+                request.ProfileIdentity, request.PoolMemberId,
+                request.AgentInstanceId, request.SessionOwnerId, request.SessionId,
+                gatewayEventsUrl);
+
             var metadataJson = JsonSerializer.Serialize(metadataPayload);
 
-            // Post the durable wake_event message
-            var msg = await repository.PostMessageAsync(channel.Id, new PostChannelMessageRequest(
-                SenderType: "user",
-                SenderIdentity: request.SenderIdentity.Trim(),
-                Body: request.Body.Trim(),
-                MessageKind: HumanText,
-                SourceKind: WakeEvent,
-                SourceId: requestId,
-                SourceProjectId: resolvedSourceProjectId,
-                TargetProjectId: request.TargetProjectId,
-                TargetTaskId: request.TargetTaskId,
-                WorkerRunId: request.WorkerRunId,
-                WorkerRole: request.WorkerRole,
-                ProfileIdentity: request.ProfileIdentity,
-                PoolMemberId: request.PoolMemberId,
-                AgentInstanceId: request.AgentInstanceId,
-                SessionOwnerId: request.SessionOwnerId,
-                SessionId: request.SessionId,
-                Summary: $"Direct agent request to {member.MemberIdentity}: recorded, pending claim/completion",
-                DeepLink: null,
-                ThreadRootMessageId: null,
-                ReplyToMessageId: null,
-                MetadataJson: metadataJson,
-                DeliveryRequestId: null,
-                DedupeKey: null,
-                AssignmentId: request.AssignmentId,
-                CheckpointType: request.CheckpointType,
-                CheckpointHandle: request.CheckpointHandle), cancellationToken);
-
+            var msg = await DirectAgentEventShared.PostWakeMessageAsync(
+                repository, channel.Id,
+                request.SenderIdentity, request.Body, requestId,
+                resolvedSourceProjectId, request.TargetProjectId, request.TargetTaskId,
+                request.WorkerRunId, request.WorkerRole,
+                request.ProfileIdentity, request.PoolMemberId,
+                request.AgentInstanceId, request.SessionOwnerId, request.SessionId,
+                request.AssignmentId, request.CheckpointType, request.CheckpointHandle,
+                member.MemberIdentity, metadataJson, cancellationToken);
 
             var eventUrl = $"/api/direct-agent-events/{msg.Id}";
             var eventsUrl = $"/api/direct-agent-events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10";
@@ -224,10 +170,11 @@ public static class DirectAgentEventRoutes
                     $"Message {eventId} is not a direct-agent event."));
 
             // Extract direct-agent tracking fields from metadata if present.
-            var (deliveryStatus, claimStatus, completionStatus, wakePolicy) = ExtractDirectAgentMetadata(msg.MetadataJson);
+            var (deliveryStatus, claimStatus, completionStatus, wakePolicy) =
+                DirectAgentEventShared.ExtractDirectAgentMetadata(msg.MetadataJson);
 
             // Resolve member identity from sourceId pattern: direct-agent-message:{channelId}:{memberIdentity}:{guid}
-            var memberIdentity = ExtractMemberIdentity(msg.SourceId);
+            var memberIdentity = DirectAgentEventShared.ExtractMemberIdentity(msg.SourceId);
 
             return Results.Ok(new DirectAgentEventReadbackDto(
                 EventId: msg.Id,
@@ -259,78 +206,6 @@ public static class DirectAgentEventRoutes
         });
 
         return group;
-    }
-
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
-
-    private static async Task<ChannelDto?> ResolveChannelAsync(ChannelsRepository repository, long? channelId,
-        string? projectId, CancellationToken cancellationToken)
-    {
-        if (channelId is not null)
-            return await repository.GetChannelAsync(channelId.Value, cancellationToken);
-
-        var channels = await repository.ListChannelsAsync(projectId, "project_default", 1, cancellationToken);
-        return channels.Count > 0 ? channels[0] : null;
-    }
-
-    private static async Task<ChannelMembershipDto?> FindActiveAgentMemberAsync(ChannelsRepository repository,
-        long channelId, string memberIdentity, CancellationToken cancellationToken)
-    {
-        var members = await repository.ListMembershipsAsync(channelId, 200, cancellationToken);
-        return members.FirstOrDefault(m =>
-            string.Equals(m.MemberIdentity, memberIdentity.Trim(), StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(m.MemberType, "agent", StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(m.MembershipStatus, "active", StringComparison.OrdinalIgnoreCase));
-    }
-
-    /// <summary>
-    /// Extract direct-agent tracking fields from the wake_event metadata JSON.
-    /// Returns defaults if metadata is missing or malformed.
-    /// </summary>
-    private static (string? deliveryStatus, string? claimStatus, string? completionStatus, string? wakePolicy)
-        ExtractDirectAgentMetadata(string? metadataJson)
-    {
-        if (string.IsNullOrWhiteSpace(metadataJson))
-            return (null, null, null, null);
-
-        try
-        {
-            using var doc = JsonDocument.Parse(metadataJson);
-            var root = doc.RootElement;
-            return (
-                TryGetString(root, "deliveryStatus"),
-                TryGetString(root, "claimStatus"),
-                TryGetString(root, "completionStatus"),
-                TryGetString(root, "wakePolicy"));
-        }
-        catch (JsonException)
-        {
-            return (null, null, null, null);
-        }
-    }
-
-    /// <summary>
-    /// Extract member identity from the sourceId pattern: direct-agent-message:{channelId}:{memberIdentity}:{guid}
-    /// </summary>
-    private static string? ExtractMemberIdentity(string? sourceId)
-    {
-        if (string.IsNullOrWhiteSpace(sourceId) || !sourceId.StartsWith("direct-agent-message:", StringComparison.Ordinal))
-            return null;
-
-        var parts = sourceId.Split(':');
-        if (parts.Length >= 3)
-            return Uri.UnescapeDataString(parts[2]);
-
-        return null;
-    }
-
-    private static string? TryGetString(JsonElement element, string propertyName)
-    {
-        return element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
     }
 
     private sealed record DirectAgentEventErrorDto(string Code, string Detail);
