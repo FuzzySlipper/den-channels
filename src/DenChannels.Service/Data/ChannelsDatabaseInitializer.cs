@@ -952,7 +952,7 @@ public sealed class ChannelsDatabaseInitializer
     private const string DenSystemChannelSeedSql = """
         INSERT INTO channels(slug, display_name, kind, created_by, visibility, settings_json)
         VALUES ('den-system', '#den-system', 'system', 'system', 'normal',
-                '{"systemManaged":true,"channelRole":"den_system_ops","description":"Shared operations channel for Den constellation projects (den-core, den-mcp, den-channels, etc.)."}')
+                '{"systemManaged":true,"channelRole":"den_system_ops","description":"Shared operations channel for Den constellation projects (den-core, den-mcp, den-channels, den-host, etc.)."}')
         ON CONFLICT(slug) DO UPDATE SET
             display_name = '#den-system',
             kind = 'system',
@@ -974,6 +974,42 @@ public sealed class ChannelsDatabaseInitializer
 
         INSERT INTO channel_project_links(channel_id, project_id, relation_kind, is_primary)
         SELECT c.id, 'den-channels', 'linked', 0
+        FROM channels c WHERE c.slug = 'den-system'
+        ON CONFLICT(channel_id, project_id) DO UPDATE SET
+            relation_kind = excluded.relation_kind;
+
+        INSERT INTO channel_project_links(channel_id, project_id, relation_kind, is_primary)
+        SELECT c.id, 'den-host', 'linked', 0
+        FROM channels c WHERE c.slug = 'den-system'
+        ON CONFLICT(channel_id, project_id) DO UPDATE SET
+            relation_kind = excluded.relation_kind;
+
+        INSERT INTO channel_project_links(channel_id, project_id, relation_kind, is_primary)
+        SELECT c.id, 'den-gateway', 'linked', 0
+        FROM channels c WHERE c.slug = 'den-system'
+        ON CONFLICT(channel_id, project_id) DO UPDATE SET
+            relation_kind = excluded.relation_kind;
+
+        INSERT INTO channel_project_links(channel_id, project_id, relation_kind, is_primary)
+        SELECT c.id, 'den-desktop', 'linked', 0
+        FROM channels c WHERE c.slug = 'den-system'
+        ON CONFLICT(channel_id, project_id) DO UPDATE SET
+            relation_kind = excluded.relation_kind;
+
+        INSERT INTO channel_project_links(channel_id, project_id, relation_kind, is_primary)
+        SELECT c.id, 'den-hermes-bridge', 'linked', 0
+        FROM channels c WHERE c.slug = 'den-system'
+        ON CONFLICT(channel_id, project_id) DO UPDATE SET
+            relation_kind = excluded.relation_kind;
+
+        INSERT INTO channel_project_links(channel_id, project_id, relation_kind, is_primary)
+        SELECT c.id, 'den-network', 'linked', 0
+        FROM channels c WHERE c.slug = 'den-system'
+        ON CONFLICT(channel_id, project_id) DO UPDATE SET
+            relation_kind = excluded.relation_kind;
+
+        INSERT INTO channel_project_links(channel_id, project_id, relation_kind, is_primary)
+        SELECT c.id, 'den-web', 'linked', 0
         FROM channels c WHERE c.slug = 'den-system'
         ON CONFLICT(channel_id, project_id) DO UPDATE SET
             relation_kind = excluded.relation_kind;
