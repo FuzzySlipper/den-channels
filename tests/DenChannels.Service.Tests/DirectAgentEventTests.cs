@@ -63,7 +63,7 @@ public sealed class DirectAgentEventTests : IDisposable
         Assert.Equal("direct_questions_only", payload.WakePolicy);
         Assert.StartsWith($"direct-agent-message:{channel.Id}:test-runner:", payload.RequestId);
         Assert.Contains($"/api/direct-agent-events/{payload.EventId}", payload.EventUrl);
-        Assert.Contains($"/api/gateway/events?channelId={channel.Id}", payload.EventsUrl);
+        Assert.Contains($"/api/direct-agent-events?channelId={channel.Id}", payload.EventsUrl);
         Assert.Contains("recorded", payload.EvidenceSummary);
     }
 
@@ -541,7 +541,7 @@ public sealed class DirectAgentEventTests : IDisposable
         var payload = await response.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
         Assert.NotNull(payload);
         Assert.Equal("recorded", payload.Status);
-        Assert.Contains("no Gateway claim wait", payload.EvidenceSummary);
+        Assert.Contains("wake_event recorded", payload.EvidenceSummary);
         Assert.False(payload.TimedOut);
     }
 

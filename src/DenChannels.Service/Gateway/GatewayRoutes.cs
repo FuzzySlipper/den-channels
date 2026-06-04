@@ -1,11 +1,10 @@
 using System.Text.Json;
-using DenChannels.Service.Channels;
 using DenChannels.Service.AgentsOverview;
+using DenChannels.Service.Channels;
 
 using static DenChannels.Service.MessageKind;
 using static DenChannels.Service.EventRecordingStatus;
 using static DenChannels.Service.SourceKind;
-using static DenChannels.Service.WaitForTarget;
 using CS = DenChannels.Service.ClaimStatus;
 using CompS = DenChannels.Service.CompletionStatus;
 using SupS = DenChannels.Service.SuppressionStatus;
@@ -26,25 +25,25 @@ public static class GatewayRoutes
 
         // -----------------------------------------------------------------------
         // GET /api/gateway/health
+        // Compatibility alias introspection endpoint.
         // -----------------------------------------------------------------------
         gw.MapGet("/health", () => Results.Ok(new GatewayHealthDto(
             Service: "den-channels",
             Status: "ready",
             Endpoints:
             [
-                "GET /api/gateway/health",
+                "GET /api/gateway/health (compatibility alias)",
                 "GET /api/gateway/memberships?channelId={id}",
                 "GET /api/gateway/memberships?projectId={projectId}",
                 "GET /api/gateway/messages/{messageId}",
                 "GET /api/gateway/sources/{sourceKind}/{sourceId}?sourceProjectId={projectId}",
-                "GET /api/gateway/events?channelId={id}&afterId={id}&limit={n}",
-                "GET /api/gateway/events?projectId={projectId}&afterId={id}&limit={n}",
+                "GET /api/gateway/events?channelId={id}&afterId={id}&limit={n} (compatibility alias)",
+                "GET /api/gateway/events?projectId={projectId}&afterId={id}&limit={n} (compatibility alias)",
                 "POST /api/gateway/system-messages",
-                "POST /api/gateway/channel-activity-events",
-                "POST /api/gateway/direct-agent-messages",
+                "POST /api/gateway/direct-agent-messages (compatibility alias)",
                 "POST /api/direct-agent-events",
                 "GET /api/direct-agent-events/{eventId}",
-                "POST /api/gateway/test-wakes",
+                "POST /api/gateway/test-wakes (compatibility alias)",
                 "GET /api/gateway/assignments/{assignmentId}/trace",
                 "GET /api/channels/{channelId}/linked-projects",
                 "GET /api/projects/{projectId}/linked-channels",
@@ -144,6 +143,8 @@ public static class GatewayRoutes
 
         // -----------------------------------------------------------------------
         // GET /api/gateway/events
+        // Compatibility alias: lists channel messages as Gateway event items.
+        // The Channels-owned /api/direct-agent-events endpoint is the primary path.
         // -----------------------------------------------------------------------
         gw.MapGet("/events", async (
             ChannelsRepository repository,
@@ -294,61 +295,14 @@ public static class GatewayRoutes
 
 
         // -----------------------------------------------------------------------
-        // POST /api/gateway/channel-activity-events
-        // Non-waking progress/activity record for Gateway/Hermes delivery runs.
-        // -----------------------------------------------------------------------
-        gw.MapPost("/channel-activity-events", async (
-            ChannelsRepository repository,
-            AppendChannelActivityEventRequest request,
-            long? channelId,
-            string? projectId,
-            CancellationToken cancellationToken) =>
-        {
-            if (channelId is null && string.IsNullOrWhiteSpace(projectId) && string.IsNullOrWhiteSpace(request.ProjectId))
-                return Results.BadRequest(new GatewayErrorDto("missing_parameter",
-                    "Provide channelId, projectId, or request.projectId."));
-
-            long resolvedChannelId;
-            if (channelId is not null)
-            {
-                var channel = await repository.GetChannelAsync(channelId.Value, cancellationToken);
-                if (channel is null)
-                    return Results.NotFound(new GatewayErrorDto("channel_not_found",
-                        $"Channel {channelId} not found."));
-                resolvedChannelId = channel.Id;
-            }
-            else
-            {
-                var resolvedProjectId = string.IsNullOrWhiteSpace(projectId) ? request.ProjectId : projectId;
-                var existing = await repository.ListChannelsAsync(resolvedProjectId, "project_default", 1, cancellationToken);
-                ChannelDto defaultChannel;
-                if (existing.Count > 0)
-                {
-                    defaultChannel = existing[0];
-                }
-                else
-                {
-                    defaultChannel = await repository.EnsureProjectDefaultChannelAsync(
-                        resolvedProjectId!, null, cancellationToken);
-                }
-                resolvedChannelId = defaultChannel.Id;
-            }
-
-            var activityEvent = await repository.AppendActivityEventAsync(resolvedChannelId, request, cancellationToken);
-            return Results.Created($"/api/channels/{resolvedChannelId}/activity-events/{activityEvent.Id}",
-                new { status = Recorded, activityEvent });
-        });
-
-        // -----------------------------------------------------------------------
         // POST /api/gateway/direct-agent-messages
-        // Compatibility alias: delegates durable recording to the Channels-owned
-        // /api/direct-agent-events endpoint shape. Gateway claim/spin-wait is now
-        // gated behind an explicit non-default waitFor value (task #1902).
-        // When waitFor is null/unset, returns immediately like the Channels-owned route.
+        // Compatibility alias: records a direct-agent wake event and returns
+        // immediately. The Channels-owned /api/direct-agent-events endpoint is
+        // the primary path. Gateway-specific spin-wait and delivery-loop poll
+        // have been removed; this route always returns recorded-pending status.
         // -----------------------------------------------------------------------
         gw.MapPost("/direct-agent-messages", async (
             ChannelsRepository repository,
-            GatewayStateClient gatewayStateClient,
             PostGatewayDirectAgentMessageRequest request,
             CancellationToken cancellationToken) =>
         {
@@ -381,7 +335,7 @@ public static class GatewayRoutes
                     $"Active agent member '{request.MemberIdentity}' is not joined to channel {channel.Id}."));
 
             var requestId = $"direct-agent-message:{channel.Id}:{Uri.EscapeDataString(member.MemberIdentity)}:{Guid.NewGuid():N}";
-            var gatewayEventsUrl = $"/api/gateway/events?channelId={channel.Id}&afterId=0&limit=50";
+            var gatewayEventsUrl = $"/api/direct-agent-events?channelId={channel.Id}&afterId=0&limit=50";
             var resolvedSourceProjectId = request.SourceProjectId ?? channel.ProjectId;
             var metadataPayload = new Dictionary<string, object?>
             {
@@ -449,48 +403,14 @@ public static class GatewayRoutes
                 CheckpointHandle: request.CheckpointHandle), cancellationToken);
 
             var gatewayMessageUrl = $"/api/gateway/messages/{msg.Id}";
-            gatewayEventsUrl = $"/api/gateway/events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10";
+            gatewayEventsUrl = $"/api/direct-agent-events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10";
 
-            // Gateway claim/spin-wait is gated behind an explicit waitFor value (task #1902).
-            // When waitFor is null/unset, the endpoint returns immediately after durable
-            // recording, matching the Channels-owned /api/direct-agent-events behavior.
-            // Only callers that explicitly set waitFor=claim/ack/completion will trigger
-            // the legacy Gateway poll + spin-wait path.
-            var deliveryProjectId = channel.ProjectId ?? request.ProjectId;
-            var waitForTarget = GatewayDirectAgentDeliveryStatus.NormalizeWaitFor(request.WaitFor);
-            var triggeredLegacySpinWait = waitForTarget != WaitForTarget.None;
-
-            DirectAgentDeliveryObservation deliveryObservation;
-            GatewayDeliveryLoopPollObservation? pollObservation = null;
-
-            if (triggeredLegacySpinWait)
-            {
-                // Legacy path: trigger Gateway delivery-loop poll + spin-wait
-                pollObservation = await gatewayStateClient.TriggerDeliveryLoopPollAsync(
-                    deliveryProjectId,
-                    cancellationToken: cancellationToken);
-                deliveryObservation = await gatewayStateClient.WaitForDirectAgentDeliveryStatusAsync(
-                    deliveryProjectId,
-                    member.MemberIdentity,
-                    requestId,
-                    request.WaitFor,
-                    request.TimeoutMs,
-                    cancellationToken);
-            }
-            else
-            {
-                // New default: return immediately with recorded status.
-                // No Gateway claim wait was requested.
-                deliveryObservation = DirectAgentDeliveryObservation.RecordedPending(
-                    "Direct agent wake_event recorded; no Gateway claim wait requested.");
-            }
+            // Always return recorded-pending; no Gateway spin-wait.
+            var deliveryObservation = DirectAgentDeliveryObservation.RecordedPending(
+                "Direct agent wake_event recorded (Gateway compatibility alias).");
 
             var evidenceSummary = deliveryObservation.EvidenceSummary
-                ?? "Direct agent wake_event recorded; Gateway evidence URL exposes delivery request status and follow-up claim/completion/suppression events.";
-            if (pollObservation is not null && !pollObservation.Triggered && !string.IsNullOrWhiteSpace(pollObservation.Message))
-            {
-                evidenceSummary = $"{evidenceSummary} Delivery-loop trigger note: {pollObservation.Message}";
-            }
+                ?? "Direct agent wake_event recorded (Gateway compatibility alias).";
 
             return Results.Created(gatewayMessageUrl, new GatewayDirectAgentMessageDto(
                 Status: Recorded,
@@ -514,12 +434,12 @@ public static class GatewayRoutes
                 AgentInstanceId: request.AgentInstanceId,
                 SessionOwnerId: request.SessionOwnerId,
                 SessionId: request.SessionId,
-                DeliveryRequestId: deliveryObservation.DeliveryRequestId,
-                AttemptId: deliveryObservation.AttemptId,
-                GatewayDeliveryState: deliveryObservation.GatewayDeliveryState,
-                GatewayAttemptStatus: deliveryObservation.GatewayAttemptStatus,
-                TimedOut: deliveryObservation.TimedOut,
-                GatewayUnavailable: deliveryObservation.GatewayUnavailable,
+                DeliveryRequestId: null,
+                AttemptId: null,
+                GatewayDeliveryState: null,
+                GatewayAttemptStatus: null,
+                TimedOut: false,
+                GatewayUnavailable: false,
                 GatewayMessageUrl: gatewayMessageUrl,
                 GatewayEventsUrl: gatewayEventsUrl,
                 EvidenceSummary: evidenceSummary));
@@ -527,6 +447,7 @@ public static class GatewayRoutes
 
         // -----------------------------------------------------------------------
         // POST /api/gateway/test-wakes
+        // Compatibility alias for ad-hoc wake probe requests.
         // -----------------------------------------------------------------------
         gw.MapPost("/test-wakes", async (
             ChannelsRepository repository,
@@ -604,7 +525,7 @@ public static class GatewayRoutes
                 MessageId: msg.Id,
                 ChannelId: channel.Id,
                 GatewayMessageUrl: $"/api/gateway/messages/{msg.Id}",
-                GatewayEventsUrl: $"/api/gateway/events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10",
+                GatewayEventsUrl: $"/api/direct-agent-events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10",
                 EvidenceSummary: "Synthetic wake_event recorded in Den Channels; Gateway/bridge delivery, claim, complete, or fail evidence appears as follow-up channel/gateway events."));
         });
 
@@ -834,7 +755,7 @@ public static class GatewayRoutes
 
             var gatewayMessageUrl = $"/api/gateway/messages/{message.Id}";
             var gatewayEventsUrl = metadata.GatewayEventsUrl
-                                   ?? $"/api/gateway/events?channelId={channelId}&afterId={Math.Max(0, message.Id - 1)}&limit=10";
+                                   ?? $"/api/direct-agent-events?channelId={channelId}&afterId={Math.Max(0, message.Id - 1)}&limit=10";
 
             var evidenceParts = new List<string>();
             if (!string.IsNullOrWhiteSpace(deliveryRequestId)) evidenceParts.Add($"deliveryRequestId: {deliveryRequestId}");

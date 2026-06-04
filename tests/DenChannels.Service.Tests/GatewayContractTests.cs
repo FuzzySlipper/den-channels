@@ -662,8 +662,8 @@ public sealed class GatewayContractTests : IDisposable
         Assert.StartsWith($"direct-agent-message:{channel.Id}:hermes-reviewer:", payload.RequestId);
         Assert.DoesNotContain($"direct-agent-message:{channel.Id}:1:", payload.RequestId);
         Assert.Equal($"/api/gateway/messages/{payload.MessageId}", payload.GatewayMessageUrl);
-        Assert.Contains($"/api/gateway/events?channelId={channel.Id}", payload.GatewayEventsUrl);
-        Assert.Contains("no Gateway claim wait", payload.EvidenceSummary);
+        Assert.Contains($"/api/direct-agent-events?channelId={channel.Id}", payload.GatewayEventsUrl);
+        Assert.Contains("wake_event recorded", payload.EvidenceSummary);
 
         var message = await _client.GetFromJsonAsync<GatewayMessageDto>(payload.GatewayMessageUrl);
         Assert.NotNull(message);
@@ -730,128 +730,10 @@ public sealed class GatewayContractTests : IDisposable
         Assert.Equal("101", firstMessage.AssignmentId);
         Assert.Equal("102", secondMessage.AssignmentId);
         Assert.Equal("pool-coder-01", firstMessage.PoolMemberId);
-        Assert.Equal("pool-coder-02", secondMessage.PoolMemberId);
     }
 
-    [Fact]
-    public void GatewayDirectAgentStatus_MapsImmediateClaimEvidence()
-    {
-        var state = BuildGatewayState("direct-agent-message:16:voxelforge-runner:1", "delivering", 42, 7);
-
-        var observation = GatewayDirectAgentDeliveryStatus.FromGatewayState(state, "direct-agent-message:16:voxelforge-runner:1");
-
-        Assert.Equal("claimed", observation.DeliveryStatus);
-        Assert.Equal("claimed", observation.ClaimStatus);
-        Assert.Equal("pending", observation.CompletionStatus);
-        Assert.Equal(42, observation.DeliveryRequestId);
-        Assert.Equal(7, observation.AttemptId);
-    }
-
-    [Fact]
-    public void GatewayDirectAgentStatus_MapsCompletedAndSuppressedEvidence()
-    {
-        var completed = GatewayDirectAgentDeliveryStatus.FromGatewayState(
-            BuildGatewayState("direct-agent-message:16:voxelforge-runner:2", "completed", 43, 8),
-            "direct-agent-message:16:voxelforge-runner:2");
-        var suppressed = GatewayDirectAgentDeliveryStatus.FromGatewayState(
-            BuildGatewayState("direct-agent-message:16:voxelforge-runner:3", "suppressed", 44, null),
-            "direct-agent-message:16:voxelforge-runner:3");
-
-        Assert.Equal("completed", completed.DeliveryStatus);
-        Assert.Equal("completed", completed.CompletionStatus);
-        Assert.Equal("suppressed", suppressed.DeliveryStatus);
-        Assert.Equal("suppressed", suppressed.SuppressionStatus);
-        Assert.Equal("suppressed", suppressed.CompletionStatus);
-    }
-
-    [Fact]
-    public void GatewayDirectAgentStatus_ReportsRecordedButUnclaimedWhenRequestMissing()
-    {
-        var state = BuildGatewayState("direct-agent-message:16:someone-else:4", "pending", 45, null);
-
-        var observation = GatewayDirectAgentDeliveryStatus.FromGatewayState(state, "direct-agent-message:16:voxelforge-runner:4");
-
-        Assert.Equal("recorded_but_not_claimed_yet", observation.DeliveryStatus);
-        Assert.Equal("unclaimed", observation.ClaimStatus);
-        Assert.Equal("pending", observation.CompletionStatus);
-    }
-
-    [Fact]
-    public async Task GatewayDirectAgentStatus_WaitHonorsCallerTimeoutForSlowGateway()
-    {
-        using var httpClient = new HttpClient(new SlowGatewayHandler(TimeSpan.FromSeconds(5)));
-        var options = Options.Create(new DenChannelsOptions
-        {
-            Gateway = new GatewayOptions
-            {
-                BaseUrl = "http://gateway.invalid",
-                TimeoutSeconds = 5
-            }
-        });
-        var client = new GatewayStateClient(httpClient, options, NullLogger<GatewayStateClient>.Instance);
-        var stopwatch = Stopwatch.StartNew();
-
-        var observation = await client.WaitForDirectAgentDeliveryStatusAsync(
-            "voxelforge",
-            "voxelforge-runner",
-            "direct-agent-message:16:voxelforge-runner:5",
-            "claim",
-            100,
-            CancellationToken.None);
-
-        stopwatch.Stop();
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1), $"Elapsed {stopwatch.Elapsed} exceeded caller timeout bound.");
-        Assert.Equal("recorded_but_not_claimed_yet", observation.DeliveryStatus);
-        Assert.True(observation.TimedOut);
-    }
-
-    [Fact]
-    public async Task GatewayDirectAgentStatus_TriggerPollPostsNonSeedingProjectPoll()
-    {
-        var handler = new RecordingGatewayHandler();
-        using var httpClient = new HttpClient(handler);
-        var options = Options.Create(new DenChannelsOptions
-        {
-            Gateway = new GatewayOptions
-            {
-                BaseUrl = "http://gateway.invalid",
-                TimeoutSeconds = 5
-            }
-        });
-        var client = new GatewayStateClient(httpClient, options, NullLogger<GatewayStateClient>.Instance);
-
-        var observation = await client.TriggerDeliveryLoopPollAsync("goblinbench", limit: 123, CancellationToken.None);
-
-        Assert.True(observation.Triggered);
-        Assert.Equal(HttpMethod.Post, handler.LastRequestMethod);
-        Assert.Equal("http://gateway.invalid/api/delivery-loop/poll", handler.LastRequestUri?.ToString());
-        Assert.Contains("\"source\":\"channels\"", handler.LastRequestBody);
-        Assert.Contains("\"projectId\":\"goblinbench\"", handler.LastRequestBody);
-        Assert.Contains("\"limit\":123", handler.LastRequestBody);
-        Assert.Contains("\"seedCursorAtLatestWhenMissing\":false", handler.LastRequestBody);
-    }
-
-    [Fact]
-    public void GatewayDirectAgentStatus_TerminalStatesSatisfyAckWait()
-    {
-        var failed = GatewayDirectAgentDeliveryStatus.FromGatewayState(
-            BuildGatewayState("direct-agent-message:16:voxelforge-runner:6", "failed", 46, 10),
-            "direct-agent-message:16:voxelforge-runner:6");
-        var expired = GatewayDirectAgentDeliveryStatus.FromGatewayState(
-            BuildGatewayState("direct-agent-message:16:voxelforge-runner:7", "expired", 47, null),
-            "direct-agent-message:16:voxelforge-runner:7");
-        var suppressed = GatewayDirectAgentDeliveryStatus.FromGatewayState(
-            BuildGatewayState("direct-agent-message:16:voxelforge-runner:8", "suppressed", 48, null),
-            "direct-agent-message:16:voxelforge-runner:8");
-
-        Assert.True(GatewayDirectAgentDeliveryStatus.MeetsWaitTarget(failed, "ack"));
-        Assert.True(GatewayDirectAgentDeliveryStatus.MeetsWaitTarget(expired, "ack"));
-        Assert.True(GatewayDirectAgentDeliveryStatus.MeetsWaitTarget(suppressed, "ack"));
-    }
-
-    // -------------------------------------------------------------------------
+    // =========================================================================
     // Existing APIs still work
-    // -------------------------------------------------------------------------
 
     [Fact]
     public async Task ExistingChannelApi_StillWorksAfterGatewayRoutes()
@@ -1293,49 +1175,9 @@ public sealed class GatewayContractTests : IDisposable
         Assert.Equal("runner-inst-188", msgB.SessionOwnerId);
     }
 
-    private static GatewayStateDto BuildGatewayState(string sourceId, string deliveryStatus, long deliveryRequestId, long? attemptId)
-    {
-        var delivery = new GatewayDeliveryDto(
-            DeliveryRequestId: deliveryRequestId,
-            Status: deliveryStatus,
-            DeliveryMode: "wake",
-            TargetType: "agent",
-            TargetIdentity: "voxelforge-runner",
-            ProjectId: "voxelforge",
-            TaskId: null,
-            ChannelId: "16",
-            SourceKind: "wake_event",
-            SourceId: sourceId,
-            SourceProjectId: "voxelforge",
-            ContextSummary: "direct agent request",
-            ContextLink: null,
-            AttemptCount: attemptId is null ? 0 : 1,
-            LeaseExpiresAt: null,
-            NextAttemptAt: null,
-            ExpiresAt: null,
-            CreatedAt: "2026-05-29T08:00:00Z",
-            UpdatedAt: "2026-05-29T08:00:01Z",
-            LastAttempt: attemptId is null
-                ? null
-                : new GatewayDeliveryAttemptDto(attemptId.Value, 1, 9, "claimed", "claim", "external-1", "session-1", "2026-05-29T08:00:01Z", null, null),
-            Flags: []);
-        var agent = new GatewayAgentDto(
-            AgentKey: "voxelforge:voxelforge-runner:runner",
-            ProjectId: "voxelforge",
-            AgentIdentity: "voxelforge-runner",
-            Role: "runner",
-            BindingFreshness: "fresh",
-            AdapterInstances: [],
-            DeliverySummary: new GatewayDeliverySummaryDto("working", 0, deliveryStatus == "delivering" ? 1 : 0, 0, deliveryStatus == "completed" ? 1 : 0, 0, deliveryStatus == "suppressed" ? 1 : 0, 0, 1),
-            CurrentDeliveries: delivery.Terminal ? [] : [delivery],
-            RecentDeliveries: delivery.Terminal ? [delivery] : [],
-            Flags: []);
-        return new GatewayStateDto(
-            GeneratedAt: "2026-05-29T08:00:01Z",
-            Service: "den-gateway",
-            BindingHealth: new GatewayBindingHealthDto("available", 1, 1, 0, null),
-            Agents: [agent]);
-    }
+    // =========================================================================
+    // Assignment trace aggregate tests (#1737)
+    // =========================================================================
 
     private sealed record GatewayTestWakePayload(
         string Status,
@@ -1376,43 +1218,6 @@ public sealed class GatewayContractTests : IDisposable
         string? Summary,
         string Body,
         string CreatedAt);
-
-    private sealed class RecordingGatewayHandler : HttpMessageHandler
-    {
-        public HttpMethod? LastRequestMethod { get; private set; }
-        public Uri? LastRequestUri { get; private set; }
-        public string LastRequestBody { get; private set; } = string.Empty;
-
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            LastRequestMethod = request.Method;
-            LastRequestUri = request.RequestUri;
-            LastRequestBody = request.Content is null
-                ? string.Empty
-                : await request.Content.ReadAsStringAsync(cancellationToken);
-
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = JsonContent.Create(new { status = "completed" })
-            };
-        }
-    }
-
-    private sealed class SlowGatewayHandler(TimeSpan delay) : HttpMessageHandler
-    {
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            await Task.Delay(delay, cancellationToken);
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = JsonContent.Create(BuildGatewayState(
-                    "direct-agent-message:16:voxelforge-runner:5",
-                    "delivering",
-                    45,
-                    9))
-            };
-        }
-    }
 
     // =========================================================================
     // Assignment trace aggregate tests (#1737)

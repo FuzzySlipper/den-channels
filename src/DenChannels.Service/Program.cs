@@ -26,10 +26,6 @@ builder.Services.AddSingleton<ChannelsRepository>();
 builder.Services.AddHttpClient<IDenCoreProjectClient, DenCoreProjectClient>();
 builder.Services.AddSingleton<ProjectChannelSyncService>();
 builder.Services.AddSingleton<MirrorSummaryIngestionService>();
-builder.Services.AddHttpClient<GatewayStateClient>(client =>
-{
-    // Base address is set per-request in the client; this just registers DI
-});
 builder.Services.AddHttpClient<IWorkerPoolStateClient, WorkerPoolStateClient>(client =>
 {
     // Base address is set per-request in the client; this just registers DI

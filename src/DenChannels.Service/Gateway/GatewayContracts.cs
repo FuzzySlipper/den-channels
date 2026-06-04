@@ -2,6 +2,41 @@ using DenChannels.Service.Channels;
 
 namespace DenChannels.Service.Gateway;
 
+using DS = DenChannels.Service.DeliveryStatus;
+using CS = DenChannels.Service.ClaimStatus;
+using CompS = DenChannels.Service.CompletionStatus;
+using SupS = DenChannels.Service.SuppressionStatus;
+
+/// <summary>
+/// Bounded observation of delivery state for a Channels direct-agent message.
+/// This is intentionally an observation, not final task completion truth.
+/// </summary>
+public sealed record DirectAgentDeliveryObservation(
+    string DeliveryStatus,
+    string ClaimStatus,
+    string CompletionStatus,
+    string SuppressionStatus,
+    long? DeliveryRequestId = null,
+    long? AttemptId = null,
+    string? GatewayDeliveryState = null,
+    string? GatewayAttemptStatus = null,
+    string? EvidenceSummary = null,
+    bool TimedOut = false,
+    bool GatewayUnavailable = false)
+{
+    public static DirectAgentDeliveryObservation RecordedPending(string? evidenceSummary = null, bool gatewayUnavailable = false) =>
+        new(
+            DeliveryStatus: DS.RecordedNotClaimedYet,
+            ClaimStatus: CS.Unclaimed,
+            CompletionStatus: CompS.Pending,
+            SuppressionStatus: SupS.NotSuppressed,
+            EvidenceSummary: evidenceSummary ?? "Direct agent wake_event recorded; no delivery request/claim evidence observed yet.",
+            GatewayUnavailable: gatewayUnavailable);
+
+    public static DirectAgentDeliveryObservation Timeout(string? evidenceSummary = null) =>
+        RecordedPending(evidenceSummary ?? "Direct agent wake_event recorded; timed out waiting for delivery claim evidence.") with { TimedOut = true };
+}
+
 /// <summary>Machine-readable Gateway dependency probe response.</summary>
 public sealed record GatewayHealthDto(
     string Service,

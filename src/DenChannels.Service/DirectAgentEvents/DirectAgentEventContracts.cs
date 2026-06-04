@@ -90,3 +90,44 @@ public sealed record DirectAgentEventReadbackDto(
     string? ClaimStatus,
     string? CompletionStatus,
     string CreatedAt);
+
+// ── Events list (cursor-paged event subscription) ─────────────────────
+
+/// <summary>
+/// Cursor-paged event subscription response for direct-agent event consumers.
+/// Migrated from /api/gateway/events (GatewayEventsDto).
+/// </summary>
+public sealed record DirectAgentEventListResponse(
+    IReadOnlyList<DirectAgentEventListItemDto> Items,
+    long? NextAfterId,
+    bool HasMore);
+
+/// <summary>
+/// Single event item within the direct-agent events cursor response.
+/// Mirrors the shape of GatewayEventItemDto for backward compatibility.
+/// </summary>
+public sealed record DirectAgentEventListItemDto(
+    long Id,
+    long ChannelId,
+    string MessageKind,
+    string SenderType,
+    string SenderIdentity,
+    string? SourceKind,
+    string? SourceId,
+    string? SourceProjectId,
+    string? TargetProjectId,
+    long? TargetTaskId,
+    string? AssignmentId,
+    string? WorkerRunId,
+    string? WorkerRole,
+    string? ProfileIdentity,
+    string? PoolMemberId,
+    string? AgentInstanceId,
+    string? SessionOwnerId,
+    string? SessionId,
+    string? DeliveryRequestId,
+    string? DedupeKey,
+    string? DeepLink,
+    string? Summary,
+    string Body,
+    string CreatedAt);

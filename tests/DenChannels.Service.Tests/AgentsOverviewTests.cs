@@ -45,7 +45,6 @@ public sealed class AgentsOverviewTests : IDisposable
         Assert.Equal(0, response.TotalCount);
         Assert.NotNull(response.SourceHealth);
         Assert.Equal("available", response.SourceHealth.Channels?.Status);
-        Assert.Equal("unavailable", response.SourceHealth.Gateway?.Status);
     }
 
     [Fact]
@@ -67,7 +66,6 @@ public sealed class AgentsOverviewTests : IDisposable
         Assert.Equal("agent-alpha", agent.AgentIdentity);
         Assert.Equal("active", agent.OperatorStatus);
         Assert.Equal("idle", agent.WorkState);
-        Assert.Contains("missing_binding", agent.Flags);
         Assert.NotNull(agent.Memberships);
         // There may be an auto-created Agent Commons membership
         var testMembership = Assert.Single(agent.Memberships, m => m.ProjectId == "ao-proj-1");
@@ -301,9 +299,7 @@ public sealed class AgentsOverviewTests : IDisposable
         Assert.NotNull(response);
         Assert.Equal("nonexistent-agent", response.AgentIdentity);
         Assert.Null(response.Memberships);
-        Assert.Null(response.Bindings);
         Assert.Contains("missing_membership", response.Flags);
-        Assert.Contains("missing_binding", response.Flags);
     }
 
     [Fact]
@@ -430,36 +426,6 @@ public sealed class AgentsOverviewTests : IDisposable
     }
 
     // =========================================================================
-    // Gateway-unavailable behavior
-    // =========================================================================
-
-    [Fact]
-    public async Task AgentsOverview_GatewayDisabled_Returns200WithWarning()
-    {
-        var channel = await EnsureDefaultChannelAsync("ao-gw-unavail");
-        await UpsertMembershipAsync(channel.Id, new
-        {
-            memberType = "agent",
-            memberIdentity = "gw-bot",
-            wakePolicy = "mentions_only"
-        });
-
-        var response = await _client.GetFromJsonAsync<AgentsOverviewResponsePayload>("/api/agents/overview");
-
-        Assert.NotNull(response);
-        Assert.Equal(1, response.TotalCount);
-        Assert.NotNull(response.SourceHealth.Gateway);
-        Assert.Equal("unavailable", response.SourceHealth.Gateway.Status);
-        Assert.NotNull(response.SourceHealth.Gateway.Warning);
-
-        var agent = Assert.Single(response.Agents);
-        Assert.Contains("gateway_unavailable", agent.Flags);
-        Assert.Contains("missing_binding", agent.Flags);
-        Assert.NotNull(agent.Memberships);
-        Assert.Equal("gw-bot", agent.AgentIdentity);
-    }
-
-    // =========================================================================
     // Include left memberships
     // =========================================================================
 
@@ -499,31 +465,6 @@ public sealed class AgentsOverviewTests : IDisposable
         Assert.NotEmpty(response.Agents);
         var agent = Assert.Single(response.Agents);
         Assert.Equal("left", agent.OperatorStatus);
-    }
-
-    // =========================================================================
-    // Gateway enabled via includeGateway=false
-    // =========================================================================
-
-    [Fact]
-    public async Task AgentsOverview_IncludeGatewayFalse_DoesNotFlagMissingBinding()
-    {
-        var channel = await EnsureDefaultChannelAsync("ao-no-gw-proj");
-        await UpsertMembershipAsync(channel.Id, new
-        {
-            memberType = "agent",
-            memberIdentity = "no-gw-bot",
-            wakePolicy = "mentions_only"
-        });
-
-        var response = await _client.GetFromJsonAsync<AgentsOverviewResponsePayload>(
-            "/api/agents/overview?includeGateway=false");
-
-        Assert.NotNull(response);
-        var agent = Assert.Single(response.Agents);
-        Assert.DoesNotContain("gateway_unavailable", agent.Flags);
-        Assert.DoesNotContain("missing_binding", agent.Flags);
-        Assert.Null(response.SourceHealth.Gateway);
     }
 
     // =========================================================================
@@ -615,7 +556,6 @@ public sealed class AgentsOverviewTests : IDisposable
         Assert.NotNull(response1);
         Assert.NotNull(response2);
         Assert.Equal(response1.Agents[0].Flags, response2.Agents[0].Flags);
-        Assert.Equal(response1.SourceHealth.Gateway?.Status, response2.SourceHealth.Gateway?.Status);
     }
 
     // =========================================================================
@@ -650,269 +590,6 @@ public sealed class AgentsOverviewTests : IDisposable
         Assert.Equal(channel1.Id, chanMembership.ChannelId);
         Assert.DoesNotContain(response.Memberships, m => m.ChannelId == channel2.Id);
         Assert.All(response.Memberships, m => Assert.Equal(channel1.Id, m.ChannelId));
-    }
-
-    [Fact]
-    public void GatewayAgentMatchesScope_ChannelScope_ExcludesUnrelatedGatewayOnlyRows()
-    {
-        var requestedChannel = 101L;
-        var otherChannelAgent = GatewayAgent(
-            "other-agent",
-            projectId: "ao-gw-proj",
-            currentDeliveries: [GatewayDelivery(1, "ao-gw-proj", "202")]);
-
-        var matches = AgentsOverviewService.GatewayAgentMatchesScope(
-            otherChannelAgent,
-            projectId: "ao-gw-proj",
-            channelId: requestedChannel,
-            agentIdentity: null,
-            scopedChannelsAgentIdentities: new HashSet<string>(StringComparer.OrdinalIgnoreCase));
-
-        Assert.False(matches);
-    }
-
-    [Fact]
-    public void GatewayAgentMatchesScope_ChannelScope_AllowsScopedMembershipIdentity()
-    {
-        var agent = GatewayAgent("member-agent", projectId: "ao-gw-proj");
-
-        var matches = AgentsOverviewService.GatewayAgentMatchesScope(
-            agent,
-            projectId: "ao-gw-proj",
-            channelId: 101,
-            agentIdentity: null,
-            scopedChannelsAgentIdentities: new HashSet<string>(["member-agent"], StringComparer.OrdinalIgnoreCase));
-
-        Assert.True(matches);
-    }
-
-    [Fact]
-    public void GatewayAgentMatchesScope_ProjectAndAgentScope_AreAppliedLocally()
-    {
-        var wrongProject = GatewayAgent("agent-a", projectId: "other-project");
-        var wrongAgent = GatewayAgent("agent-b", projectId: "ao-gw-proj");
-
-        Assert.False(AgentsOverviewService.GatewayAgentMatchesScope(
-            wrongProject, "ao-gw-proj", null, "agent-a"));
-        Assert.False(AgentsOverviewService.GatewayAgentMatchesScope(
-            wrongAgent, "ao-gw-proj", null, "agent-a"));
-    }
-
-    [Fact]
-    public void GatewayScopedDeliverySummary_IgnoresUnrelatedChannelSummaryData()
-    {
-        var agent = GatewayAgent(
-            "member-agent",
-            projectId: "ao-gw-proj",
-            deliverySummary: new GatewayDeliverySummaryDto(
-                State: "delivered_waiting_completion",
-                PendingCount: 0,
-                DeliveringCount: 0,
-                DeliveredNotCompletedCount: 3,
-                CompletedRecentCount: 0,
-                FailedRecentCount: 0,
-                SuppressedRecentCount: 0,
-                StuckCount: 0,
-                Total: 3),
-            currentDeliveries: [GatewayDelivery(1, "ao-gw-proj", "202")]);
-
-        Assert.Null(AgentsOverviewService.ScopedGatewayDeliveryState(agent, "ao-gw-proj", 101));
-        Assert.Null(AgentsOverviewService.ScopedGatewayDeliveryCounts(agent, "ao-gw-proj", 101));
-    }
-
-    [Fact]
-    public void GatewayScopedDeliverySummary_UsesMatchingChannelDeliveries()
-    {
-        var agent = GatewayAgent(
-            "member-agent",
-            projectId: "ao-gw-proj",
-            currentDeliveries: [GatewayDelivery(1, "ao-gw-proj", "101")],
-            recentDeliveries: [GatewayDelivery(2, "ao-gw-proj", "202", status: "completed")]);
-
-        var counts = AgentsOverviewService.ScopedGatewayDeliveryCounts(agent, "ao-gw-proj", 101);
-
-        Assert.Equal("delivered", AgentsOverviewService.ScopedGatewayDeliveryState(agent, "ao-gw-proj", 101));
-        Assert.NotNull(counts);
-        Assert.Equal(1, counts.Active);
-        Assert.Equal(0, counts.Completed);
-        Assert.Equal(1, counts.Total);
-    }
-
-    // =========================================================================
-    // Live vs stale work state derivation tests (task #1730)
-    // =========================================================================
-
-    [Fact]
-    public void DeriveWorkState_RecentActivityOverridesStuckGateway()
-    {
-        // Agent with old stuck deliveries AND recent non-terminal activity
-        // Expected: workState = "active", not "stuck"
-        var stuckDeliveries = new List<GatewayDeliveryDto>
-        {
-            GatewayDeliveryWithFlags(1, "ao-proj", "3", "delivered", ["stuck"]),
-        };
-        var activityEvents = new List<ChannelActivityEventDto>
-        {
-            MakeActivityEvent("delivery-1", eventType: "tool_call_started", terminal: false, status: "started"),
-            MakeActivityEvent("delivery-2", eventType: "tool_call_completed", terminal: false, status: "active"),
-        };
-
-        var (workState, severity) = AgentsOverviewService.DeriveWorkStateFromGatewayForTest(
-            stuckDeliveries, activityEvents);
-
-        Assert.Equal("active", workState);
-        Assert.Equal("info", severity);
-    }
-
-    [Fact]
-    public void DeriveWorkState_StaleDebtWithoutActivity_ShowsStuck()
-    {
-        // Agent with stuck Gateway deliveries but NO recent non-terminal activity
-        // Expected: workState = "stuck"
-        var stuckDeliveries = new List<GatewayDeliveryDto>
-        {
-            GatewayDeliveryWithFlags(1, "ao-proj", "3", "delivered", ["stuck"]),
-        };
-        var activityEvents = new List<ChannelActivityEventDto>
-        {
-            MakeActivityEvent("delivery-1", eventType: "tool_call_completed", terminal: true, status: "completed"),
-        };
-
-        var (workState, severity) = AgentsOverviewService.DeriveWorkStateFromGatewayForTest(
-            stuckDeliveries, activityEvents);
-
-        Assert.Equal("stuck", workState);
-        Assert.Equal("error", severity);
-    }
-
-    [Fact]
-    public void FindLiveDeliveryIds_NonTerminalActivity_IncludesDeliveryId()
-    {
-        var activityEvents = new List<ChannelActivityEventDto>
-        {
-            MakeActivityEvent("delivery-1", eventType: "tool_call_started", terminal: false, status: "started"),
-            MakeActivityEvent("", eventType: "tool_call_completed", terminal: true, status: "completed"),
-        };
-
-        var liveIds = AgentsOverviewService.FindLiveDeliveryIdsForTest(activityEvents);
-
-        Assert.Single(liveIds);
-        Assert.Contains("delivery-1", liveIds);
-    }
-
-    [Fact]
-    public void HasStaleGatewayDebt_OldStuckDeliveryWithoutActivity_ReturnsTrue()
-    {
-        var scopedDeliveries = new List<GatewayDeliveryDto>
-        {
-            GatewayDeliveryWithFlags(1, "ao-proj", "3", "delivered", ["stuck"]),
-        };
-        var activityEvents = new List<ChannelActivityEventDto>
-        {
-            MakeActivityEvent("delivery-other", eventType: "tool_call_completed", terminal: true, status: "completed"),
-        };
-
-        // Old stuck delivery "1" has no recent activity → stale debt
-        var hasStale = AgentsOverviewService.HasStaleGatewayDebtForTest(scopedDeliveries, activityEvents);
-
-        Assert.True(hasStale);
-    }
-
-    [Fact]
-    public void HasStaleGatewayDebt_ActiveDeliveryWithActivity_ReturnsFalse()
-    {
-        var scopedDeliveries = new List<GatewayDeliveryDto>
-        {
-            GatewayDeliveryWithFlags(1, "ao-proj", "3", "delivered", null),
-        };
-        var activityEvents = new List<ChannelActivityEventDto>
-        {
-            MakeActivityEvent("1", eventType: "tool_call_started", terminal: false, status: "active"),
-        };
-
-        var hasStale = AgentsOverviewService.HasStaleGatewayDebtForTest(scopedDeliveries, activityEvents);
-
-        Assert.False(hasStale);
-    }
-
-    [Fact]
-    public void CountStaleGatewayDebt_ReturnsCorrectCount()
-    {
-        var scopedDeliveries = new List<GatewayDeliveryDto>
-        {
-            GatewayDeliveryWithFlags(1, "ao-proj", "3", "delivered", ["stuck"]),
-            GatewayDeliveryWithFlags(2, "ao-proj", "3", "delivered", ["stuck"]),
-            GatewayDeliveryWithFlags(3, "ao-proj", "3", "delivered", null), // active but no activity
-        };
-        var activityEvents = new List<ChannelActivityEventDto>
-        {
-            MakeActivityEvent("1", eventType: "tool_call_completed", terminal: true, status: "completed"),
-        };
-
-        var count = AgentsOverviewService.CountStaleGatewayDebtForTest(scopedDeliveries, activityEvents);
-
-        // Delivery 1 has activity → not stale. Delivery 2 stuck without activity → stale.
-        // Delivery 3 non-terminal without activity → stale.
-        Assert.Equal(2, count);
-    }
-
-    [Fact]
-    public async Task AgentsOverview_RecentActivityWithoutGateway_ShowsActiveWorkState()
-    {
-        // Integration test: with Gateway disabled, we use includeGateway=false to simulate
-        // an agent that has activity without Gateway. The agent should still have correct workState.
-        // Full stale-debt flag/count behavior is covered by pure unit tests above.
-
-        var channel = await EnsureDefaultChannelAsync("ao-stale-proj");
-        await UpsertMembershipAsync(channel.Id, new
-        {
-            memberType = "agent",
-            memberIdentity = "stale-bot",
-            wakePolicy = "mentions_only"
-        });
-
-        // Recent activity showing active work
-        await PostActivityEventAsync(channel.Id, new
-        {
-            projectId = "ao-stale-proj",
-            agentIdentity = "stale-bot",
-            deliveryRequestId = "active-delivery-1",
-            hermesSessionKey = "session-active",
-            eventType = "tool_call_started",
-            status = "started",
-            terminal = false,
-            sequence = 1,
-            title = "Working on task",
-            dedupeKey = $"ao-stale:{Guid.NewGuid():N}"
-        });
-        await PostActivityEventAsync(channel.Id, new
-        {
-            projectId = "ao-stale-proj",
-            agentIdentity = "stale-bot",
-            deliveryRequestId = "active-delivery-1",
-            hermesSessionKey = "session-active",
-            eventType = "tool_call_completed",
-            status = "completed",
-            deliveryStage = "tool",
-            terminal = false,
-            sequence = 2,
-            title = "Continuing work",
-            dedupeKey = $"ao-stale-2:{Guid.NewGuid():N}"
-        });
-
-        var response = await _client.GetFromJsonAsync<AgentsOverviewResponsePayload>(
-            "/api/agents/overview?includeGateway=false&activityLimit=5");
-
-        Assert.NotNull(response);
-        var agent = Assert.Single(response.Agents);
-        Assert.Equal("stale-bot", agent.AgentIdentity);
-        // Activity has non-terminal events → should be active
-        Assert.Equal("active", agent.WorkState);
-        Assert.Equal("info", agent.Severity);
-        Assert.NotNull(agent.Summary);
-        Assert.Equal(2, agent.Summary.RecentActivityCount);
-        Assert.NotNull(agent.RecentActivity);
-        Assert.Equal(2, agent.RecentActivity.Count);
     }
 
     [Fact]
@@ -1004,69 +681,6 @@ public sealed class AgentsOverviewTests : IDisposable
         return payload;
     }
 
-    private static GatewayAgentDto GatewayAgent(
-        string agentIdentity,
-        string? projectId = null,
-        GatewayDeliverySummaryDto? deliverySummary = null,
-        IReadOnlyList<GatewayDeliveryDto>? currentDeliveries = null,
-        IReadOnlyList<GatewayDeliveryDto>? recentDeliveries = null) => new(
-            AgentKey: agentIdentity,
-            ProjectId: projectId,
-            AgentIdentity: agentIdentity,
-            Role: "runner",
-            BindingFreshness: "fresh",
-            AdapterInstances: null,
-            DeliverySummary: deliverySummary,
-            CurrentDeliveries: currentDeliveries,
-            RecentDeliveries: recentDeliveries,
-            Flags: null);
-
-    private static GatewayDeliveryDto GatewayDelivery(long id, string? projectId, string? channelId, string status = "delivered") => new(
-        DeliveryRequestId: id,
-        Status: status,
-        DeliveryMode: null,
-        TargetType: "agent",
-        TargetIdentity: null,
-        ProjectId: projectId,
-        TaskId: null,
-        ChannelId: channelId,
-        SourceKind: null,
-        SourceId: null,
-        SourceProjectId: projectId,
-        ContextSummary: "test delivery",
-        ContextLink: null,
-        AttemptCount: 1,
-        LeaseExpiresAt: null,
-        NextAttemptAt: null,
-        ExpiresAt: null,
-        CreatedAt: "2026-05-27T00:00:00Z",
-        UpdatedAt: "2026-05-27T00:00:00Z",
-        LastAttempt: null,
-        Flags: null);
-
-    private static GatewayDeliveryDto GatewayDeliveryWithFlags(long id, string? projectId, string? channelId, string status = "delivered", IReadOnlyList<string>? flags = null) => new(
-        DeliveryRequestId: id,
-        Status: status,
-        DeliveryMode: null,
-        TargetType: "agent",
-        TargetIdentity: null,
-        ProjectId: projectId,
-        TaskId: null,
-        ChannelId: channelId,
-        SourceKind: null,
-        SourceId: null,
-        SourceProjectId: projectId,
-        ContextSummary: "test delivery",
-        ContextLink: null,
-        AttemptCount: 1,
-        LeaseExpiresAt: null,
-        NextAttemptAt: null,
-        ExpiresAt: null,
-        CreatedAt: "2026-05-27T00:00:00Z",
-        UpdatedAt: "2026-05-27T00:00:00Z",
-        LastAttempt: null,
-        Flags: flags);
-
     private static ChannelActivityEventDto MakeActivityEvent(
         string? deliveryRequestId = null,
         string agentIdentity = "test-agent",
@@ -1125,8 +739,7 @@ public sealed class AgentsOverviewTests : IDisposable
         SourceHealthPayload SourceHealth);
 
     private sealed record SourceHealthPayload(
-        SourceServiceStatusPayload? Channels,
-        SourceServiceStatusPayload? Gateway);
+        SourceServiceStatusPayload? Channels);
 
     private sealed record SourceServiceStatusPayload(
         string Status,
@@ -1141,8 +754,6 @@ public sealed class AgentsOverviewTests : IDisposable
         List<string> Flags,
         AgentLinksPayload? Links,
         List<ChannelMembershipOverviewPayload>? Memberships,
-        List<GatewayBindingOverviewPayload>? Bindings,
-        List<DeliveryOverviewPayload>? DeliverySummaries,
         List<ActivityEventOverviewPayload>? RecentActivity);
 
     private sealed record AgentSummaryPayload(
@@ -1151,13 +762,11 @@ public sealed class AgentsOverviewTests : IDisposable
         int ActiveDeliveryCount,
         int RecentActivityCount,
         string? LatestActivityAt,
-        string? HighestSeverity,
-        int StaleDeliveryCount = 0);
+        string? HighestSeverity);
 
     private sealed record AgentLinksPayload(
         string? Self,
         string? Memberships,
-        string? Bindings,
         string? Activity);
 
     private sealed record ChannelMembershipOverviewPayload(
@@ -1170,34 +779,6 @@ public sealed class AgentsOverviewTests : IDisposable
         string WakePolicy,
         bool CanSend,
         string? SettingsLabel);
-
-    private sealed record GatewayBindingOverviewPayload(
-        string? AgentKey,
-        string? Role,
-        string? BindingFreshness,
-        string? DeliveryState,
-        GatewayDeliveryCountsPayload? DeliveryCounts,
-        List<GatewayAdapterInstancePayload>? AdapterInstances);
-
-    private sealed record GatewayDeliveryCountsPayload(
-        int Active,
-        int Completed,
-        int Failed,
-        int Total);
-
-    private sealed record GatewayAdapterInstancePayload(
-        string AdapterKey,
-        string Status,
-        string? LastHeartbeat);
-
-    private sealed record DeliveryOverviewPayload(
-        string? DeliveryRequestId,
-        string? State,
-        string? Status,
-        bool Terminal,
-        string? CreatedAt,
-        string? UpdatedAt,
-        string? Summary);
 
     private sealed record ActivityEventOverviewPayload(
         long Id,
@@ -1222,9 +803,6 @@ public sealed class AgentsOverviewTests : IDisposable
     private sealed record AgentDetailResponsePayload(
         string AgentIdentity,
         List<ChannelMembershipOverviewPayload>? Memberships,
-        List<GatewayBindingOverviewPayload>? Bindings,
-        List<DeliveryOverviewPayload>? CurrentDeliveries,
-        List<DeliveryOverviewPayload>? RecentDeliveries,
         List<ActivityEventOverviewPayload>? ActivityEvents,
         List<TaskAssociationPayload>? TaskAssociations,
         AgentSummaryPayload? Summary,

@@ -8,8 +8,6 @@ public sealed class DenChannelsOptions
 
     public DenCoreOptions DenCore { get; init; } = new();
 
-    public GatewayOptions Gateway { get; init; } = new();
-
     public WorkerPoolOptions WorkerPool { get; init; } = new();
 
     public ServiceAuthOptions ServiceAuth { get; init; } = new();
@@ -53,25 +51,6 @@ public sealed class DenCoreStubProjectOptions
     public string Id { get; init; } = string.Empty;
 
     public string? Name { get; init; }
-}
-
-public sealed class GatewayOptions
-{
-    /// <summary>
-    /// Base URL for the external Gateway service (/api/agent-overview/gateway-state).
-    /// </summary>
-    public string BaseUrl { get; init; } = "http://127.0.0.1:5300";
-
-    /// <summary>
-    /// HTTP timeout in seconds for Gateway API calls.
-    /// </summary>
-    public int TimeoutSeconds { get; init; } = 5;
-
-    /// <summary>
-    /// When true, the Gateway is assumed unavailable and all rows use Channels-only data.
-    /// Useful for offline/dev scenarios without a running Gateway.
-    /// </summary>
-    public bool Disabled { get; init; } = false;
 }
 
 public sealed class ServiceAuthOptions

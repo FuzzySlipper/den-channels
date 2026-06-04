@@ -123,8 +123,7 @@ public sealed record AgentsOverviewRequest(
     [property: JsonPropertyName("scope")] string? Scope,
     string? AgentIdentity,
     int ActivityLimit = 3,
-    bool IncludeLeft = false,
-    bool IncludeGateway = true);
+    bool IncludeLeft = false);
 
 public sealed record AgentsOverviewResponse(
     IReadOnlyList<AgentOverviewItem> Agents,
@@ -133,7 +132,6 @@ public sealed record AgentsOverviewResponse(
 
 public sealed record SourceHealthDto(
     SourceServiceStatusDto? Channels,
-    SourceServiceStatusDto? Gateway,
     SourceServiceStatusDto? WorkerPool = null);
 
 public sealed record SourceServiceStatusDto(

@@ -17,6 +17,58 @@ public static class DirectAgentEventRoutes
         var group = endpoints.MapGroup("/api/direct-agent-events");
 
         // -----------------------------------------------------------------------
+        // GET /api/direct-agent-events
+        // Events list endpoint — cursor-paged event subscription.
+        // Migrated from /api/gateway/events (owned by Gateway compatibility routes).
+        // den-host's EventsListPath should reference this path.
+        // -----------------------------------------------------------------------
+        group.MapGet("/", async (
+            ChannelsRepository repository,
+            long? channelId,
+            string? projectId,
+            long? afterId,
+            int? limit,
+            CancellationToken cancellationToken) =>
+        {
+            if (channelId is null && string.IsNullOrWhiteSpace(projectId))
+                return Results.BadRequest(new DirectAgentEventErrorDto("missing_parameter",
+                    "Provide channelId or projectId."));
+
+            long resolvedChannelId;
+            if (channelId is not null)
+            {
+                resolvedChannelId = channelId.Value;
+            }
+            else
+            {
+                var channels = await repository.ListChannelsAsync(projectId, "project_default", 1, cancellationToken);
+                if (channels.Count == 0)
+                    return Results.NotFound(new DirectAgentEventErrorDto("channel_not_found",
+                        $"No default channel found for project '{projectId}'."));
+                resolvedChannelId = channels[0].Id;
+            }
+
+            var pageSize = Math.Clamp(limit ?? 50, 1, 200);
+            var fetched = await repository.ListMessagesAsync(
+                resolvedChannelId, afterId ?? 0L, null, pageSize + 1, cancellationToken);
+
+            var hasMore = fetched.Count > pageSize;
+            var items = hasMore ? fetched.Take(pageSize).ToList() : fetched.ToList();
+            long? nextAfterId = hasMore ? items[^1].Id : null;
+
+            var eventItems = items.Select(m => new DirectAgentEventListItemDto(
+                m.Id, m.ChannelId, m.MessageKind, m.SenderType, m.SenderIdentity,
+                m.SourceKind, m.SourceId, m.SourceProjectId,
+                m.TargetProjectId, m.TargetTaskId, m.AssignmentId,
+                m.WorkerRunId, m.WorkerRole, m.ProfileIdentity, m.PoolMemberId,
+                m.AgentInstanceId, m.SessionOwnerId, m.SessionId,
+                m.DeliveryRequestId, m.DedupeKey, m.DeepLink,
+                m.Summary, m.Body, m.CreatedAt)).ToList();
+
+            return Results.Ok(new DirectAgentEventListResponse(eventItems, nextAfterId, hasMore));
+        });
+
+        // -----------------------------------------------------------------------
         // POST /api/direct-agent-events
         // Channels-owned, fully async direct-agent event creation.
         // Returns immediately with durable evidence. No Gateway dependency.
@@ -126,7 +178,7 @@ public static class DirectAgentEventRoutes
 
 
             var eventUrl = $"/api/direct-agent-events/{msg.Id}";
-            var eventsUrl = $"/api/gateway/events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10";
+            var eventsUrl = $"/api/direct-agent-events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10";
 
             return Results.Created(eventUrl, new DirectAgentEventDto(
                 Status: Recorded,

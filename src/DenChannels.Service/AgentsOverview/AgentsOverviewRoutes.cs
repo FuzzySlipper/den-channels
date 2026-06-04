@@ -19,7 +19,6 @@ public static class AgentsOverviewRoutes
             string? agentIdentity,
             int? activityLimit,
             bool? includeLeft,
-            bool? includeGateway,
             CancellationToken cancellationToken) =>
         {
             long? parsedChannelId = null;
@@ -28,7 +27,7 @@ public static class AgentsOverviewRoutes
 
             var response = await service.GetOverviewAsync(
                 projectId, parsedChannelId, scope, agentIdentity,
-                activityLimit ?? 3, includeLeft ?? false, includeGateway ?? true,
+                activityLimit ?? 3, includeLeft ?? false,
                 cancellationToken);
 
             return Results.Ok(response);
