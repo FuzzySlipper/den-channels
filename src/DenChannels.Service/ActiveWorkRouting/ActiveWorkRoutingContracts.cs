@@ -101,7 +101,7 @@ public sealed record ActiveWorkRouteDto(
 
     /// <summary>
     /// Concrete agent instance identity. When multiple instances share a
-    /// profile identity (e.g. spawned-coder), this disambiguates which
+    /// profile identity (e.g. coder), this disambiguates which
     /// concrete worker to route to.
     /// </summary>
     string? AgentInstanceId,

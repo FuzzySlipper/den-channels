@@ -23,11 +23,11 @@ Activity records live in `channel_activity_events` with these durable associatio
 - `channel_id` and optional `project_id`
 - `agent_identity`
 - optional `delivery_request_id`
-- optional `hermes_session_key`
+- optional `session_key`
 - optional `display_block_id` — render-block grouping key for the visible parent operation block;
   v1 values are sourced from the parent orchestrator delivery id, but the field is deliberately
   a render-block id, not a Gateway delivery foreign key
-- optional parent context: `parent_hermes_session_key`, `parent_agent_identity`
+- optional parent context: `parent_session_key`, `parent_agent_identity`
 - optional spawned-worker context: `worker_run_id`, `worker_role`
 - optional Den `task_id` / `thread_id`
 - optional `anchor_message_id`

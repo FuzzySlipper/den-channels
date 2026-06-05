@@ -439,9 +439,9 @@ public sealed class ChannelApiTests : IDisposable
             projectId = "den-channels",
             agentIdentity = "den-mcp-runner",
             deliveryRequestId = "coder-1567",
-            hermesSessionKey = "den-channels:1567:coder",
+            sessionKey = "den-channels:1567:coder",
             displayBlockId = "parent-1567",
-            parentHermesSessionKey = "den-channels:1567:parent",
+            parentSessionKey = "den-channels:1567:parent",
             parentAgentIdentity = "den-mcp-runner",
             workerRunId = "coder-1567",
             workerRole = "coder",
@@ -462,7 +462,7 @@ public sealed class ChannelApiTests : IDisposable
         Assert.Equal("started", coderStarted.Status);
         Assert.Equal(parentMessage.Id, coderStarted.AnchorMessageId);
         Assert.Equal("parent-1567", coderStarted.DisplayBlockId);
-        Assert.Equal("den-channels:1567:parent", coderStarted.ParentHermesSessionKey);
+        Assert.Equal("den-channels:1567:parent", coderStarted.ParentSessionKey);
         Assert.Equal("den-mcp-runner", coderStarted.ParentAgentIdentity);
         Assert.Equal("coder-1567", coderStarted.WorkerRunId);
         Assert.Equal("coder", coderStarted.WorkerRole);
@@ -477,7 +477,7 @@ public sealed class ChannelApiTests : IDisposable
             projectId = "den-channels",
             agentIdentity = "den-mcp-runner",
             deliveryRequestId = "coder-1567",
-            hermesSessionKey = "den-channels:1567:coder",
+            sessionKey = "den-channels:1567:coder",
             eventType = "tool_call_completed",
             status = "completed",
             deliveryStage = "tool",
@@ -499,7 +499,7 @@ public sealed class ChannelApiTests : IDisposable
             deliveryRequestId = "reviewer-1567",
             hermesSessionKey = "den-channels:1567:reviewer",
             displayBlockId = "parent-1567",
-            parentHermesSessionKey = "den-channels:1567:parent",
+            parentSessionKey = "den-channels:1567:parent",
             parentAgentIdentity = "den-mcp-runner",
             workerRunId = "reviewer-1567",
             workerRole = "reviewer",
@@ -553,7 +553,7 @@ public sealed class ChannelApiTests : IDisposable
         Assert.NotNull(byDelivery);
         var activityEvent = Assert.Single(byDelivery);
         Assert.Equal(coderStarted.Id, activityEvent.Id);
-        Assert.Equal("den-channels:1567:coder", activityEvent.HermesSessionKey);
+        Assert.Equal("den-channels:1567:coder", activityEvent.SessionKey);
 
         var displayBlockJson = await client.GetStringAsync($"/api/channels/{channel.Id}/activity-events?displayBlockId=parent-1567");
         Assert.Contains("\"displayBlockId\":\"parent-1567\"", displayBlockJson);
@@ -689,9 +689,9 @@ public sealed class ChannelApiTests : IDisposable
                 projectId = "den-channels",
                 agentIdentity = "den-coder-profile",
                 deliveryRequestId = "coder-1944",
+                sessionKey = "session-coder-1944",
                 displayBlockId = "parent-1944",
-                hermesSessionKey = "session-coder-1944",
-                parentHermesSessionKey = "session-parent-1944",
+                parentSessionKey = "session-parent-1944",
                 parentAgentIdentity = "den-mcp-planner",
                 workerRunId = "coder-1944",
                 workerRole = "coder",
@@ -715,8 +715,8 @@ public sealed class ChannelApiTests : IDisposable
         Assert.Equal("den-coder-profile", recorded.ActivityEvent.AgentIdentity);
         Assert.Equal("coder-1944", recorded.ActivityEvent.DeliveryRequestId);
         Assert.Equal("parent-1944", recorded.ActivityEvent.DisplayBlockId);
-        Assert.Equal("session-coder-1944", recorded.ActivityEvent.HermesSessionKey);
-        Assert.Equal("session-parent-1944", recorded.ActivityEvent.ParentHermesSessionKey);
+        Assert.Equal("session-coder-1944", recorded.ActivityEvent.SessionKey);
+        Assert.Equal("session-parent-1944", recorded.ActivityEvent.ParentSessionKey);
         Assert.Equal("den-mcp-planner", recorded.ActivityEvent.ParentAgentIdentity);
         Assert.Equal("coder-1944", recorded.ActivityEvent.WorkerRunId);
         Assert.Equal("coder", recorded.ActivityEvent.WorkerRole);
@@ -1193,7 +1193,7 @@ public sealed class ChannelApiTests : IDisposable
         string Message);
 
     private sealed record ActivityEventPayload(long Id, long ChannelId, string? ProjectId, string AgentIdentity,
-        string? DeliveryRequestId, string? HermesSessionKey, string? DisplayBlockId, string? ParentHermesSessionKey,
+        string? DeliveryRequestId, string? SessionKey, string? DisplayBlockId, string? ParentSessionKey,
         string? ParentAgentIdentity, string? WorkerRunId, string? WorkerRole, long? AnchorMessageId, string EventType, string Status,
         string DeliveryStage, bool Terminal, long Sequence, long UpdateVersion, string? Summary, string? PreviewJson,
         string? MetadataJson, long? FinalChannelMessageId, string? AssignmentId = null, string? CheckpointType = null, string? CheckpointHandle = null);

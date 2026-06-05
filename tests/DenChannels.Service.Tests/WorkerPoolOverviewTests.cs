@@ -799,7 +799,7 @@ public sealed class WorkerPoolOverviewTests : IDisposable
         string? ProjectId,
         string AgentIdentity,
         string? DeliveryRequestId,
-        string? HermesSessionKey,
+        string? SessionKey,
         string? DisplayBlockId,
         string? WorkerRunId,
         string? WorkerRole,

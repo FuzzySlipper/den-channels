@@ -34,7 +34,7 @@ public sealed class ChannelsDatabaseInitializerTests
 
         var activityColumns = await ListColumnsAsync(connection, "channel_activity_events");
         Assert.Contains("display_block_id", activityColumns);
-        Assert.Contains("parent_hermes_session_key", activityColumns);
+        Assert.Contains("parent_session_key", activityColumns);
         Assert.Contains("parent_agent_identity", activityColumns);
         Assert.Contains("worker_run_id", activityColumns);
         Assert.Contains("worker_role", activityColumns);
@@ -254,10 +254,10 @@ public sealed class ChannelsDatabaseInitializerTests
 
         var columns = await ListColumnsAsync(connection, "channel_activity_events");
         Assert.Contains("delivery_request_id", columns);
-        Assert.Contains("hermes_session_key", columns);
+        Assert.Contains("session_key", columns);
         Assert.Contains("anchor_message_id", columns);
         Assert.Contains("display_block_id", columns);
-        Assert.Contains("parent_hermes_session_key", columns);
+        Assert.Contains("parent_session_key", columns);
         Assert.Contains("parent_agent_identity", columns);
         Assert.Contains("worker_run_id", columns);
         Assert.Contains("worker_role", columns);
@@ -271,8 +271,8 @@ public sealed class ChannelsDatabaseInitializerTests
             INSERT INTO channels(slug, display_name, kind, project_id)
             VALUES ('project-den-channels', 'Den Channels', 'project_default', 'den-channels');
             INSERT INTO channel_activity_events(
-                channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key,
-                display_block_id, parent_hermes_session_key, parent_agent_identity, worker_run_id, worker_role,
+                channel_id, project_id, agent_identity, delivery_request_id, session_key,
+                display_block_id, parent_session_key, parent_agent_identity, worker_run_id, worker_role,
                 event_type, status, delivery_stage, terminal, sequence, summary, dedupe_key)
             VALUES (
                 1, 'den-channels', 'den-mcp-runner', 'dr-1', 'session-1',
@@ -399,7 +399,7 @@ public sealed class ChannelsDatabaseInitializerTests
                 project_id TEXT,
                 agent_identity TEXT NOT NULL,
                 delivery_request_id TEXT,
-                hermes_session_key TEXT,
+                session_key TEXT,
                 task_id INTEGER,
                 thread_id INTEGER,
                 anchor_message_id INTEGER,
@@ -421,7 +421,7 @@ public sealed class ChannelsDatabaseInitializerTests
 
         var columns = await ListColumnsAsync(connection, "channel_activity_events");
         Assert.Contains("display_block_id", columns);
-        Assert.Contains("parent_hermes_session_key", columns);
+        Assert.Contains("parent_session_key", columns);
         Assert.Contains("parent_agent_identity", columns);
         Assert.Contains("worker_run_id", columns);
         Assert.Contains("worker_role", columns);

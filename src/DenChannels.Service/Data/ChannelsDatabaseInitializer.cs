@@ -108,6 +108,11 @@ public sealed class ChannelsDatabaseInitializer
     {
         await ExecuteNonQueryAsync(connection, ChannelActivityEventsSchemaSql, cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "display_block_id", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_activity_events", "session_key", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_activity_events", "parent_session_key", "TEXT", cancellationToken);
+        // DEPRECATED legacy columns (task #1967): kept for DB compatibility with pre-migration producers.
+        // New producers write to session_key/parent_session_key; old hermes_session_key/parent_hermes_session_key
+        // are no longer read by green-path queries.
         await EnsureColumnAsync(connection, "channel_activity_events", "parent_hermes_session_key", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "parent_agent_identity", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "worker_run_id", "TEXT", cancellationToken);
@@ -461,8 +466,14 @@ public sealed class ChannelsDatabaseInitializer
             project_id            TEXT,
             agent_identity        TEXT NOT NULL,
             delivery_request_id   TEXT,
+            -- session_key: runtime-neutral session ownership (was hermes_session_key).
+            -- parent_session_key: runtime-neutral parent session (was parent_hermes_session_key).
+            -- hermes_session_key / parent_hermes_session_key: DEPRECATED legacy columns kept
+            -- for DB compatibility only; not used by active green-path queries (task #1967).
+            session_key           TEXT,
             hermes_session_key    TEXT,
             display_block_id      TEXT,
+            parent_session_key    TEXT,
             parent_hermes_session_key TEXT,
             parent_agent_identity TEXT,
             worker_run_id         TEXT,
@@ -494,8 +505,8 @@ public sealed class ChannelsDatabaseInitializer
             ON channel_activity_events(delivery_request_id, sequence, id)
             WHERE delivery_request_id IS NOT NULL;
         CREATE INDEX IF NOT EXISTS idx_channel_activity_events_session
-            ON channel_activity_events(hermes_session_key, sequence, id)
-            WHERE hermes_session_key IS NOT NULL;
+            ON channel_activity_events(session_key, sequence, id)
+            WHERE session_key IS NOT NULL;
         CREATE UNIQUE INDEX IF NOT EXISTS ux_channel_activity_events_dedupe
             ON channel_activity_events(channel_id, dedupe_key)
             WHERE dedupe_key IS NOT NULL;
@@ -520,8 +531,14 @@ public sealed class ChannelsDatabaseInitializer
             project_id            TEXT,
             agent_identity        TEXT NOT NULL,
             delivery_request_id   TEXT,
+            -- session_key: runtime-neutral session ownership (was hermes_session_key).
+            -- parent_session_key: runtime-neutral parent session (was parent_hermes_session_key).
+            -- hermes_session_key / parent_hermes_session_key: DEPRECATED legacy columns kept
+            -- for DB compatibility only; not used by active green-path queries (task #1967).
+            session_key           TEXT,
             hermes_session_key    TEXT,
             display_block_id      TEXT,
+            parent_session_key    TEXT,
             parent_hermes_session_key TEXT,
             parent_agent_identity TEXT,
             worker_run_id         TEXT,
@@ -553,8 +570,8 @@ public sealed class ChannelsDatabaseInitializer
             ON channel_activity_events(delivery_request_id, sequence, id)
             WHERE delivery_request_id IS NOT NULL;
         CREATE INDEX IF NOT EXISTS idx_channel_activity_events_session
-            ON channel_activity_events(hermes_session_key, sequence, id)
-            WHERE hermes_session_key IS NOT NULL;
+            ON channel_activity_events(session_key, sequence, id)
+            WHERE session_key IS NOT NULL;
         CREATE UNIQUE INDEX IF NOT EXISTS ux_channel_activity_events_dedupe
             ON channel_activity_events(channel_id, dedupe_key)
             WHERE dedupe_key IS NOT NULL;
@@ -807,7 +824,7 @@ public sealed class ChannelsDatabaseInitializer
     private const string WorkerPoolLobbySeedSql = """"
         INSERT INTO channels(slug, display_name, kind, created_by, visibility, settings_json)
         VALUES ('worker-pool', '#worker-pool', 'system', 'system', 'normal',
-                '{"systemManaged":true,"channelRole":"worker_pool_lobby","description":"Worker-pool lobby: visible home lane for spawned-coder orchestration. Idle = available. Status transitions: idle → leased → draining → released → idle."}')
+                '{"systemManaged":true,"channelRole":"worker_pool_lobby","description":"Worker-pool lobby: visible home lane for worker-pool orchestration. Idle = available. Status transitions: idle → leased → draining → released → idle."}')
         ON CONFLICT(slug) DO UPDATE SET
             display_name = '#worker-pool',
             kind = 'system',

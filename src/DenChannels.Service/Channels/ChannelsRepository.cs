@@ -530,16 +530,16 @@ public sealed partial class ChannelsRepository
         await using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO channel_activity_events(
-                channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key,
-                display_block_id, parent_hermes_session_key, parent_agent_identity, worker_run_id, worker_role,
+                channel_id, project_id, agent_identity, delivery_request_id, session_key,
+                display_block_id, parent_session_key, parent_agent_identity, worker_run_id, worker_role,
                 agent_instance_id, pool_member_id,
                 task_id, thread_id, anchor_message_id,
                 assignment_id, checkpoint_type, checkpoint_handle,
                 event_type, status, delivery_stage, terminal, sequence,
                 title, summary, preview_json, metadata_json, dedupe_key, final_channel_message_id)
             VALUES (
-                $channelId, $projectId, $agentIdentity, $deliveryRequestId, $hermesSessionKey,
-                $displayBlockId, $parentHermesSessionKey, $parentAgentIdentity, $workerRunId, $workerRole,
+                $channelId, $projectId, $agentIdentity, $deliveryRequestId, $sessionKey,
+                $displayBlockId, $parentSessionKey, $parentAgentIdentity, $workerRunId, $workerRole,
                 $agentInstanceId, $poolMemberId,
                 $taskId, $threadId, $anchorMessageId,
                 $assignmentId, $checkpointType, $checkpointHandle,
@@ -549,9 +549,9 @@ public sealed partial class ChannelsRepository
                 project_id = COALESCE(excluded.project_id, channel_activity_events.project_id),
                 agent_identity = excluded.agent_identity,
                 delivery_request_id = COALESCE(excluded.delivery_request_id, channel_activity_events.delivery_request_id),
-                hermes_session_key = COALESCE(excluded.hermes_session_key, channel_activity_events.hermes_session_key),
+                session_key = COALESCE(excluded.session_key, channel_activity_events.session_key),
                 display_block_id = COALESCE(excluded.display_block_id, channel_activity_events.display_block_id),
-                parent_hermes_session_key = COALESCE(excluded.parent_hermes_session_key, channel_activity_events.parent_hermes_session_key),
+                parent_session_key = COALESCE(excluded.parent_session_key, channel_activity_events.parent_session_key),
                 parent_agent_identity = COALESCE(excluded.parent_agent_identity, channel_activity_events.parent_agent_identity),
                 worker_run_id = COALESCE(excluded.worker_run_id, channel_activity_events.worker_run_id),
                 worker_role = COALESCE(excluded.worker_role, channel_activity_events.worker_role),
@@ -573,8 +573,8 @@ public sealed partial class ChannelsRepository
                 final_channel_message_id = COALESCE(excluded.final_channel_message_id, channel_activity_events.final_channel_message_id),
                 update_version = channel_activity_events.update_version + 1,
                 updated_at = datetime('now')
-            RETURNING id, channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key,
-                display_block_id, parent_hermes_session_key, parent_agent_identity, worker_run_id, worker_role,
+            RETURNING id, channel_id, project_id, agent_identity, delivery_request_id, session_key,
+                display_block_id, parent_session_key, parent_agent_identity, worker_run_id, worker_role,
                 agent_instance_id, pool_member_id,
                 task_id, thread_id, anchor_message_id,
                 assignment_id, checkpoint_type, checkpoint_handle,
@@ -606,8 +606,8 @@ public sealed partial class ChannelsRepository
                 update_version = update_version + 1,
                 updated_at = datetime('now')
             WHERE id = $id
-            RETURNING id, channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key,
-                display_block_id, parent_hermes_session_key, parent_agent_identity, worker_run_id, worker_role,
+            RETURNING id, channel_id, project_id, agent_identity, delivery_request_id, session_key,
+                display_block_id, parent_session_key, parent_agent_identity, worker_run_id, worker_role,
                 agent_instance_id, pool_member_id,
                 task_id, thread_id, anchor_message_id,
                 assignment_id, checkpoint_type, checkpoint_handle,
@@ -629,14 +629,14 @@ public sealed partial class ChannelsRepository
     }
 
     public async Task<IReadOnlyList<ChannelActivityEventDto>> ListActivityEventsAsync(long channelId,
-        string? deliveryRequestId = null, string? hermesSessionKey = null, string? displayBlockId = null,
+        string? deliveryRequestId = null, string? sessionKey = null, string? displayBlockId = null,
         string? workerRunId = null, string? agentInstanceId = null, long? anchorMessageId = null, long? taskId = null,
         string? assignmentId = null, long? afterId = null,
         int limit = 100, CancellationToken cancellationToken = default)
     {
         limit = Math.Clamp(limit, 1, 500);
         var hasScopedFilter = deliveryRequestId is not null
-                              || hermesSessionKey is not null
+                              || sessionKey is not null
                               || displayBlockId is not null
                               || workerRunId is not null
                               || agentInstanceId is not null
@@ -647,8 +647,8 @@ public sealed partial class ChannelsRepository
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         const string selectColumns = """
-            id, channel_id, project_id, agent_identity, delivery_request_id, hermes_session_key,
-                display_block_id, parent_hermes_session_key, parent_agent_identity, worker_run_id, worker_role,
+            id, channel_id, project_id, agent_identity, delivery_request_id, session_key,
+                display_block_id, parent_session_key, parent_agent_identity, worker_run_id, worker_role,
                 agent_instance_id, pool_member_id,
                 task_id, thread_id, anchor_message_id,
                 assignment_id, checkpoint_type, checkpoint_handle,
@@ -673,7 +673,7 @@ public sealed partial class ChannelsRepository
               FROM channel_activity_events
               WHERE channel_id = $channelId
                 AND ($deliveryRequestId IS NULL OR delivery_request_id = $deliveryRequestId)
-                AND ($hermesSessionKey IS NULL OR hermes_session_key = $hermesSessionKey)
+                AND ($sessionKey IS NULL OR session_key = $sessionKey)
                 AND ($displayBlockId IS NULL OR display_block_id = $displayBlockId)
                 AND ($workerRunId IS NULL OR worker_run_id = $workerRunId)
                 AND ($agentInstanceId IS NULL OR agent_instance_id = $agentInstanceId)
@@ -686,7 +686,7 @@ public sealed partial class ChannelsRepository
               """";
         command.Parameters.AddWithValue("$channelId", channelId);
         command.Parameters.AddWithValue("$deliveryRequestId", (object?)deliveryRequestId ?? DBNull.Value);
-        command.Parameters.AddWithValue("$hermesSessionKey", (object?)hermesSessionKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sessionKey", (object?)sessionKey ?? DBNull.Value);
         command.Parameters.AddWithValue("$displayBlockId", (object?)displayBlockId ?? DBNull.Value);
         command.Parameters.AddWithValue("$workerRunId", (object?)workerRunId ?? DBNull.Value);
         command.Parameters.AddWithValue("$agentInstanceId", (object?)agentInstanceId ?? DBNull.Value);
@@ -734,9 +734,9 @@ public sealed partial class ChannelsRepository
         command.Parameters.AddWithValue("$projectId", (object?)request.ProjectId ?? DBNull.Value);
         command.Parameters.AddWithValue("$agentIdentity", request.AgentIdentity);
         command.Parameters.AddWithValue("$deliveryRequestId", (object?)request.DeliveryRequestId ?? DBNull.Value);
-        command.Parameters.AddWithValue("$hermesSessionKey", (object?)request.HermesSessionKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sessionKey", (object?)request.SessionKey ?? DBNull.Value);
         command.Parameters.AddWithValue("$displayBlockId", (object?)request.DisplayBlockId ?? DBNull.Value);
-        command.Parameters.AddWithValue("$parentHermesSessionKey", (object?)request.ParentHermesSessionKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$parentSessionKey", (object?)request.ParentSessionKey ?? DBNull.Value);
         command.Parameters.AddWithValue("$parentAgentIdentity", (object?)request.ParentAgentIdentity ?? DBNull.Value);
         command.Parameters.AddWithValue("$workerRunId", (object?)request.WorkerRunId ?? DBNull.Value);
         command.Parameters.AddWithValue("$workerRole", (object?)request.WorkerRole ?? DBNull.Value);
@@ -1169,8 +1169,8 @@ public sealed partial class ChannelsRepository
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT a.id, a.channel_id, a.project_id, a.agent_identity, a.delivery_request_id, a.hermes_session_key,
-                   a.display_block_id, a.parent_hermes_session_key, a.parent_agent_identity, a.worker_run_id, a.worker_role,
+            SELECT a.id, a.channel_id, a.project_id, a.agent_identity, a.delivery_request_id, a.session_key,
+                   a.display_block_id, a.parent_session_key, a.parent_agent_identity, a.worker_run_id, a.worker_role,
                    a.agent_instance_id, a.pool_member_id,
                    a.task_id, a.thread_id, a.anchor_message_id,
                    a.assignment_id, a.checkpoint_type, a.checkpoint_handle,
@@ -1210,8 +1210,8 @@ public sealed partial class ChannelsRepository
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT a.id, a.channel_id, a.project_id, a.agent_identity, a.delivery_request_id, a.hermes_session_key,
-                   a.display_block_id, a.parent_hermes_session_key, a.parent_agent_identity, a.worker_run_id, a.worker_role,
+            SELECT a.id, a.channel_id, a.project_id, a.agent_identity, a.delivery_request_id, a.session_key,
+                   a.display_block_id, a.parent_session_key, a.parent_agent_identity, a.worker_run_id, a.worker_role,
                    a.agent_instance_id, a.pool_member_id,
                    a.task_id, a.thread_id, a.anchor_message_id,
                    a.assignment_id, a.checkpoint_type, a.checkpoint_handle,
@@ -1247,8 +1247,8 @@ public sealed partial class ChannelsRepository
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT a.id, a.channel_id, a.project_id, a.agent_identity, a.delivery_request_id, a.hermes_session_key,
-                   a.display_block_id, a.parent_hermes_session_key, a.parent_agent_identity, a.worker_run_id, a.worker_role,
+            SELECT a.id, a.channel_id, a.project_id, a.agent_identity, a.delivery_request_id, a.session_key,
+                   a.display_block_id, a.parent_session_key, a.parent_agent_identity, a.worker_run_id, a.worker_role,
                    a.agent_instance_id, a.pool_member_id,
                    a.task_id, a.thread_id, a.anchor_message_id,
                    a.assignment_id, a.checkpoint_type, a.checkpoint_handle,
@@ -1404,7 +1404,7 @@ public sealed partial class ChannelsRepository
     /// </summary>
     public async Task<ChannelDto> EnsureWorkerPoolLobbyChannelAsync(CancellationToken cancellationToken = default)
     {
-        const string settingsJson = "{\"systemManaged\":true,\"channelRole\":\"worker_pool_lobby\",\"description\":\"Worker-pool lobby: visible home lane for spawned-coder orchestration.\"}";
+        const string settingsJson = "{\"systemManaged\":true,\"channelRole\":\"worker_pool_lobby\",\"description\":\"Worker-pool lobby: visible home lane for worker-pool orchestration. Idle = available. Status transitions: idle → leased → draining → released → idle.\"}";
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """"
@@ -1804,8 +1804,8 @@ public sealed partial class ChannelsRepository
             : "1=1";
 
         command.CommandText = $"""
-            SELECT a.id, a.channel_id, a.project_id, a.agent_identity, a.delivery_request_id, a.hermes_session_key,
-                   a.display_block_id, a.parent_hermes_session_key, a.parent_agent_identity, a.worker_run_id, a.worker_role,
+            SELECT a.id, a.channel_id, a.project_id, a.agent_identity, a.delivery_request_id, a.session_key,
+                   a.display_block_id, a.parent_session_key, a.parent_agent_identity, a.worker_run_id, a.worker_role,
                    a.agent_instance_id, a.pool_member_id,
                    a.task_id, a.thread_id, a.anchor_message_id,
                    a.assignment_id, a.checkpoint_type, a.checkpoint_handle,
