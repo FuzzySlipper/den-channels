@@ -471,9 +471,9 @@ public sealed class ChannelsDatabaseInitializer
             thread_id             INTEGER,
             anchor_message_id     INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
             event_type            TEXT NOT NULL
-                                  CHECK (event_type IN ('tool_call_started', 'tool_call_completed', 'tool_call_failed', 'lifecycle_status', 'aggregation_snapshot', 'run_summary')),
+                                  CHECK (event_type IN ('tool_call_started', 'tool_call_completed', 'tool_call_failed', 'lifecycle_status', 'aggregation_snapshot', 'run_summary', 'agent_work_lifecycle')),
             status                TEXT NOT NULL DEFAULT 'completed'
-                                  CHECK (status IN ('started', 'completed', 'failed', 'interim')),
+                                  CHECK (status IN ('started', 'completed', 'failed', 'interim', 'blocked')),
             delivery_stage        TEXT NOT NULL DEFAULT 'progress',
             terminal              INTEGER NOT NULL DEFAULT 0 CHECK (terminal IN (0, 1)),
             final_channel_message_id INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
@@ -530,9 +530,9 @@ public sealed class ChannelsDatabaseInitializer
             thread_id             INTEGER,
             anchor_message_id     INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
             event_type            TEXT NOT NULL
-                                  CHECK (event_type IN ('tool_call_started', 'tool_call_completed', 'tool_call_failed', 'lifecycle_status', 'aggregation_snapshot', 'run_summary')),
+                                  CHECK (event_type IN ('tool_call_started', 'tool_call_completed', 'tool_call_failed', 'lifecycle_status', 'aggregation_snapshot', 'run_summary', 'agent_work_lifecycle')),
             status                TEXT NOT NULL DEFAULT 'completed'
-                                  CHECK (status IN ('started', 'completed', 'failed', 'interim')),
+                                  CHECK (status IN ('started', 'completed', 'failed', 'interim', 'blocked')),
             delivery_stage        TEXT NOT NULL DEFAULT 'progress',
             terminal              INTEGER NOT NULL DEFAULT 0 CHECK (terminal IN (0, 1)),
             final_channel_message_id INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,

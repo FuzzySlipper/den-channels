@@ -86,6 +86,7 @@ app.MapDirectAgentEventRoutes();
 app.MapGatewayRoutes();
 app.MapAgentsOverviewRoutes();
 app.MapActiveWorkRoutingRoutes();
+app.MapAgentWorkLifecycleRoutes();
 
 // API misses: machine-readable JSON. Root/public paths: serve the moved-page.
 app.MapFallback((HttpContext context, IWebHostEnvironment environment) =>
