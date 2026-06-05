@@ -311,6 +311,26 @@ public static class AgentWorkLifecycleRoutes
                 }
             }
 
+            // ── Source 4: gateway delivery messages ─────────────────
+            var gatewayDeliveryMessages = channelMessages
+                .Where(m => string.Equals(m.SourceKind, "gateway_delivery", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var gdm in gatewayDeliveryMessages)
+            {
+                // Gateway deliveries may use senderIdentity as the agent.
+                var key = DirectAgentEventShared.ExtractMemberIdentity(gdm.SourceId)
+                          ?? gdm.SenderIdentity;
+                if (!string.IsNullOrWhiteSpace(key))
+                {
+                    if (!evidenceMap.ContainsKey(key))
+                        evidenceMap[key] = new AgentEvidenceBucket(key);
+                    var bucket = evidenceMap[key];
+                    bucket.GatewayDeliveryMessages.Add(gdm);
+                    bucket.HasGatewayDelivery = true;
+                }
+            }
+
             // ── Build projection items ──────────────────────────────────
             var projectionItems = evidenceMap
                 .Select(kvp => BuildProjectionItem(kvp.Value, cid))
@@ -329,7 +349,7 @@ public static class AgentWorkLifecycleRoutes
             var nonLifecycleAgents = projectionItems.Count(i =>
                 i.EvidenceProvenance.All(p => p != EvidenceProvenance.LifecycleEvent));
             string? migrationNote = lifecycleCount == 0
-                ? "No agent_work_lifecycle events present. Projection composed from general activity events and/or direct-agent wake records. The #1956 lifecycle event contract is the canonical target for den-host/Core/Hermes producers."
+                ? "No agent_work_lifecycle events present. Projection composed from general activity events, direct-agent wake records, and/or gateway delivery messages. The #1956 lifecycle event contract is the canonical target for den-host/Core/Hermes producers."
                 : nonLifecycleAgents > 0
                     ? $"{nonLifecycleAgents} agent(s) projected from non-lifecycle evidence only. Canonical agent_work_lifecycle event coverage is partial. Producers should migrate to the #1956 lifecycle contract."
                     : null;
@@ -367,9 +387,11 @@ public static class AgentWorkLifecycleRoutes
         public List<AgentWorkLifecycleEventDto> LifecycleEvents { get; } = new();
         public List<ChannelActivityEventDto> ActivityEvents { get; } = new();
         public List<ChannelMessageDto> DirectAgentEvents { get; } = new();
+        public List<ChannelMessageDto> GatewayDeliveryMessages { get; } = new();
         public bool HasLifecycle { get; set; }
         public bool HasActivity { get; set; }
         public bool HasDirectAgent { get; set; }
+        public bool HasGatewayDelivery { get; set; }
 
         public AgentEvidenceBucket(string agentIdentity)
         {
@@ -379,7 +401,8 @@ public static class AgentWorkLifecycleRoutes
 
     /// <summary>
     /// Build a projection item from an evidence bucket. Prefers lifecycle
-    /// events when available; falls back to activity events, then direct-agent.
+    /// events when available; falls back to activity events, then direct-agent,
+    /// then gateway-delivery messages.
     /// </summary>
     private static CurrentWorkProjectionItem? BuildProjectionItem(AgentEvidenceBucket bucket, long cid)
     {
@@ -393,6 +416,14 @@ public static class AgentWorkLifecycleRoutes
             var latest = bucket.LifecycleEvents.OrderByDescending(e => e.Id).First();
             evidenceLinks.Add($"/api/agent-work/events?channelId={cid}&agentIdentity={Uri.EscapeDataString(latest.AgentIdentity)}&limit=1");
             evidenceLinks.Add($"/api/channels/{cid}/activity-events?limit=10");
+
+            // Include gateway delivery evidence links when co-present
+            if (bucket.HasGatewayDelivery)
+            {
+                provenance.Add(EvidenceProvenance.GatewayDelivery);
+                var latestGw = bucket.GatewayDeliveryMessages.OrderByDescending(m => m.Id).First();
+                evidenceLinks.Add($"/api/direct-agent-events/{latestGw.Id}");
+            }
 
             var currentWorkState = latest.Terminal
                 ? CurrentWorkState.TerminalLifecycle
@@ -431,15 +462,26 @@ public static class AgentWorkLifecycleRoutes
         {
             provenance.Add(EvidenceProvenance.ActivityEvent);
             provenance.Add(EvidenceProvenance.DirectAgentEvent);
+            if (bucket.HasGatewayDelivery) provenance.Add(EvidenceProvenance.GatewayDelivery);
 
             var latestActivity = bucket.ActivityEvents.OrderByDescending(e => e.Id).First();
             var latestDirectAgent = bucket.DirectAgentEvents.OrderByDescending(e => e.Id).First();
 
             evidenceLinks.Add($"/api/channels/{cid}/activity-events?limit=10");
             evidenceLinks.Add($"/api/direct-agent-events?channelId={cid}&limit=10");
+            if (bucket.HasGatewayDelivery)
+            {
+                var latestGw = bucket.GatewayDeliveryMessages.OrderByDescending(m => m.Id).First();
+                evidenceLinks.Add($"/api/direct-agent-events/{latestGw.Id}");
+            }
 
-            // Use the latest timestamp across both sources
-            var latestAt = LatestTimestamp(latestActivity.UpdatedAt, latestDirectAgent.CreatedAt);
+            // Use the latest timestamp across sources
+            var gwLatest = bucket.HasGatewayDelivery
+                ? bucket.GatewayDeliveryMessages.Max(m => m.CreatedAt)
+                : null;
+            var latestAt = LatestTimestamp(
+                LatestTimestamp(latestActivity.UpdatedAt, latestDirectAgent.CreatedAt),
+                gwLatest);
 
             return new CurrentWorkProjectionItem(
                 AgentIdentity: bucket.AgentIdentity,
@@ -462,6 +504,49 @@ public static class AgentWorkLifecycleRoutes
                 SessionId: latestActivity.SessionKey ?? latestDirectAgent.SessionId,
                 DeliveryRequestId: latestActivity.DeliveryRequestId ?? latestDirectAgent.DeliveryRequestId,
                 DirectAgentEventId: latestDirectAgent.SourceId,
+                HostId: null,
+                ProcessId: null,
+                CurrentWorkState: CurrentWorkState.DeliveredNoLifecycle,
+                StalenessDiagnostic: GetTimestampDiagnostic(latestAt, bucket.AgentIdentity),
+                Flags: new List<string> { "multi_source", "no_lifecycle" });
+        }
+
+        // ── Activity + gateway, no direct-agent, no lifecycle ───────────
+        if (bucket.HasActivity && bucket.HasGatewayDelivery)
+        {
+            provenance.Add(EvidenceProvenance.ActivityEvent);
+            provenance.Add(EvidenceProvenance.GatewayDelivery);
+
+            var latestActivity = bucket.ActivityEvents.OrderByDescending(e => e.Id).First();
+            var latestGw = bucket.GatewayDeliveryMessages.OrderByDescending(m => m.Id).First();
+
+            evidenceLinks.Add($"/api/channels/{cid}/activity-events?limit=10");
+            evidenceLinks.Add($"/api/direct-agent-events/{latestGw.Id}");
+            evidenceLinks.Add($"/api/direct-agent-events?channelId={cid}&limit=10");
+
+            var latestAt = LatestTimestamp(latestActivity.UpdatedAt, latestGw.CreatedAt);
+
+            return new CurrentWorkProjectionItem(
+                AgentIdentity: bucket.AgentIdentity,
+                WorkerRunId: latestActivity.WorkerRunId ?? latestGw.WorkerRunId,
+                ProjectId: latestActivity.ProjectId ?? latestGw.TargetProjectId ?? latestGw.SourceProjectId,
+                TaskId: latestActivity.TaskId ?? latestGw.TargetTaskId,
+                AssignmentId: latestActivity.AssignmentId ?? latestGw.AssignmentId,
+                WorkerRole: latestActivity.WorkerRole ?? latestGw.WorkerRole,
+                ProfileIdentity: null,
+                PoolMemberId: latestActivity.PoolMemberId ?? latestGw.PoolMemberId,
+                AgentInstanceId: latestActivity.AgentInstanceId ?? latestGw.AgentInstanceId,
+                State: "running",
+                StateReason: $"Activity + gateway delivery; no lifecycle event",
+                LastActivityAt: latestAt,
+                StalenessDeadline: null,
+                LastActivityEventId: latestActivity.Id,
+                EvidenceLink: $"/api/channels/{cid}/activity-events?limit=10",
+                EvidenceProvenance: provenance,
+                EvidenceLinks: evidenceLinks,
+                SessionId: latestActivity.SessionKey ?? latestGw.SessionId,
+                DeliveryRequestId: latestActivity.DeliveryRequestId ?? latestGw.DeliveryRequestId,
+                DirectAgentEventId: latestGw.SourceId,
                 HostId: null,
                 ProcessId: null,
                 CurrentWorkState: CurrentWorkState.DeliveredNoLifecycle,
@@ -504,6 +589,49 @@ public static class AgentWorkLifecycleRoutes
                 Flags: new List<string> { "no_lifecycle" });
         }
 
+        // ── Direct-agent + gateway, no activity ─────────────────────────
+        if (bucket.HasDirectAgent && bucket.HasGatewayDelivery)
+        {
+            provenance.Add(EvidenceProvenance.DirectAgentEvent);
+            provenance.Add(EvidenceProvenance.GatewayDelivery);
+
+            var latestDa = bucket.DirectAgentEvents.OrderByDescending(m => m.Id).First();
+            var latestGw = bucket.GatewayDeliveryMessages.OrderByDescending(m => m.Id).First();
+
+            evidenceLinks.Add($"/api/direct-agent-events/{latestDa.Id}");
+            evidenceLinks.Add($"/api/direct-agent-events/{latestGw.Id}");
+            evidenceLinks.Add($"/api/direct-agent-events?channelId={cid}&limit=10");
+
+            var latestAt = LatestTimestamp(latestDa.CreatedAt, latestGw.CreatedAt);
+
+            return new CurrentWorkProjectionItem(
+                AgentIdentity: bucket.AgentIdentity,
+                WorkerRunId: latestDa.WorkerRunId ?? latestGw.WorkerRunId,
+                ProjectId: latestDa.TargetProjectId ?? latestDa.SourceProjectId ?? latestGw.TargetProjectId ?? latestGw.SourceProjectId,
+                TaskId: latestDa.TargetTaskId ?? latestGw.TargetTaskId,
+                AssignmentId: latestDa.AssignmentId ?? latestGw.AssignmentId,
+                WorkerRole: latestDa.WorkerRole ?? latestGw.WorkerRole,
+                ProfileIdentity: latestDa.ProfileIdentity,
+                PoolMemberId: latestDa.PoolMemberId ?? latestGw.PoolMemberId,
+                AgentInstanceId: latestDa.AgentInstanceId ?? latestGw.AgentInstanceId,
+                State: "running",
+                StateReason: "Direct-agent wake + gateway delivery; no lifecycle event",
+                LastActivityAt: latestAt,
+                StalenessDeadline: null,
+                LastActivityEventId: null,
+                EvidenceLink: $"/api/direct-agent-events?channelId={cid}&limit=10",
+                EvidenceProvenance: provenance,
+                EvidenceLinks: evidenceLinks,
+                SessionId: latestDa.SessionId ?? latestGw.SessionId,
+                DeliveryRequestId: latestDa.DeliveryRequestId ?? latestGw.DeliveryRequestId,
+                DirectAgentEventId: latestDa.SourceId,
+                HostId: null,
+                ProcessId: null,
+                CurrentWorkState: CurrentWorkState.DeliveredNoLifecycle,
+                StalenessDiagnostic: GetTimestampDiagnostic(latestAt, bucket.AgentIdentity),
+                Flags: new List<string> { "multi_source", "no_lifecycle" });
+        }
+
         // ── Direct-agent only ───────────────────────────────────────────
         if (bucket.HasDirectAgent)
         {
@@ -538,6 +666,42 @@ public static class AgentWorkLifecycleRoutes
                 CurrentWorkState: CurrentWorkState.RecordedOnly,
                 StalenessDiagnostic: GetTimestampDiagnostic(latest.CreatedAt, bucket.AgentIdentity),
                 Flags: new List<string> { "direct_agent_only", "no_lifecycle" });
+        }
+
+        // ── Gateway delivery only ───────────────────────────────────────
+        if (bucket.HasGatewayDelivery)
+        {
+            provenance.Add(EvidenceProvenance.GatewayDelivery);
+            var latest = bucket.GatewayDeliveryMessages.OrderByDescending(m => m.Id).First();
+            evidenceLinks.Add($"/api/direct-agent-events/{latest.Id}");
+            evidenceLinks.Add($"/api/direct-agent-events?channelId={cid}&limit=10");
+
+            return new CurrentWorkProjectionItem(
+                AgentIdentity: bucket.AgentIdentity,
+                WorkerRunId: latest.WorkerRunId,
+                ProjectId: latest.TargetProjectId ?? latest.SourceProjectId,
+                TaskId: latest.TargetTaskId,
+                AssignmentId: latest.AssignmentId,
+                WorkerRole: latest.WorkerRole,
+                ProfileIdentity: latest.ProfileIdentity,
+                PoolMemberId: latest.PoolMemberId,
+                AgentInstanceId: latest.AgentInstanceId,
+                State: "running",
+                StateReason: "Gateway delivery recorded; no lifecycle event",
+                LastActivityAt: latest.CreatedAt,
+                StalenessDeadline: null,
+                LastActivityEventId: null,
+                EvidenceLink: $"/api/direct-agent-events/{latest.Id}",
+                EvidenceProvenance: provenance,
+                EvidenceLinks: evidenceLinks,
+                SessionId: latest.SessionId,
+                DeliveryRequestId: latest.DeliveryRequestId,
+                DirectAgentEventId: latest.SourceId,
+                HostId: null,
+                ProcessId: null,
+                CurrentWorkState: CurrentWorkState.DeliveredNoLifecycle,
+                StalenessDiagnostic: GetTimestampDiagnostic(latest.CreatedAt, bucket.AgentIdentity),
+                Flags: new List<string> { "gateway_delivery_only", "no_lifecycle" });
         }
 
         return null;

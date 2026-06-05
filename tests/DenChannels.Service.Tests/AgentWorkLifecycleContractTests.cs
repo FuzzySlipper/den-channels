@@ -735,6 +735,195 @@ public sealed class AgentWorkLifecycleContractTests : IDisposable
         Assert.Equal("dlv-abc-456", dlvId.GetString());
     }
 
+    // ────────────────────────────────────────────────────────────────────
+    // #1977 repair: gateway_delivery projection tests
+    // ────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task CurrentWorkProjection_WithGatewayDeliveryOnly_ReturnsGatewayProvenance()
+    {
+        using var client = _factory.CreateClient();
+
+        var createChannelResp = await client.PostAsJsonAsync("/api/channels", new
+        {
+            slug = "gw-only",
+            displayName = "Gateway Only",
+            kind = "ad_hoc",
+            createdBy = "test"
+        });
+        var channel = await createChannelResp.Content.ReadFromJsonAsync<ChannelPayload>();
+
+        // Post a gateway_delivery message directly
+        var reqId = $"direct-agent-message:{channel!.Id}:gw-agent:{Guid.NewGuid():N}";
+        await client.PostAsJsonAsync($"/api/channels/{channel.Id}/messages", new
+        {
+            senderType = "user",
+            senderIdentity = "operator",
+            body = "Gateway delivery test",
+            messageKind = "human_text",
+            sourceKind = "gateway_delivery",
+            sourceId = reqId,
+            workerRunId = "gw-run-1",
+            workerRole = "coder",
+            assignmentId = "gw-assign-1"
+        });
+
+        using var response = await client.GetAsync($"/api/agent-work/current?channelId={channel.Id}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+
+        Assert.True(doc.RootElement.TryGetProperty("items", out var items));
+        Assert.True(items.GetArrayLength() > 0, "Should have projection items from gateway delivery");
+
+        var first = items[0];
+        Assert.Contains("gw-agent", first.GetProperty("agentIdentity").GetString());
+
+        Assert.True(first.TryGetProperty("evidenceProvenance", out var provenance));
+        var provList = provenance.EnumerateArray().Select(p => p.GetString()).ToList();
+        Assert.Contains("gateway_delivery", provList);
+        Assert.DoesNotContain("lifecycle_event", provList);
+
+        // Should have evidence links
+        Assert.True(first.TryGetProperty("evidenceLinks", out var links));
+        var linkList = links.EnumerateArray().Select(l => l.GetString()).ToList();
+        Assert.Contains(linkList, l => l is not null && l.Contains("/api/direct-agent-events", StringComparison.Ordinal));
+
+        // Should indicate delivered_no_lifecycle state
+        Assert.True(first.TryGetProperty("currentWorkState", out var cws));
+        Assert.Equal("delivered_no_lifecycle", cws.GetString());
+
+        // Should have gateway_delivery_only flag
+        Assert.True(first.TryGetProperty("flags", out var flags));
+        var flagList = flags.EnumerateArray().Select(f => f.GetString()).ToList();
+        Assert.Contains("gateway_delivery_only", flagList);
+        Assert.Contains("no_lifecycle", flagList);
+    }
+
+    [Fact]
+    public async Task CurrentWorkProjection_WakeAndGatewayDelivery_NoLifecycle_ReturnsBothProvenance()
+    {
+        using var client = _factory.CreateClient();
+
+        var createChannelResp = await client.PostAsJsonAsync("/api/channels", new
+        {
+            slug = "wake-gw",
+            displayName = "Wake + Gateway",
+            kind = "ad_hoc",
+            createdBy = "test"
+        });
+        var channel = await createChannelResp.Content.ReadFromJsonAsync<ChannelPayload>();
+
+        // Post wake_event message
+        var wakeReqId = $"direct-agent-message:{channel!.Id}:dual-agent:{Guid.NewGuid():N}";
+        await client.PostAsJsonAsync($"/api/channels/{channel.Id}/messages", new
+        {
+            senderType = "user",
+            senderIdentity = "operator",
+            body = "Wake test",
+            messageKind = "human_text",
+            sourceKind = "wake_event",
+            sourceId = wakeReqId,
+            workerRunId = "wake-run"
+        });
+
+        // Post gateway_delivery message
+        var gwReqId = $"direct-agent-message:{channel.Id}:dual-agent:{Guid.NewGuid():N}";
+        await client.PostAsJsonAsync($"/api/channels/{channel.Id}/messages", new
+        {
+            senderType = "user",
+            senderIdentity = "operator",
+            body = "Gateway delivery test",
+            messageKind = "human_text",
+            sourceKind = "gateway_delivery",
+            sourceId = gwReqId,
+            workerRunId = "gw-run"
+        });
+
+        using var response = await client.GetAsync($"/api/agent-work/current?channelId={channel.Id}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+
+        Assert.True(doc.RootElement.TryGetProperty("items", out var items));
+        Assert.Equal(1, items.GetArrayLength());
+
+        var first = items[0];
+        Assert.True(first.TryGetProperty("evidenceProvenance", out var provenance));
+        var provList = provenance.EnumerateArray().Select(p => p.GetString()).ToList();
+        Assert.Contains("direct_agent_event", provList);
+        Assert.Contains("gateway_delivery", provList);
+
+        Assert.True(first.TryGetProperty("currentWorkState", out var cws));
+        Assert.Equal("delivered_no_lifecycle", cws.GetString());
+    }
+
+    [Fact]
+    public async Task CurrentWorkProjection_LifecycleWithGatewayDelivery_CoPresent()
+    {
+        using var client = _factory.CreateClient();
+
+        var createChannelResp = await client.PostAsJsonAsync("/api/channels", new
+        {
+            slug = "life-gw",
+            displayName = "Lifecycle + Gateway",
+            kind = "ad_hoc",
+            createdBy = "test"
+        });
+        var channel = await createChannelResp.Content.ReadFromJsonAsync<ChannelPayload>();
+
+        // Write lifecycle event
+        await client.PostAsJsonAsync("/api/agent-work/lifecycle-events", new
+        {
+            channelId = channel!.Id,
+            agentIdentity = "life-gw-agent",
+            eventType = "agent_turn_started",
+            workerRunId = "life-run"
+        });
+
+        // Post gateway_delivery message for same agent
+        var gwReqId = $"direct-agent-message:{channel.Id}:life-gw-agent:{Guid.NewGuid():N}";
+        await client.PostAsJsonAsync($"/api/channels/{channel.Id}/messages", new
+        {
+            senderType = "user",
+            senderIdentity = "operator",
+            body = "Gateway co-present",
+            messageKind = "human_text",
+            sourceKind = "gateway_delivery",
+            sourceId = gwReqId,
+            workerRunId = "gw-co-run"
+        });
+
+        using var response = await client.GetAsync($"/api/agent-work/current?channelId={channel.Id}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+
+        Assert.True(doc.RootElement.TryGetProperty("items", out var items));
+        Assert.Equal(1, items.GetArrayLength());
+
+        var first = items[0];
+        Assert.True(first.TryGetProperty("evidenceProvenance", out var provenance));
+        var provList = provenance.EnumerateArray().Select(p => p.GetString()).ToList();
+        Assert.Contains("lifecycle_event", provList);
+        Assert.Contains("gateway_delivery", provList);
+
+        // Lifecycle takes priority for workerRunId
+        Assert.True(first.TryGetProperty("workerRunId", out var runId));
+        Assert.Equal("life-run", runId.GetString());
+
+        Assert.True(first.TryGetProperty("currentWorkState", out var cws));
+        Assert.Equal("lifecycle_event_present", cws.GetString());
+
+        // Should have a gateway evidence link
+        Assert.True(first.TryGetProperty("evidenceLinks", out var links));
+        var linkList = links.EnumerateArray().Select(l => l.GetString()).ToList();
+        Assert.Contains(linkList, l => l is not null && l.Contains("/api/direct-agent-events/", StringComparison.Ordinal));
+    }
+
     public void Dispose()
     {
         try

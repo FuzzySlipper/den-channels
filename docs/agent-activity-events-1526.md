@@ -58,7 +58,7 @@ The Channels-owned `/api/agent-work/current` and `/api/agent-work/events` endpoi
 provide non-waking agent/worker observability.
 
 **Current-work projection** (`GET /api/agent-work/current?channelId=N`) composes
-agent activity from three Channels-owned evidence sources:
+agent activity from four Channels-owned evidence sources:
 
 1. **agent_work_lifecycle events** (canonical target) — written by den-host/Core/Hermes
    producers via `POST /api/agent-work/lifecycle-events`. When present per agent,
@@ -71,19 +71,34 @@ agent activity from three Channels-owned evidence sources:
 3. **Direct-agent wake records** — `channel_messages` with `source_kind = "wake_event"`.
    Used when no lifecycle or activity event exists.
 
+4. **Gateway delivery records** — `channel_messages` with `source_kind = "gateway_delivery"`.
+   Used when no lifecycle, activity, or wake event exists. Represents delivery
+   confirmations or gateway replies that occurred without a lifecycle event.
+
 **Graceful degradation**: During producer migration (#1956 → #1977), the projection
 returns useful rows even when `agent_work_lifecycle` events have not been emitted.
-Lifecycle events are preferred when present; general activity and direct-agent
-records fill gaps.
+Lifecycle events are preferred when present; general activity, direct-agent,
+and gateway delivery records fill gaps.
 
 **Evidence provenance** is surfaced in each projection row via `evidenceProvenance`
-("lifecycle_event", "activity_event", "direct_agent_event") and `evidenceLinks`
-(URLs back to source API endpoints). The `currentWorkState` field provides
-diagnostic labels: `lifecycle_event_present`, `activity_no_lifecycle`,
+("lifecycle_event", "activity_event", "direct_agent_event", "gateway_delivery") and
+`evidenceLinks` (URLs back to source API endpoints). The `currentWorkState` field
+provides diagnostic labels: `lifecycle_event_present`, `activity_no_lifecycle`,
 `delivered_no_lifecycle`, `recorded_only_direct_agent`, `terminal_lifecycle`.
 
 **Non-waking invariant**: Projection/event reads do not create channel messages,
 wake agents, or advance read cursors.
+
+### Core join unavailability (`core_join_unavailable`)
+
+Channels cannot safely join Core (den-core) assignment/run facts directly.
+The `EvidenceProvenance.CoreJoinUnavailable` constant exists as a boundary marker:
+it is reserved for a future projection path that would consume a Core-owned summary
+projection or read-only join endpoint. Currently Channels owns only the
+Channels-local evidence sources listed above. Any operator-level current-work
+question that requires Core-side state (pool capacity, lease health, assignment
+audit) should be routed to a den-core observability endpoint, not reimplemented
+in Channels.
 
 ## API contract
 
