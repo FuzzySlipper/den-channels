@@ -128,9 +128,9 @@ public static class ChannelRoutes
         });
 
         api.MapGet("/channels/{channelId:long}/activity-events", async (ChannelsRepository repository, long channelId,
-            string? deliveryRequestId, string? hermesSessionKey, string? displayBlockId, string? workerRunId,
+            string? deliveryRequestId, string? sessionKey, string? displayBlockId, string? workerRunId,
             string? agentInstanceId, long? anchorMessageId, long? taskId, string? assignmentId, long? afterId, int? limit, CancellationToken cancellationToken) => Results.Ok(
-                await repository.ListActivityEventsAsync(channelId, deliveryRequestId, hermesSessionKey, displayBlockId,
+                await repository.ListActivityEventsAsync(channelId, deliveryRequestId, sessionKey, displayBlockId,
                     workerRunId, agentInstanceId, anchorMessageId, taskId, assignmentId, afterId, limit ?? 100, cancellationToken)));
 
         api.MapPatch("/channel-activity-events/{activityEventId:long}", async (ChannelsRepository repository, long activityEventId,

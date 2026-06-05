@@ -91,7 +91,7 @@ Task #1555 naming alignment: docs and adapters may call this surface `channel_ac
 Query channel activity events:
 
 ```http
-GET /api/channels/{channelId}/activity-events?deliveryRequestId=...&hermesSessionKey=...&anchorMessageId=...&afterId=...&limit=...
+GET /api/channels/{channelId}/activity-events?deliveryRequestId=...&sessionKey=...&anchorMessageId=...&afterId=...&limit=...
 ```
 
 The list route also supports server-side display-block filters:

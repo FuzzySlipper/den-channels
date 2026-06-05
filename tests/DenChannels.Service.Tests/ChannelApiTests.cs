@@ -497,7 +497,7 @@ public sealed class ChannelApiTests : IDisposable
             projectId = "den-channels",
             agentIdentity = "den-mcp-runner-reviewer",
             deliveryRequestId = "reviewer-1567",
-            hermesSessionKey = "den-channels:1567:reviewer",
+            sessionKey = "den-channels:1567:reviewer",
             displayBlockId = "parent-1567",
             parentSessionKey = "den-channels:1567:parent",
             parentAgentIdentity = "den-mcp-runner",
@@ -517,7 +517,7 @@ public sealed class ChannelApiTests : IDisposable
             projectId = "den-channels",
             agentIdentity = "den-mcp-runner",
             deliveryRequestId = "delivery-1529",
-            hermesSessionKey = "den-channels:1529",
+            sessionKey = "den-channels:1529",
             displayBlockId = "block-1529",
             workerRunId = "worker-run-1529",
             taskId = 1529,
@@ -554,6 +554,13 @@ public sealed class ChannelApiTests : IDisposable
         var activityEvent = Assert.Single(byDelivery);
         Assert.Equal(coderStarted.Id, activityEvent.Id);
         Assert.Equal("den-channels:1567:coder", activityEvent.SessionKey);
+
+        var bySessionKey = await client.GetFromJsonAsync<List<ActivityEventPayload>>(
+            $"/api/channels/{channel.Id}/activity-events?sessionKey=den-channels:1567:reviewer");
+        Assert.NotNull(bySessionKey);
+        var reviewerActivity = Assert.Single(bySessionKey);
+        Assert.Equal(reviewerStarted.Id, reviewerActivity.Id);
+        Assert.Equal("den-channels:1567:reviewer", reviewerActivity.SessionKey);
 
         var displayBlockJson = await client.GetStringAsync($"/api/channels/{channel.Id}/activity-events?displayBlockId=parent-1567");
         Assert.Contains("\"displayBlockId\":\"parent-1567\"", displayBlockJson);
@@ -597,7 +604,7 @@ public sealed class ChannelApiTests : IDisposable
                 projectId = "activity-window",
                 agentIdentity = "den-mcp-runner",
                 deliveryRequestId = $"delivery-{i:D3}",
-                hermesSessionKey = $"activity-window:{i:D3}",
+                sessionKey = $"activity-window:{i:D3}",
                 displayBlockId = i <= 3 ? "old-display-block" : null,
                 workerRunId = i <= 3 ? "old-worker-run" : null,
                 eventType = "tool_call_started",
@@ -860,7 +867,7 @@ public sealed class ChannelApiTests : IDisposable
             projectId = "den-channels",
             agentIdentity = "den-mcp-runner",
             deliveryRequestId = "delivery-asn-42",
-            hermesSessionKey = "session-asn-42",
+            sessionKey = "session-asn-42",
             workerRunId = "run-asn-42",
             workerRole = "coder",
             taskId = 1724L,
