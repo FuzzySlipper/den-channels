@@ -22,6 +22,61 @@ namespace DenChannels.Service.AgentWorkLifecycle;
 // =========================================================================
 
 /// <summary>
+/// Evidence provenance classification for current-work projection rows.
+/// Describes which Channels-owned evidence source(s) back the row.
+/// The #1956 lifecycle event contract is the canonical target, but during
+/// producer migration the projection degrades gracefully to compose from
+/// existing activity events and direct-agent wake records.
+/// </summary>
+public static class EvidenceProvenance
+{
+    /// <summary>A canonical agent_work_lifecycle event exists.</summary>
+    public const string LifecycleEvent = "lifecycle_event";
+
+    /// <summary>General activity event (tool_call_started, etc.) without a lifecycle event.</summary>
+    public const string ActivityEvent = "activity_event";
+
+    /// <summary>Direct-agent wake_event message recorded, no lifecycle event yet.</summary>
+    public const string DirectAgentEvent = "direct_agent_event";
+
+    /// <summary>Gateway delivery occurred but no lifecycle event recorded.</summary>
+    public const string GatewayDelivery = "gateway_delivery";
+
+    /// <summary>Channels cannot safely join Core assignment/run facts.</summary>
+    public const string CoreJoinUnavailable = "core_join_unavailable";
+
+    /// <summary>All valid provenance values.</summary>
+    public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
+    {
+        LifecycleEvent, ActivityEvent, DirectAgentEvent, GatewayDelivery, CoreJoinUnavailable,
+    };
+}
+
+/// <summary>
+/// Current-work diagnostic / staleness states.
+/// </summary>
+public static class CurrentWorkState
+{
+    /// <summary>Direct-agent request recorded, not yet delivered/claimed.</summary>
+    public const string RecordedOnly = "recorded_only_direct_agent";
+
+    /// <summary>Delivered/gateway replied but no lifecycle event.</summary>
+    public const string DeliveredNoLifecycle = "delivered_no_lifecycle";
+
+    /// <summary>Activity events seen without lifecycle event.</summary>
+    public const string ActivityNoLifecycle = "activity_no_lifecycle";
+
+    /// <summary>Canonical lifecycle event present.</summary>
+    public const string LifecycleEventPresent = "lifecycle_event_present";
+
+    /// <summary>No recent evidence of any kind.</summary>
+    public const string StaleNoRecentEvidence = "stale_no_recent_evidence";
+
+    /// <summary>Lifecycle event is terminal (completed/failed/timed_out/blocked).</summary>
+    public const string TerminalLifecycle = "terminal_lifecycle";
+}
+
+/// <summary>
 /// Canonical lifecycle event type vocabulary. Producers must use one of
 /// these; consumers may use them for filtering/projection state.
 /// </summary>
@@ -284,7 +339,9 @@ public sealed record LifecycleEventQuery(
 
 /// <summary>
 /// Current-work projection item. One per agent/worker that has recent
-/// lifecycle activity. Produced by the current-work projection endpoint.
+/// evidence activity. Produced by the current-work projection endpoint.
+/// Composed from one or more evidence sources: lifecycle events (canonical),
+/// general activity events, and direct-agent wake records.
 /// </summary>
 public sealed record CurrentWorkProjectionItem(
     [property: JsonPropertyName("agentIdentity")] string AgentIdentity,
@@ -309,23 +366,37 @@ public sealed record CurrentWorkProjectionItem(
     [property: JsonPropertyName("lastActivityEventId")] long? LastActivityEventId,
     [property: JsonPropertyName("evidenceLink")] string? EvidenceLink,
 
+    // ── Evidence provenance ──
+    [property: JsonPropertyName("evidenceProvenance")]
+    IReadOnlyList<string> EvidenceProvenance,
+    [property: JsonPropertyName("evidenceLinks")]
+    IReadOnlyList<string> EvidenceLinks,
+
+    // ── Session / delivery ──
+    [property: JsonPropertyName("sessionId")] string? SessionId,
+    [property: JsonPropertyName("deliveryRequestId")] string? DeliveryRequestId,
+    [property: JsonPropertyName("directAgentEventId")] string? DirectAgentEventId,
+
     // ── Process ──
     [property: JsonPropertyName("hostId")] string? HostId,
     [property: JsonPropertyName("processId")] int? ProcessId,
 
     // ── Diagnostics ──
+    [property: JsonPropertyName("currentWorkState")] string? CurrentWorkState,
     [property: JsonPropertyName("stalenessDiagnostic")] string? StalenessDiagnostic,
     [property: JsonPropertyName("flags")] IReadOnlyList<string> Flags);
 
 /// <summary>
 /// Current-work projection response. Includes a summary of staleness
-/// diagnostics across all tracked agents/workers.
+/// diagnostics across all tracked agents/workers, and a migration note
+/// documenting the canonical target vs. current degradation strategy.
 /// </summary>
 public sealed record CurrentWorkProjectionResponse(
     [property: JsonPropertyName("items")] IReadOnlyList<CurrentWorkProjectionItem> Items,
     [property: JsonPropertyName("totalCount")] int TotalCount,
     [property: JsonPropertyName("generatedAt")] string GeneratedAt,
-    [property: JsonPropertyName("stalenessSummary")] StalenessSummaryDto StalenessSummary);
+    [property: JsonPropertyName("stalenessSummary")] StalenessSummaryDto StalenessSummary,
+    [property: JsonPropertyName("migrationNote")] string? MigrationNote);
 
 /// <summary>
 /// Aggregate staleness diagnostics across the projection.

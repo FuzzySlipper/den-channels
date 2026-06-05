@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using DenChannels.Service.AgentWorkLifecycle;
 using DenChannels.Service.Channels;
+using DenChannels.Service.DirectAgentEvents;
 
 namespace DenChannels.Service;
 
@@ -14,6 +15,11 @@ namespace DenChannels.Service;
 ///   - They NEVER create channel_messages, wake agents, advance read cursors,
 ///     or imply delivery completion.
 ///   - den-host is the expected runtime telemetry producer.
+///
+/// Current-work projection (#1977): composes agent activity from three
+/// Channels-owned evidence sources, not just lifecycle events. During
+/// producer migration, the projection degrades gracefully from canonical
+/// lifecycle events to general activity events and direct-agent records.
 /// </summary>
 public static class AgentWorkLifecycleRoutes
 {
@@ -209,8 +215,18 @@ public static class AgentWorkLifecycleRoutes
     // ════════════════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Bounded current-work projection. Returns the most recent lifecycle
-    /// event per active agent/worker, with staleness diagnostics.
+    /// Bounded current-work projection. Composes agent activity from three
+    /// Channels-owned evidence sources, not just lifecycle events.
+    ///
+    /// During producer migration (#1956 → #1977), the projection degrades
+    /// gracefully: canonical lifecycle events are preferred, with fallback
+    /// to general activity events and direct-agent wake records.
+    ///
+    /// Evidence sources:
+    ///   1. agent_work_lifecycle events (canonical target)
+    ///   2. General channel_activity_events (tool_call_started, etc.)
+    ///   3. Direct-agent wake_event messages (channel_messages with
+    ///      source_kind=wake_event)
     ///
     /// This is the endpoint that answers: "what is each agent/worker doing
     /// right now, when was it last seen, and what evidence backs that state?"
@@ -227,60 +243,96 @@ public static class AgentWorkLifecycleRoutes
 
         try
         {
-            // Fetch recent lifecycle events for the channel (last 200,
-            // which covers typical active agent set).
-            var events = await repository.ListActivityEventsAsync(
+            // ── Source 1: lifecycle events (canonical) ──────────────────
+            var allActivityEvents = await repository.ListActivityEventsAsync(
                 cid,
-                deliveryRequestId: null,
-                sessionKey: null,
-                displayBlockId: null,
-                workerRunId: null,
-                agentInstanceId: null,
-                anchorMessageId: null,
-                taskId: null,
-                assignmentId: null,
-                afterId: null,
-                limit: 200,
-                cancellationToken);
+                deliveryRequestId: null, sessionKey: null, displayBlockId: null,
+                workerRunId: null, agentInstanceId: null, anchorMessageId: null,
+                taskId: null, assignmentId: null, afterId: null,
+                limit: 200, cancellationToken);
 
-            var lifecycleEvents = events
+            var lifecycleEvents = allActivityEvents
                 .Where(e => string.Equals(e.EventType, "agent_work_lifecycle", StringComparison.OrdinalIgnoreCase))
                 .Select(ToLifecycleDto)
                 .ToList();
 
-            // Group by agent identity, take the most recent per agent
-            var projectionItems = lifecycleEvents
-                .GroupBy(e => e.AgentIdentity)
-                .Select(g =>
+            // ── Source 2: general activity events (non-lifecycle) ───────
+            var generalActivityEvents = allActivityEvents
+                .Where(e => !string.Equals(e.EventType, "agent_work_lifecycle", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            // ── Source 3: direct-agent wake messages ────────────────────
+            var channelMessages = await repository.ListMessagesAsync(
+                cid, afterId: null, assignmentId: null, limit: 200, cancellationToken);
+            var directAgentWakeMessages = channelMessages
+                .Where(m => string.Equals(m.SourceKind, "wake_event", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            // ── Compose unified evidence map ────────────────────────────
+            var evidenceMap = new Dictionary<string, AgentEvidenceBucket>(StringComparer.OrdinalIgnoreCase);
+
+            // Canonical lifecycle events (highest authority)
+            foreach (var le in lifecycleEvents)
+            {
+                var key = le.AgentIdentity;
+                if (!evidenceMap.ContainsKey(key))
+                    evidenceMap[key] = new AgentEvidenceBucket(key);
+                var bucket = evidenceMap[key];
+                bucket.LifecycleEvents.Add(le);
+                bucket.HasLifecycle = true;
+            }
+
+            // General activity events (fill gaps)
+            foreach (var ae in generalActivityEvents)
+            {
+                var key = ae.AgentIdentity;
+                if (!evidenceMap.ContainsKey(key))
+                    evidenceMap[key] = new AgentEvidenceBucket(key);
+                var bucket = evidenceMap[key];
+                bucket.ActivityEvents.Add(ae);
+                bucket.HasActivity = true;
+            }
+
+            // Direct-agent wake messages (fill gaps)
+            foreach (var dw in directAgentWakeMessages)
+            {
+                // Use the target member identity from the SourceId pattern,
+                // fall back to SenderIdentity
+                var memberIdentity = DirectAgentEventShared.ExtractMemberIdentity(dw.SourceId)
+                                     ?? dw.SenderIdentity;
+                var key = memberIdentity;
+                if (!string.IsNullOrWhiteSpace(key))
                 {
-                    var latest = g.OrderByDescending(e => e.Id).First();
-                    return new CurrentWorkProjectionItem(
-                        AgentIdentity: latest.AgentIdentity,
-                        WorkerRunId: latest.WorkerRunId,
-                        ProjectId: latest.ProjectId,
-                        TaskId: latest.TaskId,
-                        AssignmentId: latest.AssignmentId,
-                        WorkerRole: latest.WorkerRole,
-                        ProfileIdentity: latest.ProfileIdentity,
-                        PoolMemberId: latest.PoolMemberId,
-                        AgentInstanceId: latest.AgentInstanceId,
-                        State: DetermineProjectedState(latest),
-                        StateReason: latest.Summary,
-                        LastActivityAt: latest.UpdatedAt,
-                        StalenessDeadline: null,
-                        LastActivityEventId: latest.Id,
-                        EvidenceLink: $"/api/agent-work/events?channelId={cid}&agentIdentity={Uri.EscapeDataString(latest.AgentIdentity)}&limit=1",
-                        HostId: latest.HostId,
-                        ProcessId: latest.ProcessId,
-                        StalenessDiagnostic: GetStalenessDiagnostic(latest),
-                        Flags: BuildFlags(latest));
-                })
+                    if (!evidenceMap.ContainsKey(key))
+                        evidenceMap[key] = new AgentEvidenceBucket(key);
+                    var bucket = evidenceMap[key];
+                    bucket.DirectAgentEvents.Add(dw);
+                    bucket.HasDirectAgent = true;
+                }
+            }
+
+            // ── Build projection items ──────────────────────────────────
+            var projectionItems = evidenceMap
+                .Select(kvp => BuildProjectionItem(kvp.Value, cid))
+                .Where(item => item is not null)
+                .Select(item => item!)
                 .OrderBy(i => i.AgentIdentity)
                 .ToList();
 
+            // ── Staleness diagnostics ───────────────────────────────────
             var staleItems = projectionItems
                 .Where(i => i.StalenessDiagnostic is not null)
                 .ToList();
+
+            // ── Migration note ──────────────────────────────────────────
+            var lifecycleCount = lifecycleEvents.Count;
+            var nonLifecycleAgents = projectionItems.Count(i =>
+                i.EvidenceProvenance.All(p => p != EvidenceProvenance.LifecycleEvent));
+            string? migrationNote = lifecycleCount == 0
+                ? "No agent_work_lifecycle events present. Projection composed from general activity events and/or direct-agent wake records. The #1956 lifecycle event contract is the canonical target for den-host/Core/Hermes producers."
+                : nonLifecycleAgents > 0
+                    ? $"{nonLifecycleAgents} agent(s) projected from non-lifecycle evidence only. Canonical agent_work_lifecycle event coverage is partial. Producers should migrate to the #1956 lifecycle contract."
+                    : null;
 
             var response = new CurrentWorkProjectionResponse(
                 Items: projectionItems,
@@ -291,7 +343,8 @@ public static class AgentWorkLifecycleRoutes
                     Stale: staleItems.Count,
                     StaleDiagnostics: staleItems
                         .Select(i => $"{i.AgentIdentity}: {i.StalenessDiagnostic}")
-                        .ToList()));
+                        .ToList()),
+                MigrationNote: migrationNote);
 
             return Results.Ok(response);
         }
@@ -304,6 +357,214 @@ public static class AgentWorkLifecycleRoutes
     // ════════════════════════════════════════════════════════════════════════
     // Helpers
     // ════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Intermediate evidence bucket for composing agent activity across sources.
+    /// </summary>
+    private sealed class AgentEvidenceBucket
+    {
+        public string AgentIdentity { get; }
+        public List<AgentWorkLifecycleEventDto> LifecycleEvents { get; } = new();
+        public List<ChannelActivityEventDto> ActivityEvents { get; } = new();
+        public List<ChannelMessageDto> DirectAgentEvents { get; } = new();
+        public bool HasLifecycle { get; set; }
+        public bool HasActivity { get; set; }
+        public bool HasDirectAgent { get; set; }
+
+        public AgentEvidenceBucket(string agentIdentity)
+        {
+            AgentIdentity = agentIdentity;
+        }
+    }
+
+    /// <summary>
+    /// Build a projection item from an evidence bucket. Prefers lifecycle
+    /// events when available; falls back to activity events, then direct-agent.
+    /// </summary>
+    private static CurrentWorkProjectionItem? BuildProjectionItem(AgentEvidenceBucket bucket, long cid)
+    {
+        var provenance = new List<string>();
+        var evidenceLinks = new List<string>();
+
+        // ── Determine primary evidence source ───────────────────────────
+        if (bucket.HasLifecycle)
+        {
+            provenance.Add(EvidenceProvenance.LifecycleEvent);
+            var latest = bucket.LifecycleEvents.OrderByDescending(e => e.Id).First();
+            evidenceLinks.Add($"/api/agent-work/events?channelId={cid}&agentIdentity={Uri.EscapeDataString(latest.AgentIdentity)}&limit=1");
+            evidenceLinks.Add($"/api/channels/{cid}/activity-events?limit=10");
+
+            var currentWorkState = latest.Terminal
+                ? CurrentWorkState.TerminalLifecycle
+                : CurrentWorkState.LifecycleEventPresent;
+
+            return new CurrentWorkProjectionItem(
+                AgentIdentity: latest.AgentIdentity,
+                WorkerRunId: latest.WorkerRunId,
+                ProjectId: latest.ProjectId,
+                TaskId: latest.TaskId,
+                AssignmentId: latest.AssignmentId,
+                WorkerRole: latest.WorkerRole,
+                ProfileIdentity: latest.ProfileIdentity,
+                PoolMemberId: latest.PoolMemberId,
+                AgentInstanceId: latest.AgentInstanceId,
+                State: DetermineProjectedState(latest),
+                StateReason: latest.Summary,
+                LastActivityAt: latest.UpdatedAt,
+                StalenessDeadline: null,
+                LastActivityEventId: latest.Id,
+                EvidenceLink: $"/api/agent-work/events?channelId={cid}&agentIdentity={Uri.EscapeDataString(latest.AgentIdentity)}&limit=1",
+                EvidenceProvenance: provenance,
+                EvidenceLinks: evidenceLinks,
+                SessionId: latest.SessionId,
+                DeliveryRequestId: latest.DeliveryRequestId,
+                DirectAgentEventId: latest.DirectAgentEventId,
+                HostId: latest.HostId,
+                ProcessId: latest.ProcessId,
+                CurrentWorkState: currentWorkState,
+                StalenessDiagnostic: GetStalenessDiagnostic(latest),
+                Flags: BuildFlags(latest));
+        }
+
+        // ── Has both activity AND direct-agent, but no lifecycle ───────
+        if (bucket.HasActivity && bucket.HasDirectAgent)
+        {
+            provenance.Add(EvidenceProvenance.ActivityEvent);
+            provenance.Add(EvidenceProvenance.DirectAgentEvent);
+
+            var latestActivity = bucket.ActivityEvents.OrderByDescending(e => e.Id).First();
+            var latestDirectAgent = bucket.DirectAgentEvents.OrderByDescending(e => e.Id).First();
+
+            evidenceLinks.Add($"/api/channels/{cid}/activity-events?limit=10");
+            evidenceLinks.Add($"/api/direct-agent-events?channelId={cid}&limit=10");
+
+            // Use the latest timestamp across both sources
+            var latestAt = LatestTimestamp(latestActivity.UpdatedAt, latestDirectAgent.CreatedAt);
+
+            return new CurrentWorkProjectionItem(
+                AgentIdentity: bucket.AgentIdentity,
+                WorkerRunId: latestActivity.WorkerRunId ?? latestDirectAgent.WorkerRunId,
+                ProjectId: latestActivity.ProjectId ?? latestDirectAgent.TargetProjectId ?? latestDirectAgent.SourceProjectId,
+                TaskId: latestActivity.TaskId ?? latestDirectAgent.TargetTaskId,
+                AssignmentId: latestActivity.AssignmentId ?? latestDirectAgent.AssignmentId,
+                WorkerRole: latestActivity.WorkerRole ?? latestDirectAgent.WorkerRole,
+                ProfileIdentity: null,
+                PoolMemberId: latestActivity.PoolMemberId ?? latestDirectAgent.PoolMemberId,
+                AgentInstanceId: latestActivity.AgentInstanceId ?? latestDirectAgent.AgentInstanceId,
+                State: "running",
+                StateReason: $"Activity seen ({latestActivity.EventType}) + direct-agent wake; no lifecycle event",
+                LastActivityAt: latestAt,
+                StalenessDeadline: null,
+                LastActivityEventId: latestActivity.Id,
+                EvidenceLink: $"/api/channels/{cid}/activity-events?limit=10",
+                EvidenceProvenance: provenance,
+                EvidenceLinks: evidenceLinks,
+                SessionId: latestActivity.SessionKey ?? latestDirectAgent.SessionId,
+                DeliveryRequestId: latestActivity.DeliveryRequestId ?? latestDirectAgent.DeliveryRequestId,
+                DirectAgentEventId: latestDirectAgent.SourceId,
+                HostId: null,
+                ProcessId: null,
+                CurrentWorkState: CurrentWorkState.DeliveredNoLifecycle,
+                StalenessDiagnostic: GetTimestampDiagnostic(latestAt, bucket.AgentIdentity),
+                Flags: new List<string> { "multi_source", "no_lifecycle" });
+        }
+
+        // ── Activity only, no lifecycle ─────────────────────────────────
+        if (bucket.HasActivity)
+        {
+            provenance.Add(EvidenceProvenance.ActivityEvent);
+            var latest = bucket.ActivityEvents.OrderByDescending(e => e.Id).First();
+            evidenceLinks.Add($"/api/channels/{cid}/activity-events?limit=10");
+
+            return new CurrentWorkProjectionItem(
+                AgentIdentity: bucket.AgentIdentity,
+                WorkerRunId: latest.WorkerRunId,
+                ProjectId: latest.ProjectId,
+                TaskId: latest.TaskId,
+                AssignmentId: latest.AssignmentId,
+                WorkerRole: latest.WorkerRole,
+                ProfileIdentity: null,
+                PoolMemberId: latest.PoolMemberId,
+                AgentInstanceId: latest.AgentInstanceId,
+                State: "running",
+                StateReason: $"Activity event ({latest.EventType}) without lifecycle event",
+                LastActivityAt: latest.UpdatedAt,
+                StalenessDeadline: null,
+                LastActivityEventId: latest.Id,
+                EvidenceLink: $"/api/channels/{cid}/activity-events?limit=10",
+                EvidenceProvenance: provenance,
+                EvidenceLinks: evidenceLinks,
+                SessionId: latest.SessionKey,
+                DeliveryRequestId: latest.DeliveryRequestId,
+                DirectAgentEventId: null,
+                HostId: null,
+                ProcessId: null,
+                CurrentWorkState: CurrentWorkState.ActivityNoLifecycle,
+                StalenessDiagnostic: GetTimestampDiagnostic(latest.UpdatedAt, bucket.AgentIdentity),
+                Flags: new List<string> { "no_lifecycle" });
+        }
+
+        // ── Direct-agent only ───────────────────────────────────────────
+        if (bucket.HasDirectAgent)
+        {
+            provenance.Add(EvidenceProvenance.DirectAgentEvent);
+            var latest = bucket.DirectAgentEvents.OrderByDescending(e => e.Id).First();
+            evidenceLinks.Add($"/api/direct-agent-events/{latest.Id}");
+            evidenceLinks.Add($"/api/direct-agent-events?channelId={cid}&limit=10");
+
+            return new CurrentWorkProjectionItem(
+                AgentIdentity: bucket.AgentIdentity,
+                WorkerRunId: latest.WorkerRunId,
+                ProjectId: latest.TargetProjectId ?? latest.SourceProjectId,
+                TaskId: latest.TargetTaskId,
+                AssignmentId: latest.AssignmentId,
+                WorkerRole: latest.WorkerRole,
+                ProfileIdentity: latest.ProfileIdentity,
+                PoolMemberId: latest.PoolMemberId,
+                AgentInstanceId: latest.AgentInstanceId,
+                State: "running",
+                StateReason: "Direct-agent wake recorded; pending delivery or lifecycle event",
+                LastActivityAt: latest.CreatedAt,
+                StalenessDeadline: null,
+                LastActivityEventId: null,
+                EvidenceLink: $"/api/direct-agent-events/{latest.Id}",
+                EvidenceProvenance: provenance,
+                EvidenceLinks: evidenceLinks,
+                SessionId: latest.SessionId,
+                DeliveryRequestId: latest.DeliveryRequestId,
+                DirectAgentEventId: latest.SourceId,
+                HostId: null,
+                ProcessId: null,
+                CurrentWorkState: CurrentWorkState.RecordedOnly,
+                StalenessDiagnostic: GetTimestampDiagnostic(latest.CreatedAt, bucket.AgentIdentity),
+                Flags: new List<string> { "direct_agent_only", "no_lifecycle" });
+        }
+
+        return null;
+    }
+
+    private static string? LatestTimestamp(string? a, string? b)
+    {
+        if (a is null) return b;
+        if (b is null) return a;
+        return string.Compare(a, b, StringComparison.Ordinal) >= 0 ? a : b;
+    }
+
+    private static string? GetTimestampDiagnostic(string? timestamp, string agentIdentity)
+    {
+        if (string.IsNullOrWhiteSpace(timestamp)) return "missing_timestamp";
+
+        var parsed = DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal, out var dt) ? dt : (DateTimeOffset?)null;
+
+        if (parsed is null) return "missing_timestamp";
+
+        var age = DateTimeOffset.UtcNow - parsed.Value;
+
+        if (age.TotalMinutes > 30) return $"stale (last seen {age.TotalMinutes:F0}m ago)";
+        if (age.TotalMinutes > 10) return $"possibly_stale (last seen {age.TotalMinutes:F0}m ago)";
+        return null;
+    }
 
     private static AgentWorkLifecycleEventDto ToLifecycleDto(ChannelActivityEventDto e)
     {

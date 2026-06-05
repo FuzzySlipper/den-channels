@@ -370,6 +370,371 @@ public sealed class AgentWorkLifecycleContractTests : IDisposable
         }
     }
 
+    // ────────────────────────────────────────────────────────────────────
+    // #1977: Multi-source current-work projection tests
+    // ────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task CurrentWorkProjection_WithActivityOnly_NoLifecycleEvents_ReturnsItems()
+    {
+        using var client = _factory.CreateClient();
+
+        var createChannelResp = await client.PostAsJsonAsync("/api/channels", new
+        {
+            slug = "activity-only",
+            displayName = "Activity Only",
+            kind = "ad_hoc",
+            createdBy = "test"
+        });
+        var channel = await createChannelResp.Content.ReadFromJsonAsync<ChannelPayload>();
+        Assert.NotNull(channel);
+
+        // Write general activity events (NOT lifecycle events)
+        for (var i = 0; i < 3; i++)
+        {
+            await client.PostAsJsonAsync($"/api/channels/{channel.Id}/activity-events", new
+            {
+                agentIdentity = "tool-runner",
+                eventType = "tool_call_started",
+                workerRunId = $"run-{i}",
+                workerRole = "coder",
+                title = $"Tool call {i}",
+                summary = $"Running tool {i}"
+            });
+        }
+
+        using var response = await client.GetAsync($"/api/agent-work/current?channelId={channel.Id}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+
+        Assert.True(doc.RootElement.TryGetProperty("items", out var items));
+        Assert.True(items.GetArrayLength() > 0, "Should have projection items from activity events");
+
+        var first = items[0];
+        Assert.Equal("tool-runner", first.GetProperty("agentIdentity").GetString());
+        Assert.True(first.TryGetProperty("evidenceProvenance", out var provenance));
+        var provList = provenance.EnumerateArray().Select(p => p.GetString()).ToList();
+        Assert.Contains("activity_event", provList);
+        Assert.DoesNotContain("lifecycle_event", provList);
+
+        // Should have evidence links
+        Assert.True(first.TryGetProperty("evidenceLinks", out var links));
+        Assert.True(links.GetArrayLength() > 0);
+
+        // Should indicate activity_no_lifecycle state
+        Assert.True(first.TryGetProperty("currentWorkState", out var cws));
+        Assert.Equal("activity_no_lifecycle", cws.GetString());
+
+        // Migration note should be present
+        Assert.True(doc.RootElement.TryGetProperty("migrationNote", out var note));
+        Assert.NotNull(note.GetString());
+    }
+
+    [Fact]
+    public async Task CurrentWorkProjection_WithDirectAgentOnly_NoLifecycleEvents_ReturnsItems()
+    {
+        using var client = _factory.CreateClient();
+
+        var createChannelResp = await client.PostAsJsonAsync("/api/channels", new
+        {
+            slug = "dae-only",
+            displayName = "DAE Only",
+            kind = "ad_hoc",
+            createdBy = "test"
+        });
+        var channel = await createChannelResp.Content.ReadFromJsonAsync<ChannelPayload>();
+        Assert.NotNull(channel);
+
+        // Post messages with source_kind = "wake_event" to simulate
+        // direct-agent wake events without going through the DAE endpoint
+        for (var i = 0; i < 2; i++)
+        {
+            var reqId = $"direct-agent-message:{channel.Id}:wake-agent:{Guid.NewGuid():N}";
+            await client.PostAsJsonAsync($"/api/channels/{channel.Id}/messages", new
+            {
+                senderType = "user",
+                senderIdentity = "operator",
+                body = $"Direct agent message {i}",
+                messageKind = "human_text",
+                sourceKind = "wake_event",
+                sourceId = reqId,
+                workerRunId = $"dae-run-{i}",
+                workerRole = "coder",
+                assignmentId = $"assign-{i}",
+                sessionOwnerId = $"owner-{i}",
+                sessionId = $"ses-{i}"
+            });
+        }
+
+        using var response = await client.GetAsync($"/api/agent-work/current?channelId={channel.Id}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+
+        Assert.True(doc.RootElement.TryGetProperty("items", out var items));
+        Assert.True(items.GetArrayLength() > 0, "Should have projection items from direct-agent events");
+
+        var first = items[0];
+        Assert.Contains("wake-agent", first.GetProperty("agentIdentity").GetString());
+
+        Assert.True(first.TryGetProperty("evidenceProvenance", out var provenance));
+        var provList = provenance.EnumerateArray().Select(p => p.GetString()).ToList();
+        Assert.Contains("direct_agent_event", provList);
+        Assert.DoesNotContain("lifecycle_event", provList);
+
+        // Should have evidence links pointing back to direct-agent-events
+        Assert.True(first.TryGetProperty("evidenceLinks", out var links));
+        var linkList = links.EnumerateArray().Select(l => l.GetString()).ToList();
+        Assert.Contains(linkList, l => l is not null && l.Contains("/api/direct-agent-events", StringComparison.Ordinal));
+
+        // Should indicate recorded_only state
+        Assert.True(first.TryGetProperty("currentWorkState", out var cws));
+        Assert.Equal("recorded_only_direct_agent", cws.GetString());
+
+        // Should have directAgentEventId
+        Assert.True(first.TryGetProperty("directAgentEventId", out var daeId));
+        Assert.NotNull(daeId.GetString());
+    }
+
+    [Fact]
+    public async Task CurrentWorkProjection_MixedEvidence_LifecyclePriority()
+    {
+        using var client = _factory.CreateClient();
+
+        var createChannelResp = await client.PostAsJsonAsync("/api/channels", new
+        {
+            slug = "mixed-evidence",
+            displayName = "Mixed Evidence",
+            kind = "ad_hoc",
+            createdBy = "test"
+        });
+        var channel = await createChannelResp.Content.ReadFromJsonAsync<ChannelPayload>();
+
+        // Write general activity event first
+        await client.PostAsJsonAsync($"/api/channels/{channel!.Id}/activity-events", new
+        {
+            agentIdentity = "multi-agent",
+            eventType = "tool_call_started",
+            workerRunId = "activity-run",
+            title = "Tool activity"
+        });
+
+        // Write lifecycle event
+        await client.PostAsJsonAsync("/api/agent-work/lifecycle-events", new
+        {
+            channelId = channel.Id,
+            agentIdentity = "multi-agent",
+            eventType = "agent_turn_started",
+            workerRunId = "lifecycle-run",
+            title = "Lifecycle turn"
+        });
+
+        using var response = await client.GetAsync($"/api/agent-work/current?channelId={channel.Id}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+
+        Assert.True(doc.RootElement.TryGetProperty("items", out var items));
+        Assert.Equal(1, items.GetArrayLength());
+
+        var first = items[0];
+        Assert.Equal("multi-agent", first.GetProperty("agentIdentity").GetString());
+
+        // Lifecycle should take priority - workerRunId should be from lifecycle
+        Assert.True(first.TryGetProperty("workerRunId", out var runId));
+        Assert.Equal("lifecycle-run", runId.GetString());
+
+        // Should have lifecycle_event provenance
+        Assert.True(first.TryGetProperty("evidenceProvenance", out var provenance));
+        var provList = provenance.EnumerateArray().Select(p => p.GetString()).ToList();
+        Assert.Contains("lifecycle_event", provList);
+
+        // Should be lifecycle_event_present state
+        Assert.True(first.TryGetProperty("currentWorkState", out var cws));
+        Assert.Equal("lifecycle_event_present", cws.GetString());
+
+        // State should be "running" per lifecycle-based projection
+        Assert.True(first.TryGetProperty("state", out var state));
+        Assert.Equal("running", state.GetString());
+    }
+
+    [Fact]
+    public async Task CurrentWorkProjection_NonWaking_DoesNotCreateMessages()
+    {
+        using var client = _factory.CreateClient();
+
+        var createChannelResp = await client.PostAsJsonAsync("/api/channels", new
+        {
+            slug = "nowake-proj",
+            displayName = "NoWake Projection",
+            kind = "ad_hoc",
+            createdBy = "test"
+        });
+        var channel = await createChannelResp.Content.ReadFromJsonAsync<ChannelPayload>();
+
+        // Create activity events
+        await client.PostAsJsonAsync($"/api/channels/{channel!.Id}/activity-events", new
+        {
+            agentIdentity = "quiet-agent",
+            eventType = "tool_call_started",
+            title = "No wake test"
+        });
+
+        // Call projection endpoint multiple times
+        for (var i = 0; i < 3; i++)
+        {
+            using var projResp = await client.GetAsync($"/api/agent-work/current?channelId={channel.Id}");
+            Assert.Equal(HttpStatusCode.OK, projResp.StatusCode);
+        }
+
+        // Verify no channel messages were created
+        var messagesResp = await client.GetAsync($"/api/channels/{channel.Id}/messages?limit=20");
+        var messages = await messagesResp.Content.ReadFromJsonAsync<List<object>>(_jsonOptions);
+        Assert.NotNull(messages);
+        Assert.Empty(messages);
+    }
+
+    [Fact]
+    public async Task CurrentWorkProjection_EmptyChannel_ReturnsEmptyWithNote()
+    {
+        using var client = _factory.CreateClient();
+
+        var createChannelResp = await client.PostAsJsonAsync("/api/channels", new
+        {
+            slug = "empty-proj-note",
+            displayName = "Empty Projection Note",
+            kind = "ad_hoc",
+            createdBy = "test"
+        });
+        var channel = await createChannelResp.Content.ReadFromJsonAsync<ChannelPayload>();
+
+        using var response = await client.GetAsync($"/api/agent-work/current?channelId={channel!.Id}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+
+        Assert.True(doc.RootElement.TryGetProperty("items", out var items));
+        Assert.Equal(0, items.GetArrayLength());
+
+        // Empty channel should still have stalenessSummary and migrationNote
+        Assert.True(doc.RootElement.TryGetProperty("stalenessSummary", out _));
+        Assert.True(doc.RootElement.TryGetProperty("migrationNote", out var note));
+        Assert.NotNull(note.GetString());
+    }
+
+    [Fact]
+    public async Task CurrentWorkProjection_ActivityAndDirectAgent_NoLifecycle_ReturnsMerged()
+    {
+        using var client = _factory.CreateClient();
+
+        var createChannelResp = await client.PostAsJsonAsync("/api/channels", new
+        {
+            slug = "activity-dae",
+            displayName = "Activity + DAE",
+            kind = "ad_hoc",
+            createdBy = "test"
+        });
+        var channel = await createChannelResp.Content.ReadFromJsonAsync<ChannelPayload>();
+        Assert.NotNull(channel);
+
+        // Write general activity event
+        await client.PostAsJsonAsync($"/api/channels/{channel.Id}/activity-events", new
+        {
+            agentIdentity = "hybrid-agent",
+            eventType = "tool_call_started",
+            workerRunId = "act-run",
+            workerRole = "coder"
+        });
+
+        // Post direct-agent-style wake_event message
+        var reqId = $"direct-agent-message:{channel.Id}:hybrid-agent:{Guid.NewGuid():N}";
+        await client.PostAsJsonAsync($"/api/channels/{channel.Id}/messages", new
+        {
+            senderType = "user",
+            senderIdentity = "operator",
+            body = "Hybrid test",
+            messageKind = "human_text",
+            sourceKind = "wake_event",
+            sourceId = reqId,
+            workerRunId = "dae-run"
+        });
+
+        using var response = await client.GetAsync($"/api/agent-work/current?channelId={channel.Id}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+
+        Assert.True(doc.RootElement.TryGetProperty("items", out var items));
+        Assert.True(items.GetArrayLength() > 0, "Should have projection from activity + DAE");
+
+        var first = items[0];
+        Assert.True(first.TryGetProperty("evidenceProvenance", out var provenance));
+        var provList = provenance.EnumerateArray().Select(p => p.GetString()).ToList();
+        Assert.Contains("activity_event", provList);
+        Assert.Contains("direct_agent_event", provList);
+        Assert.DoesNotContain("lifecycle_event", provList);
+
+        // Should have evidence links for both sources
+        Assert.True(first.TryGetProperty("evidenceLinks", out var links));
+        var linkList = links.EnumerateArray().Select(l => l.GetString()).ToList();
+        Assert.Contains(linkList, l =>
+            l is not null &&
+            l.Contains("/api/channels/", StringComparison.Ordinal) &&
+            l.Contains("activity-events", StringComparison.Ordinal));
+        Assert.Contains(linkList, l => l is not null && l.Contains("/api/direct-agent-events", StringComparison.Ordinal));
+
+        // State should indicate delivered_no_lifecycle
+        Assert.True(first.TryGetProperty("currentWorkState", out var cws));
+        Assert.Equal("delivered_no_lifecycle", cws.GetString());
+    }
+
+    [Fact]
+    public async Task CurrentWorkProjection_IncludesSessionAndDeliveryFields()
+    {
+        using var client = _factory.CreateClient();
+
+        var createChannelResp = await client.PostAsJsonAsync("/api/channels", new
+        {
+            slug = "session-dlv",
+            displayName = "Session Delivery",
+            kind = "ad_hoc",
+            createdBy = "test"
+        });
+        var channel = await createChannelResp.Content.ReadFromJsonAsync<ChannelPayload>();
+
+        // Write lifecycle event with session/delivery fields
+        await client.PostAsJsonAsync("/api/agent-work/lifecycle-events", new
+        {
+            channelId = channel!.Id,
+            agentIdentity = "session-agent",
+            eventType = "worker_process_started",
+            sessionId = "ses-xyz-123",
+            deliveryRequestId = "dlv-abc-456"
+        });
+
+        using var response = await client.GetAsync($"/api/agent-work/current?channelId={channel.Id}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+
+        Assert.True(doc.RootElement.TryGetProperty("items", out var items));
+        Assert.Equal(1, items.GetArrayLength());
+
+        var first = items[0];
+        Assert.True(first.TryGetProperty("sessionId", out var sessionId));
+        Assert.Equal("ses-xyz-123", sessionId.GetString());
+
+        Assert.True(first.TryGetProperty("deliveryRequestId", out var dlvId));
+        Assert.Equal("dlv-abc-456", dlvId.GetString());
+    }
+
     public void Dispose()
     {
         try

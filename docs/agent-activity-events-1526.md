@@ -52,6 +52,39 @@ Supported statuses:
 - `failed`
 - `interim`
 
+## Agent work lifecycle projection (#1956, #1977)
+
+The Channels-owned `/api/agent-work/current` and `/api/agent-work/events` endpoints
+provide non-waking agent/worker observability.
+
+**Current-work projection** (`GET /api/agent-work/current?channelId=N`) composes
+agent activity from three Channels-owned evidence sources:
+
+1. **agent_work_lifecycle events** (canonical target) — written by den-host/Core/Hermes
+   producers via `POST /api/agent-work/lifecycle-events`. When present per agent,
+   this is the primary authority for state/status/correlation.
+
+2. **General activity events** — any `channel_activity_events` row regardless of
+   `event_type` (tool_call_started, lifecycle_status, etc.). Used when no lifecycle
+   event exists for an agent.
+
+3. **Direct-agent wake records** — `channel_messages` with `source_kind = "wake_event"`.
+   Used when no lifecycle or activity event exists.
+
+**Graceful degradation**: During producer migration (#1956 → #1977), the projection
+returns useful rows even when `agent_work_lifecycle` events have not been emitted.
+Lifecycle events are preferred when present; general activity and direct-agent
+records fill gaps.
+
+**Evidence provenance** is surfaced in each projection row via `evidenceProvenance`
+("lifecycle_event", "activity_event", "direct_agent_event") and `evidenceLinks`
+(URLs back to source API endpoints). The `currentWorkState` field provides
+diagnostic labels: `lifecycle_event_present`, `activity_no_lifecycle`,
+`delivered_no_lifecycle`, `recorded_only_direct_agent`, `terminal_lifecycle`.
+
+**Non-waking invariant**: Projection/event reads do not create channel messages,
+wake agents, or advance read cursors.
+
 ## API contract
 
 Append/upsert an activity event through the canonical Channels route:
