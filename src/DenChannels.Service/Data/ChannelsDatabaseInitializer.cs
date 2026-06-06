@@ -7,7 +7,7 @@ namespace DenChannels.Service.Data;
 
 public sealed class ChannelsDatabaseInitializer
 {
-    public const int CurrentSchemaVersion = 5;
+    public const int CurrentSchemaVersion = 6;
 
     private readonly IOptions<DenChannelsOptions> _options;
     private readonly ILogger<ChannelsDatabaseInitializer> _logger;
@@ -72,6 +72,13 @@ public sealed class ChannelsDatabaseInitializer
             logger?.LogInformation("Applying Den Channels database migration 5: channel-project links");
             await ExecuteNonQueryAsync(connection, MigrationV5Sql, cancellationToken);
             await SetSchemaVersionAsync(connection, 5, "channel_project_links", cancellationToken);
+        }
+
+        if (currentVersion < 6)
+        {
+            logger?.LogInformation("Applying Den Channels database migration 6: direct-agent DM transcripts");
+            await ExecuteNonQueryAsync(connection, MigrationV6Sql, cancellationToken);
+            await SetSchemaVersionAsync(connection, 6, "direct_agent_dm_transcripts", cancellationToken);
         }
 
         await EnsureChannelsCompatibilityColumnsAsync(connection, cancellationToken);
@@ -942,6 +949,72 @@ public sealed class ChannelsDatabaseInitializer
             ON channel_project_links(channel_id);
         CREATE INDEX IF NOT EXISTS idx_channel_project_links_project
             ON channel_project_links(project_id);
+        """;
+
+    /// <summary>
+    /// Migration v6: Direct-agent DM transcript read-model tables.
+    /// direct_conversations: stable human+agent conversation key with metadata.
+    /// direct_conversation_entries: read-model entries linking to canonical channel_messages.
+    /// direct_conversation_read_cursors: per-reader unread state for the DM sidebar.
+    /// These are a focused readback/index over canonical channel_messages, not a
+    /// separate session/delivery lane. Do NOT derive Hermes session keys from
+    /// direct_conversation_id.
+    /// </summary>
+    private const string MigrationV6Sql = """
+        CREATE TABLE IF NOT EXISTS direct_conversations (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            human_identity      TEXT NOT NULL,
+            agent_identity      TEXT NOT NULL,
+            scope_project_id    TEXT,
+            display_title       TEXT,
+            is_archived         INTEGER NOT NULL DEFAULT 0 CHECK (is_archived IN (0, 1)),
+            is_muted            INTEGER NOT NULL DEFAULT 0 CHECK (is_muted IN (0, 1)),
+            settings_json       TEXT,
+            last_entry_at       TEXT,
+            last_entry_preview  TEXT,
+            last_entry_sender   TEXT,
+            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(human_identity, agent_identity)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_direct_conversations_human
+            ON direct_conversations(human_identity, last_entry_at DESC);
+
+        CREATE TABLE IF NOT EXISTS direct_conversation_entries (
+            id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id         INTEGER NOT NULL REFERENCES direct_conversations(id) ON DELETE CASCADE,
+            channel_message_id      INTEGER NOT NULL REFERENCES channel_messages(id) ON DELETE CASCADE,
+            direction               TEXT NOT NULL CHECK (direction IN ('human_to_agent', 'agent_to_human', 'system_note')),
+            sender_identity         TEXT NOT NULL,
+            recipient_identity      TEXT NOT NULL,
+            source_channel_id       INTEGER,
+            source_project_id       TEXT,
+            source_task_id          INTEGER,
+            source_session_owner_id TEXT,
+            source_worker_run_id    TEXT,
+            body_preview            TEXT,
+            created_at              TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_direct_conversation_entries_conv
+            ON direct_conversation_entries(conversation_id, id);
+        CREATE INDEX IF NOT EXISTS idx_direct_conversation_entries_message
+            ON direct_conversation_entries(channel_message_id);
+
+        CREATE TABLE IF NOT EXISTS direct_conversation_read_cursors (
+            id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id         INTEGER NOT NULL REFERENCES direct_conversations(id) ON DELETE CASCADE,
+            reader_identity         TEXT NOT NULL,
+            last_read_entry_id      INTEGER REFERENCES direct_conversation_entries(id) ON DELETE SET NULL,
+            last_read_at            TEXT NOT NULL DEFAULT (datetime('now')),
+            created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(conversation_id, reader_identity)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_direct_conversation_read_cursors_reader
+            ON direct_conversation_read_cursors(reader_identity, conversation_id);
         """;
 
     /// <summary>

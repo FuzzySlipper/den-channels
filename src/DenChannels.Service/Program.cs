@@ -83,6 +83,7 @@ app.MapProjectChannelSyncRoutes();
 app.MapMirrorSummaryRoutes();
 app.MapDenCoreApiProxy();
 app.MapDirectAgentEventRoutes();
+app.MapDirectConversationRoutes();
 app.MapGatewayRoutes();
 app.MapAgentsOverviewRoutes();
 app.MapActiveWorkRoutingRoutes();
