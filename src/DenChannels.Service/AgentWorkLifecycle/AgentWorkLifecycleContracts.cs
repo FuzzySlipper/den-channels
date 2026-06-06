@@ -261,6 +261,8 @@ public sealed record AgentWorkLifecycleEventDto(
     [property: JsonPropertyName("terminal")] bool Terminal,
     [property: JsonPropertyName("createdAt")] string CreatedAt,
     [property: JsonPropertyName("updatedAt")] string UpdatedAt,
+    [property: JsonPropertyName("lastActivityAt")] string? LastActivityAt,
+    [property: JsonPropertyName("stalenessDeadline")] string? StalenessDeadline,
 
     // ── Routing / correlation ──
     [property: JsonPropertyName("projectId")] string? ProjectId,

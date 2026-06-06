@@ -441,8 +441,8 @@ public static class AgentWorkLifecycleRoutes
                 AgentInstanceId: latest.AgentInstanceId,
                 State: DetermineProjectedState(latest),
                 StateReason: latest.Summary,
-                LastActivityAt: latest.UpdatedAt,
-                StalenessDeadline: null,
+                LastActivityAt: latest.LastActivityAt ?? latest.UpdatedAt,
+                StalenessDeadline: latest.StalenessDeadline,
                 LastActivityEventId: latest.Id,
                 EvidenceLink: $"/api/agent-work/events?channelId={cid}&agentIdentity={Uri.EscapeDataString(latest.AgentIdentity)}&limit=1",
                 EvidenceProvenance: provenance,
@@ -744,6 +744,8 @@ public static class AgentWorkLifecycleRoutes
             Terminal: e.Terminal,
             CreatedAt: e.CreatedAt,
             UpdatedAt: e.UpdatedAt,
+            LastActivityAt: MetadataString(metadata, "last_activity_at"),
+            StalenessDeadline: MetadataString(metadata, "staleness_deadline"),
             ProjectId: e.ProjectId,
             TaskId: e.TaskId,
             ThreadId: e.ThreadId,
@@ -902,7 +904,18 @@ public static class AgentWorkLifecycleRoutes
     {
         if (e.Terminal) return null; // Terminal events are not stale
 
-        var updatedAt = DateTimeOffset.TryParse(e.UpdatedAt, CultureInfo.InvariantCulture,
+        var stalenessDeadline = DateTimeOffset.TryParse(e.StalenessDeadline, CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal, out var deadline) ? deadline : (DateTimeOffset?)null;
+        if (stalenessDeadline is not null)
+        {
+            var deadlineAge = DateTimeOffset.UtcNow - stalenessDeadline.Value;
+            return deadlineAge.TotalSeconds > 0
+                ? $"stale (deadline passed {deadlineAge.TotalMinutes:F0}m ago)"
+                : null;
+        }
+
+        var timestamp = e.LastActivityAt ?? e.UpdatedAt;
+        var updatedAt = DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture,
             DateTimeStyles.AssumeUniversal, out var dt) ? dt : (DateTimeOffset?)null;
 
         if (updatedAt is null) return "missing_timestamp";

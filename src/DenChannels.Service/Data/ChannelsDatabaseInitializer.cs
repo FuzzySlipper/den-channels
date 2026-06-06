@@ -35,6 +35,7 @@ public sealed class ChannelsDatabaseInitializer
     {
         await ExecuteNonQueryAsync(connection, "PRAGMA foreign_keys = ON;", cancellationToken);
         await EnsureSchemaMigrationsTableAsync(connection, cancellationToken);
+        await RecoverChannelActivityEventsRebuildIfNeededAsync(connection, logger, cancellationToken);
 
         var currentVersion = await GetCurrentSchemaVersionAsync(connection, cancellationToken);
         await EnsureChannelsCompatibilityColumnsAsync(connection, cancellationToken);
@@ -95,6 +96,7 @@ public sealed class ChannelsDatabaseInitializer
         await EnsureChannelActivityEventsCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureAssignmentCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureSharedProfileInstanceColumnsAsync(connection, cancellationToken);
+        await EnsureChannelActivityEventsEventTypeConstraintAsync(connection, logger, cancellationToken);
         await EnsureChannelReadCursorsInstanceConstraintAsync(connection, logger, cancellationToken);
         await EnsureChannelMembershipsMembershipPurposeColumnAsync(connection, cancellationToken);
         await EnsureAgentCommonsSeedAsync(connection, cancellationToken);
@@ -124,6 +126,7 @@ public sealed class ChannelsDatabaseInitializer
         await ExecuteNonQueryAsync(connection, ChannelActivityEventsSchemaSql, cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "display_block_id", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "session_key", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_activity_events", "hermes_session_key", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "parent_session_key", "TEXT", cancellationToken);
         // DEPRECATED legacy columns (task #1967): kept for DB compatibility with pre-migration producers.
         // New producers write to session_key/parent_session_key; old hermes_session_key/parent_hermes_session_key
@@ -141,6 +144,65 @@ public sealed class ChannelsDatabaseInitializer
         await EnsureColumnAsync(connection, "channel_activity_events", "delivery_stage", "TEXT NOT NULL DEFAULT 'progress'", cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "terminal", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "final_channel_message_id", "INTEGER", cancellationToken);
+    }
+
+    private static async Task EnsureChannelActivityEventsEventTypeConstraintAsync(SqliteConnection connection,
+        ILogger? logger = null, CancellationToken cancellationToken = default)
+    {
+        await RecoverChannelActivityEventsRebuildIfNeededAsync(connection, logger, cancellationToken);
+
+        if (!await TableExistsAsync(connection, "channel_activity_events", cancellationToken))
+            return;
+
+        var createSql = await GetTableCreateSqlAsync(connection, "channel_activity_events", cancellationToken);
+        if (createSql?.Contains("'agent_work_lifecycle'", StringComparison.OrdinalIgnoreCase) == true)
+            return;
+
+        await RebuildChannelActivityEventsForAgentWorkLifecycleAsync(connection, cancellationToken);
+        await ExecuteNonQueryAsync(connection, ChannelActivityEventsIndexesSql, cancellationToken);
+        logger?.LogInformation("Rebuilt channel_activity_events table with agent_work_lifecycle event_type support");
+    }
+
+    private static async Task RecoverChannelActivityEventsRebuildIfNeededAsync(SqliteConnection connection,
+        ILogger? logger = null, CancellationToken cancellationToken = default)
+    {
+        if (!await TableExistsAsync(connection, "channel_activity_events__new", cancellationToken))
+            return;
+
+        if (await TableExistsAsync(connection, "channel_activity_events", cancellationToken))
+        {
+            await ExecuteNonQueryAsync(connection, "DROP TABLE channel_activity_events__new;", cancellationToken);
+            logger?.LogWarning("Dropped stale channel_activity_events__new table before lifecycle event_type constraint rebuild");
+            return;
+        }
+
+        await ExecuteNonQueryAsync(connection,
+            "ALTER TABLE channel_activity_events__new RENAME TO channel_activity_events;",
+            cancellationToken);
+        await ExecuteNonQueryAsync(connection, ChannelActivityEventsIndexesSql, cancellationToken);
+        logger?.LogWarning("Recovered channel_activity_events from channel_activity_events__new after interrupted lifecycle event_type constraint rebuild");
+    }
+
+    private static async Task RebuildChannelActivityEventsForAgentWorkLifecycleAsync(SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await ExecuteNonQueryAsync(connection, "PRAGMA foreign_keys = OFF;", cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            await ExecuteNonQueryAsync(connection, RebuildChannelActivityEventsForAgentWorkLifecycleSql, transaction,
+                cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync(connection, "PRAGMA foreign_keys = ON;", cancellationToken);
+        }
     }
 
     private static async Task EnsureAssignmentCompatibilityColumnsAsync(SqliteConnection connection,
@@ -377,6 +439,15 @@ public sealed class ChannelsDatabaseInitializer
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    private static async Task ExecuteNonQueryAsync(SqliteConnection connection, string sql, SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private const string InitialSchemaSql = """
         CREATE TABLE IF NOT EXISTS channels (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -590,6 +661,124 @@ public sealed class ChannelsDatabaseInitializer
         CREATE UNIQUE INDEX IF NOT EXISTS ux_channel_activity_events_dedupe
             ON channel_activity_events(channel_id, dedupe_key)
             WHERE dedupe_key IS NOT NULL;
+        """;
+
+    private const string ChannelActivityEventsIndexesSql = """
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_channel_created
+            ON channel_activity_events(channel_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_delivery
+            ON channel_activity_events(delivery_request_id, sequence, id)
+            WHERE delivery_request_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_session
+            ON channel_activity_events(session_key, sequence, id)
+            WHERE session_key IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_channel_activity_events_dedupe
+            ON channel_activity_events(channel_id, dedupe_key)
+            WHERE dedupe_key IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_display_block
+            ON channel_activity_events(display_block_id, sequence, id)
+            WHERE display_block_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_worker_run
+            ON channel_activity_events(worker_run_id, sequence, id)
+            WHERE worker_run_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_assignment
+            ON channel_activity_events(assignment_id, channel_id, id)
+            WHERE assignment_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_agent_instance
+            ON channel_activity_events(agent_instance_id, channel_id, id)
+            WHERE agent_instance_id IS NOT NULL;
+        """;
+
+    private const string RebuildChannelActivityEventsForAgentWorkLifecycleSql = """
+        CREATE TABLE channel_activity_events__new (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id            INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+            project_id            TEXT,
+            agent_identity        TEXT NOT NULL,
+            delivery_request_id   TEXT,
+            session_key           TEXT,
+            hermes_session_key    TEXT,
+            display_block_id      TEXT,
+            parent_session_key    TEXT,
+            parent_hermes_session_key TEXT,
+            parent_agent_identity TEXT,
+            worker_run_id         TEXT,
+            worker_role           TEXT,
+            agent_instance_id     TEXT,
+            pool_member_id        TEXT,
+            task_id               INTEGER,
+            thread_id             INTEGER,
+            anchor_message_id     INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
+            assignment_id         TEXT,
+            checkpoint_type       TEXT,
+            checkpoint_handle     TEXT,
+            event_type            TEXT NOT NULL
+                                  CHECK (event_type IN ('tool_call_started', 'tool_call_completed', 'tool_call_failed', 'lifecycle_status', 'aggregation_snapshot', 'run_summary', 'agent_work_lifecycle')),
+            status                TEXT NOT NULL DEFAULT 'completed'
+                                  CHECK (status IN ('started', 'completed', 'failed', 'interim', 'blocked')),
+            delivery_stage        TEXT NOT NULL DEFAULT 'progress',
+            terminal              INTEGER NOT NULL DEFAULT 0 CHECK (terminal IN (0, 1)),
+            final_channel_message_id INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
+            sequence              INTEGER NOT NULL DEFAULT 0 CHECK (sequence >= 0),
+            update_version        INTEGER NOT NULL DEFAULT 1 CHECK (update_version >= 1),
+            title                 TEXT,
+            summary               TEXT,
+            preview_json          TEXT,
+            metadata_json         TEXT,
+            dedupe_key            TEXT,
+            created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        INSERT INTO channel_activity_events__new(
+            id, channel_id, project_id, agent_identity, delivery_request_id,
+            session_key, hermes_session_key, display_block_id, parent_session_key,
+            parent_hermes_session_key, parent_agent_identity, worker_run_id, worker_role,
+            agent_instance_id, pool_member_id, task_id, thread_id, anchor_message_id,
+            assignment_id, checkpoint_type, checkpoint_handle, event_type, status,
+            delivery_stage, terminal, final_channel_message_id, sequence, update_version,
+            title, summary, preview_json, metadata_json, dedupe_key, created_at, updated_at)
+        SELECT
+            id,
+            channel_id,
+            project_id,
+            agent_identity,
+            delivery_request_id,
+            session_key,
+            hermes_session_key,
+            display_block_id,
+            parent_session_key,
+            parent_hermes_session_key,
+            parent_agent_identity,
+            worker_run_id,
+            worker_role,
+            agent_instance_id,
+            pool_member_id,
+            task_id,
+            thread_id,
+            anchor_message_id,
+            assignment_id,
+            checkpoint_type,
+            checkpoint_handle,
+            event_type,
+            COALESCE(status, 'completed'),
+            COALESCE(delivery_stage, 'progress'),
+            COALESCE(terminal, 0),
+            final_channel_message_id,
+            COALESCE(sequence, 0),
+            COALESCE(update_version, 1),
+            title,
+            summary,
+            preview_json,
+            metadata_json,
+            dedupe_key,
+            COALESCE(created_at, datetime('now')),
+            COALESCE(updated_at, datetime('now'))
+        FROM channel_activity_events
+        ORDER BY id;
+
+        DROP TABLE channel_activity_events;
+        ALTER TABLE channel_activity_events__new RENAME TO channel_activity_events;
         """;
 
     private const string AgentCommonsSeedSql = """

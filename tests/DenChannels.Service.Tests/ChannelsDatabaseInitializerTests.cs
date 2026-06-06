@@ -428,6 +428,269 @@ public sealed class ChannelsDatabaseInitializerTests
     }
 
     [Fact]
+    public async Task ApplyMigrationsAsync_RebuildsLegacyActivityEventTypeConstraintForAgentWorkLifecycle()
+    {
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ExecuteAsync(connection, """
+            CREATE TABLE channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                project_id TEXT
+            );
+            INSERT INTO channels(slug, display_name, kind, project_id)
+            VALUES ('project-den-channels', 'Den Channels', 'project_default', 'den-channels');
+
+            CREATE TABLE channel_activity_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                project_id TEXT,
+                agent_identity TEXT NOT NULL,
+                delivery_request_id TEXT,
+                session_key TEXT,
+                task_id INTEGER,
+                thread_id INTEGER,
+                anchor_message_id INTEGER,
+                event_type TEXT NOT NULL
+                    CHECK (event_type IN ('tool_call_started', 'tool_call_completed', 'tool_call_failed', 'lifecycle_status', 'aggregation_snapshot', 'run_summary')),
+                status TEXT NOT NULL DEFAULT 'completed'
+                    CHECK (status IN ('started', 'completed', 'failed', 'interim', 'blocked')),
+                sequence INTEGER NOT NULL DEFAULT 0,
+                update_version INTEGER NOT NULL DEFAULT 1,
+                title TEXT,
+                summary TEXT,
+                preview_json TEXT,
+                metadata_json TEXT,
+                dedupe_key TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO channel_activity_events(
+                channel_id, project_id, agent_identity, event_type, status, summary, dedupe_key)
+            VALUES (
+                1, 'den-channels', 'legacy-agent', 'lifecycle_status', 'interim', 'legacy compatibility row', 'legacy-row');
+            """);
+
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        await ExecuteAsync(connection, """
+            INSERT INTO channel_activity_events(
+                channel_id, project_id, agent_identity, event_type, status, summary, dedupe_key)
+            VALUES (
+                1, 'den-channels', 'pi-crew-gateway', 'agent_work_lifecycle', 'started', 'canonical lifecycle row', 'canonical-row');
+            """);
+
+        var legacy = await QuerySingleAsync(connection, """
+            SELECT event_type, summary
+            FROM channel_activity_events
+            WHERE dedupe_key = 'legacy-row';
+            """);
+        Assert.Equal("lifecycle_status", legacy["event_type"]);
+        Assert.Equal("legacy compatibility row", legacy["summary"]);
+
+        var canonical = await QuerySingleAsync(connection, """
+            SELECT event_type, status, summary
+            FROM channel_activity_events
+            WHERE dedupe_key = 'canonical-row';
+            """);
+        Assert.Equal("agent_work_lifecycle", canonical["event_type"]);
+        Assert.Equal("started", canonical["status"]);
+        Assert.Equal("canonical lifecycle row", canonical["summary"]);
+    }
+
+    [Fact]
+    public async Task ApplyMigrationsAsync_DropsStaleActivityEventTempTableBeforeConstraintRebuild()
+    {
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ExecuteAsync(connection, """
+            CREATE TABLE channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                project_id TEXT
+            );
+            INSERT INTO channels(slug, display_name, kind, project_id)
+            VALUES ('project-den-channels', 'Den Channels', 'project_default', 'den-channels');
+
+            CREATE TABLE channel_activity_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                project_id TEXT,
+                agent_identity TEXT NOT NULL,
+                delivery_request_id TEXT,
+                session_key TEXT,
+                task_id INTEGER,
+                thread_id INTEGER,
+                anchor_message_id INTEGER,
+                event_type TEXT NOT NULL
+                    CHECK (event_type IN ('tool_call_started', 'tool_call_completed', 'tool_call_failed', 'lifecycle_status', 'aggregation_snapshot', 'run_summary')),
+                status TEXT NOT NULL DEFAULT 'completed',
+                sequence INTEGER NOT NULL DEFAULT 0,
+                update_version INTEGER NOT NULL DEFAULT 1,
+                title TEXT,
+                summary TEXT,
+                preview_json TEXT,
+                metadata_json TEXT,
+                dedupe_key TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO channel_activity_events(channel_id, project_id, agent_identity, event_type, status)
+            VALUES (1, 'den-channels', 'legacy-agent', 'lifecycle_status', 'interim');
+
+            CREATE TABLE channel_activity_events__new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stale_marker TEXT
+            );
+            """);
+
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        await ExecuteAsync(connection, """
+            INSERT INTO channel_activity_events(channel_id, project_id, agent_identity, event_type, status)
+            VALUES (1, 'den-channels', 'pi-crew-gateway', 'agent_work_lifecycle', 'started');
+            """);
+
+        var tables = await ListTablesAsync(connection);
+        Assert.DoesNotContain("channel_activity_events__new", tables);
+
+        var indexes = await ListIndexesAsync(connection);
+        Assert.Contains("idx_channel_activity_events_channel_created", indexes);
+        Assert.Contains("idx_channel_activity_events_agent_instance", indexes);
+        Assert.Contains("ux_channel_activity_events_dedupe", indexes);
+    }
+
+    [Fact]
+    public async Task ApplyMigrationsAsync_RecoversInterruptedActivityEventConstraintRebuildWhenOriginalMissing()
+    {
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ExecuteAsync(connection, """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO schema_migrations(version, name)
+            VALUES (7, 'channel_messages_fts5');
+
+            CREATE TABLE channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                project_id TEXT
+            );
+            INSERT INTO channels(slug, display_name, kind, project_id)
+            VALUES ('project-den-channels', 'Den Channels', 'project_default', 'den-channels');
+
+            CREATE TABLE channel_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                sender_type TEXT NOT NULL,
+                sender_identity TEXT NOT NULL,
+                body TEXT NOT NULL,
+                message_kind TEXT NOT NULL DEFAULT 'human_text',
+                source_kind TEXT,
+                source_id TEXT,
+                source_project_id TEXT,
+                target_project_id TEXT,
+                target_task_id INTEGER,
+                worker_run_id TEXT,
+                worker_role TEXT,
+                profile_identity TEXT,
+                summary TEXT,
+                deep_link TEXT,
+                thread_root_message_id INTEGER,
+                reply_to_message_id INTEGER,
+                metadata_json TEXT,
+                delivery_request_id TEXT,
+                dedupe_key TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                edited_at TEXT,
+                deleted_at TEXT,
+                assignment_id TEXT,
+                checkpoint_type TEXT,
+                checkpoint_handle TEXT,
+                agent_instance_id TEXT,
+                pool_member_id TEXT,
+                session_owner_id TEXT,
+                session_id TEXT
+            );
+
+            CREATE TABLE channel_activity_events__new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                project_id TEXT,
+                agent_identity TEXT NOT NULL,
+                delivery_request_id TEXT,
+                session_key TEXT,
+                hermes_session_key TEXT,
+                display_block_id TEXT,
+                parent_session_key TEXT,
+                parent_hermes_session_key TEXT,
+                parent_agent_identity TEXT,
+                worker_run_id TEXT,
+                worker_role TEXT,
+                agent_instance_id TEXT,
+                pool_member_id TEXT,
+                task_id INTEGER,
+                thread_id INTEGER,
+                anchor_message_id INTEGER,
+                assignment_id TEXT,
+                checkpoint_type TEXT,
+                checkpoint_handle TEXT,
+                event_type TEXT NOT NULL
+                    CHECK (event_type IN ('tool_call_started', 'tool_call_completed', 'tool_call_failed', 'lifecycle_status', 'aggregation_snapshot', 'run_summary', 'agent_work_lifecycle')),
+                status TEXT NOT NULL DEFAULT 'completed'
+                    CHECK (status IN ('started', 'completed', 'failed', 'interim', 'blocked')),
+                delivery_stage TEXT NOT NULL DEFAULT 'progress',
+                terminal INTEGER NOT NULL DEFAULT 0 CHECK (terminal IN (0, 1)),
+                final_channel_message_id INTEGER,
+                sequence INTEGER NOT NULL DEFAULT 0,
+                update_version INTEGER NOT NULL DEFAULT 1,
+                title TEXT,
+                summary TEXT,
+                preview_json TEXT,
+                metadata_json TEXT,
+                dedupe_key TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO channel_activity_events__new(
+                id, channel_id, project_id, agent_identity, event_type, status, summary, dedupe_key)
+            VALUES (
+                42, 1, 'den-channels', 'legacy-agent', 'lifecycle_status', 'interim', 'preserved copied row', 'copied-row');
+            """);
+
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        var tables = await ListTablesAsync(connection);
+        Assert.Contains("channel_activity_events", tables);
+        Assert.DoesNotContain("channel_activity_events__new", tables);
+
+        var preserved = await QuerySingleAsync(connection, """
+            SELECT id, event_type, summary
+            FROM channel_activity_events
+            WHERE dedupe_key = 'copied-row';
+            """);
+        Assert.Equal("42", preserved["id"]);
+        Assert.Equal("lifecycle_status", preserved["event_type"]);
+        Assert.Equal("preserved copied row", preserved["summary"]);
+
+        await ExecuteAsync(connection, """
+            INSERT INTO channel_activity_events(channel_id, project_id, agent_identity, event_type, status)
+            VALUES (1, 'den-channels', 'pi-crew-gateway', 'agent_work_lifecycle', 'started');
+            """);
+
+        var indexes = await ListIndexesAsync(connection);
+        Assert.Contains("idx_channel_activity_events_channel_created", indexes);
+        Assert.Contains("idx_channel_activity_events_agent_instance", indexes);
+        Assert.Contains("ux_channel_activity_events_dedupe", indexes);
+    }
+
+    [Fact]
     public async Task ApplyMigrationsAsync_RebuildsChannelReadCursorsConstraintForLegacyV1Db()
     {
         // Simulate a V1 database with the old UNIQUE constraint

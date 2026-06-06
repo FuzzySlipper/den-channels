@@ -735,6 +735,45 @@ public sealed class AgentWorkLifecycleContractTests : IDisposable
         Assert.Equal("dlv-abc-456", dlvId.GetString());
     }
 
+    [Fact]
+    public async Task CurrentWorkProjection_IncludesLifecycleStalenessFields()
+    {
+        using var client = _factory.CreateClient();
+
+        var createChannelResp = await client.PostAsJsonAsync("/api/channels", new
+        {
+            slug = "staleness-fields",
+            displayName = "Staleness Fields",
+            kind = "ad_hoc",
+            createdBy = "test"
+        });
+        var channel = await createChannelResp.Content.ReadFromJsonAsync<ChannelPayload>();
+
+        const string lastActivityAt = "2026-06-06T10:00:00.0000000Z";
+        const string stalenessDeadline = "2026-06-06T10:15:00.0000000Z";
+
+        await client.PostAsJsonAsync("/api/agent-work/lifecycle-events", new
+        {
+            channelId = channel!.Id,
+            agentIdentity = "stale-agent",
+            eventType = "heartbeat",
+            lastActivityAt,
+            stalenessDeadline,
+            stateReason = "heartbeat with explicit deadline"
+        });
+
+        using var response = await client.GetAsync($"/api/agent-work/current?channelId={channel.Id}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+
+        var first = doc.RootElement.GetProperty("items")[0];
+        Assert.Equal(lastActivityAt, first.GetProperty("lastActivityAt").GetString());
+        Assert.Equal(stalenessDeadline, first.GetProperty("stalenessDeadline").GetString());
+        Assert.Equal("heartbeat with explicit deadline", first.GetProperty("stateReason").GetString());
+    }
+
     // ────────────────────────────────────────────────────────────────────
     // #1977 repair: gateway_delivery projection tests
     // ────────────────────────────────────────────────────────────────────
