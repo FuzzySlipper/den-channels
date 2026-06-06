@@ -287,6 +287,199 @@ public sealed partial class ChannelsRepository
         return rows;
     }
 
+    /// <summary>
+    /// Search channel messages across all channels using FTS5 full-text search.
+    /// Supports filters for channel, sender, project, time range, and message kind.
+    /// Results ordered by FTS5 relevance (rank) or creation recency.
+    /// </summary>
+    public async Task<SearchMessagesResponse> SearchMessagesAsync(
+        string? query = null,
+        long? channelId = null,
+        string? senderIdentity = null,
+        string? projectId = null,
+        bool nonProjectOnly = false,
+        string? messageKind = null,
+        string? createdAfter = null,
+        string? createdBefore = null,
+        string? orderBy = null,
+        int offset = 0,
+        int limit = 20,
+        CancellationToken cancellationToken = default)
+    {
+        limit = Math.Clamp(limit, 1, 200);
+        offset = Math.Max(0, offset);
+        var useRelevance = !string.Equals(orderBy, "recency", StringComparison.OrdinalIgnoreCase);
+        var hasFtsQuery = !string.IsNullOrWhiteSpace(query);
+        var safeQuery = hasFtsQuery ? SanitizeFts5Query(query!) : null;
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+
+        // Build the search query
+        var fromClause = hasFtsQuery
+            ? "FROM channel_messages_fts JOIN channel_messages ON channel_messages.id = channel_messages_fts.rowid"
+            : "FROM channel_messages";
+        var joinChannels = " JOIN channels ON channels.id = channel_messages.channel_id";
+
+        var conditions = new List<string>();
+        var cmd = connection.CreateCommand();
+
+        conditions.Add("channel_messages.deleted_at IS NULL");
+
+        if (hasFtsQuery)
+        {
+            conditions.Add("channel_messages_fts MATCH $query");
+            cmd.Parameters.AddWithValue("$query", safeQuery);
+        }
+
+        if (channelId.HasValue)
+        {
+            conditions.Add("channel_messages.channel_id = $channelId");
+            cmd.Parameters.AddWithValue("$channelId", channelId.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(senderIdentity))
+        {
+            conditions.Add("channel_messages.sender_identity = $senderIdentity");
+            cmd.Parameters.AddWithValue("$senderIdentity", senderIdentity.Trim());
+        }
+
+        if (nonProjectOnly)
+        {
+            conditions.Add("channels.project_id IS NULL");
+        }
+        else if (!string.IsNullOrWhiteSpace(projectId))
+        {
+            conditions.Add("channels.project_id = $projectId");
+            cmd.Parameters.AddWithValue("$projectId", projectId.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(messageKind))
+        {
+            conditions.Add("channel_messages.message_kind = $messageKind");
+            cmd.Parameters.AddWithValue("$messageKind", messageKind.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(createdAfter))
+        {
+            conditions.Add("channel_messages.created_at >= $createdAfter");
+            cmd.Parameters.AddWithValue("$createdAfter", createdAfter.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(createdBefore))
+        {
+            conditions.Add("channel_messages.created_at <= $createdBefore");
+            cmd.Parameters.AddWithValue("$createdBefore", createdBefore.Trim());
+        }
+
+        var whereClause = string.Join(" AND ", conditions);
+
+        // Count total matching rows
+        await using var countCmd = connection.CreateCommand();
+        countCmd.CommandText = $"SELECT COUNT(*) {fromClause} {joinChannels} WHERE {whereClause};";
+        foreach (SqliteParameter p in cmd.Parameters)
+            countCmd.Parameters.AddWithValue(p.ParameterName, p.Value);
+        var totalCount = (long)(await countCmd.ExecuteScalarAsync(cancellationToken))!;
+
+        // Build the main query with ordering and pagination
+        const string messageColumns = """
+            channel_messages.id,
+            channel_messages.channel_id,
+            channels.slug,
+            channels.display_name,
+            channels.project_id,
+            channel_messages.sender_type,
+            channel_messages.sender_identity,
+            channel_messages.body,
+            channel_messages.message_kind,
+            channel_messages.source_kind,
+            channel_messages.source_id,
+            channel_messages.source_project_id,
+            channel_messages.target_project_id,
+            channel_messages.target_task_id,
+            channel_messages.worker_run_id,
+            channel_messages.worker_role,
+            channel_messages.profile_identity,
+            channel_messages.summary,
+            channel_messages.deep_link,
+            channel_messages.thread_root_message_id,
+            channel_messages.reply_to_message_id,
+            channel_messages.metadata_json,
+            channel_messages.created_at,
+            channel_messages.edited_at,
+            channel_messages.deleted_at
+            """;
+
+        var orderClause = useRelevance && hasFtsQuery
+            ? "ORDER BY rank"
+            : "ORDER BY channel_messages.created_at DESC, channel_messages.id DESC";
+
+        cmd.CommandText = $"""
+            SELECT {messageColumns}
+            {fromClause}
+            {joinChannels}
+            WHERE {whereClause}
+            {orderClause}
+            LIMIT $limit OFFSET $offset;
+            """;
+
+        cmd.Parameters.AddWithValue("$limit", limit);
+        cmd.Parameters.AddWithValue("$offset", offset);
+
+        var items = new List<SearchableChannelMessageDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            items.Add(ReadSearchableMessage(reader));
+
+        return new SearchMessagesResponse(
+            Items: items,
+            TotalCount: (int)totalCount,
+            Offset: offset,
+            Limit: limit,
+            Query: hasFtsQuery ? query : null);
+    }
+
+    /// <summary>
+    /// Sanitize user input for safe FTS5 MATCH usage. Removes query-breaking syntax
+    /// while preserving meaningful search terms. Escapes double-quote characters.
+    /// </summary>
+    internal static string SanitizeFts5Query(string rawQuery)
+    {
+        // Strip FTS5 special characters that aren't part of a user search
+        var cleaned = System.Text.RegularExpressions.Regex.Replace(rawQuery, @"[*^]", "");
+        // Escape double-quotes (used for phrase queries in FTS5)
+        cleaned = cleaned.Replace("\"", "\"\"");
+        // Trim whitespace and ensure non-empty
+        var trimmed = cleaned.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) ? "\"\"" : trimmed;
+    }
+
+    private static SearchableChannelMessageDto ReadSearchableMessage(SqliteDataReader reader) => new(
+        reader.GetInt64(0),
+        reader.GetInt64(1),
+        reader.GetString(2),
+        reader.GetString(3),
+        reader.IsDBNull(4) ? null : reader.GetString(4),
+        reader.GetString(5),
+        reader.GetString(6),
+        reader.GetString(7),
+        reader.GetString(8),
+        GetNullableString(reader, 9),
+        GetNullableString(reader, 10),
+        GetNullableString(reader, 11),
+        GetNullableString(reader, 12),
+        GetNullableInt64(reader, 13),
+        GetNullableString(reader, 14),
+        GetNullableString(reader, 15),
+        GetNullableString(reader, 16),
+        GetNullableString(reader, 17),
+        GetNullableString(reader, 18),
+        GetNullableInt64(reader, 19),
+        GetNullableInt64(reader, 20),
+        GetNullableString(reader, 21),
+        reader.GetString(22),
+        GetNullableString(reader, 23),
+        GetNullableString(reader, 24));
+
     public async Task<IReadOnlyList<ChannelMembershipDto>> ListMembershipsAsync(long channelId, int limit = 200,
         CancellationToken cancellationToken = default, bool includeLeft = true, int? leftGraceMinutes = null)
     {

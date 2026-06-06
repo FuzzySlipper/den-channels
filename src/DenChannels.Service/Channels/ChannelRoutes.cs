@@ -31,6 +31,47 @@ public static class ChannelRoutes
             CancellationToken cancellationToken) => Results.Ok(await repository.ListChannelsAsync(
                 projectId, kind, limit ?? 100, cancellationToken)));
 
+        // -----------------------------------------------------------------------
+        // GET /api/channels/search
+        // Cross-channel FTS5 search. Read-only; no wake/delivery/claim side effects.
+        // Query params: q, channel_id, sender_identity, project_id,
+        //   non_project_only, message_kind, created_after, created_before,
+        //   order_by, offset, limit
+        // -----------------------------------------------------------------------
+        api.MapGet("/channels/search", async (ChannelsRepository repository,
+            string? q,
+            long? channelId,
+            string? senderIdentity,
+            string? projectId,
+            bool nonProjectOnly = false,
+            string? messageKind = null,
+            string? createdAfter = null,
+            string? createdBefore = null,
+            string? orderBy = null,
+            int offset = 0,
+            int limit = 20,
+            CancellationToken cancellationToken = default) =>
+        {
+            if (string.IsNullOrWhiteSpace(q) && channelId is null
+                && string.IsNullOrWhiteSpace(senderIdentity)
+                && string.IsNullOrWhiteSpace(projectId) && !nonProjectOnly
+                && string.IsNullOrWhiteSpace(messageKind)
+                && string.IsNullOrWhiteSpace(createdAfter)
+                && string.IsNullOrWhiteSpace(createdBefore))
+            {
+                return Results.BadRequest(new ProblemDetailsDto(
+                    "missing_search_criteria",
+                    400,
+                    "Provide at least one search criterion (q, channelId, senderIdentity, projectId, nonProjectOnly, messageKind, or time range)."));
+            }
+
+            var result = await repository.SearchMessagesAsync(
+                q, channelId, senderIdentity, projectId, nonProjectOnly,
+                messageKind, createdAfter, createdBefore, orderBy,
+                offset, limit, cancellationToken);
+            return Results.Ok(result);
+        });
+
         api.MapPost("/channels", async (ChannelsRepository repository, CreateChannelRequest request,
             CancellationToken cancellationToken) =>
         {

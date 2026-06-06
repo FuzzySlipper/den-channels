@@ -7,7 +7,7 @@ namespace DenChannels.Service.Data;
 
 public sealed class ChannelsDatabaseInitializer
 {
-    public const int CurrentSchemaVersion = 6;
+    public const int CurrentSchemaVersion = 7;
 
     private readonly IOptions<DenChannelsOptions> _options;
     private readonly ILogger<ChannelsDatabaseInitializer> _logger;
@@ -81,6 +81,13 @@ public sealed class ChannelsDatabaseInitializer
             await SetSchemaVersionAsync(connection, 6, "direct_agent_dm_transcripts", cancellationToken);
         }
 
+        if (currentVersion < 7)
+        {
+            logger?.LogInformation("Applying Den Channels database migration 7: FTS5 search index for channel messages");
+            await ExecuteNonQueryAsync(connection, MigrationV7Sql, cancellationToken);
+            await SetSchemaVersionAsync(connection, 7, "channel_messages_fts5", cancellationToken);
+        }
+
         await EnsureChannelsCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureChannelMessageCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureChannelMessagesSourceKindConstraintAsync(connection, cancellationToken);
@@ -94,6 +101,7 @@ public sealed class ChannelsDatabaseInitializer
         await EnsureWorkerPoolLobbySeedAsync(connection, cancellationToken);
         await EnsureDenSystemChannelSeedAsync(connection, cancellationToken);
         await EnsureWorkerPoolLobbyPresenceConcreteConstraintAsync(connection, logger, cancellationToken);
+        await EnsureChannelMessagesFts5Async(connection, cancellationToken);
         await ExecuteNonQueryAsync(connection, PostCreateIndexesSql, cancellationToken);
     }
 
@@ -1018,6 +1026,38 @@ public sealed class ChannelsDatabaseInitializer
         """;
 
     /// <summary>
+    /// Migration v7: FTS5 full-text search index for channel_messages.body.
+    /// Creates a virtual FTS5 table with AFTER INSERT/UPDATE/DELETE triggers
+    /// to keep the index in sync with the base table.
+    /// Existing non-deleted messages are backfilled on creation.
+    /// </summary>
+    private const string MigrationV7Sql = """
+        CREATE VIRTUAL TABLE IF NOT EXISTS channel_messages_fts USING fts5(
+            body
+        );
+
+        CREATE TRIGGER IF NOT EXISTS channel_messages_fts_insert AFTER INSERT ON channel_messages
+        BEGIN
+            INSERT INTO channel_messages_fts(rowid, body) VALUES (new.id, new.body);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS channel_messages_fts_delete AFTER DELETE ON channel_messages
+        BEGIN
+            INSERT INTO channel_messages_fts(channel_messages_fts, rowid, body) VALUES('delete', old.id, old.body);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS channel_messages_fts_update AFTER UPDATE ON channel_messages
+        BEGIN
+            INSERT INTO channel_messages_fts(channel_messages_fts, rowid, body) VALUES('delete', old.id, old.body);
+            INSERT INTO channel_messages_fts(rowid, body) VALUES (new.id, new.body);
+        END;
+
+        -- Backfill existing non-deleted messages into the FTS index
+        INSERT INTO channel_messages_fts(rowid, body)
+        SELECT id, body FROM channel_messages WHERE deleted_at IS NULL;
+        """;
+
+    /// <summary>
     /// Ensures the den-system shared operations channel exists and is linked
     /// to Den constellation projects. Idempotent — safe to run on every startup.
     /// </summary>
@@ -1031,6 +1071,23 @@ public sealed class ChannelsDatabaseInitializer
         }
 
         await ExecuteNonQueryAsync(connection, DenSystemChannelSeedSql, cancellationToken);
+    }
+
+    /// <summary>
+    /// Ensures the channel_messages_fts FTS5 virtual table and triggers exist
+    /// (idempotent — migration v7). Called on every startup for robustness.
+    /// </summary>
+    private static async Task EnsureChannelMessagesFts5Async(SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "channel_messages", cancellationToken))
+            return;
+
+        // Create FTS5 virtual table if missing (idempotent)
+        if (!await TableExistsAsync(connection, "channel_messages_fts", cancellationToken))
+        {
+            await ExecuteNonQueryAsync(connection, MigrationV7Sql, cancellationToken);
+        }
     }
 
     /// <summary>

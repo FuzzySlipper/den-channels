@@ -418,3 +418,47 @@ public sealed record UpsertChannelProjectLinkRequest(
     string? RelationKind,
     bool? IsPrimary,
     string? SettingsJson);
+
+// =========================================================================
+// Cross-channel search DTOs (task #1971)
+// =========================================================================
+
+/// <summary>
+/// A channel message enriched with channel metadata for cross-channel search results.
+/// </summary>
+public sealed record SearchableChannelMessageDto(
+    long Id,
+    long ChannelId,
+    string ChannelSlug,
+    string ChannelDisplayName,
+    string? ChannelProjectId,
+    string SenderType,
+    string SenderIdentity,
+    string Body,
+    string MessageKind,
+    string? SourceKind,
+    string? SourceId,
+    string? SourceProjectId,
+    string? TargetProjectId,
+    long? TargetTaskId,
+    string? WorkerRunId,
+    string? WorkerRole,
+    string? ProfileIdentity,
+    string? Summary,
+    string? DeepLink,
+    long? ThreadRootMessageId,
+    long? ReplyToMessageId,
+    string? MetadataJson,
+    string CreatedAt,
+    string? EditedAt,
+    string? DeletedAt);
+
+/// <summary>
+/// Response for cross-channel message search.
+/// </summary>
+public sealed record SearchMessagesResponse(
+    IReadOnlyList<SearchableChannelMessageDto> Items,
+    int TotalCount,
+    int Offset,
+    int Limit,
+    string? Query);

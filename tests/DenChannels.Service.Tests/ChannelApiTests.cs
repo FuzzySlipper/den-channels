@@ -1085,6 +1085,89 @@ public sealed class ChannelApiTests : IDisposable
         Assert.Contains(transcript.ActivityEvents, e => e.Id == activity.Id);
     }
 
+    [Fact]
+    public async Task SearchMessages_Fts5WithFilters_ReturnsExpectedResults()
+    {
+        using var client = _factory.CreateClient();
+
+        // Create two channels: one project-scoped, one non-project
+        var projectChannel = await PutJsonAsync<ChannelPayload>(client,
+            "/api/projects/detective-hq/default-channel", new { displayName = "Detective HQ" });
+        var nonProjectChannel = await PostJsonAsync<ChannelPayload>(client,
+            "/api/channels", new { slug = "admin-logs", displayName = "Admin Logs", kind = "system", createdBy = "system" });
+
+        // Post messages across both channels
+        await PostJsonAsync<MessagePayload>(client, $"/api/channels/{projectChannel.Id}/messages", new
+        {
+            senderType = "agent",
+            senderIdentity = "detective",
+            body = "Investigating the missing database entries",
+            messageKind = "agent_text"
+        });
+        await PostJsonAsync<MessagePayload>(client, $"/api/channels/{projectChannel.Id}/messages", new
+        {
+            senderType = "user",
+            senderIdentity = "patch",
+            body = "Check the sysadmin channel logs",
+            messageKind = "human_text"
+        });
+        await PostJsonAsync<MessagePayload>(client, $"/api/channels/{nonProjectChannel.Id}/messages", new
+        {
+            senderType = "agent",
+            senderIdentity = "sysadmin",
+            body = "System restart completed — database recovered",
+            messageKind = "system_event"
+        });
+
+        // Search by text query
+        var textResults = await client.GetFromJsonAsync<SearchMessagesResponsePayload>(
+            $"/api/channels/search?q=database&limit=10");
+        Assert.NotNull(textResults);
+        Assert.Equal(2, textResults.Items.Count);
+        Assert.Contains(textResults.Items, m => m.Body.Contains("database"));
+
+        // Search by sender
+        var senderResults = await client.GetFromJsonAsync<SearchMessagesResponsePayload>(
+            $"/api/channels/search?senderIdentity=sysadmin&limit=10");
+        Assert.NotNull(senderResults);
+        Assert.Single(senderResults.Items);
+        Assert.Equal("sysadmin", senderResults.Items[0].SenderIdentity);
+
+        // Search by project filter
+        var projectResults = await client.GetFromJsonAsync<SearchMessagesResponsePayload>(
+            $"/api/channels/search?projectId=detective-hq&limit=10");
+        Assert.NotNull(projectResults);
+        Assert.Equal(2, projectResults.Items.Count);
+        Assert.All(projectResults.Items, m => Assert.Equal("detective-hq", m.ChannelProjectId));
+
+        // Search non-project channels
+        var nonProjectResults = await client.GetFromJsonAsync<SearchMessagesResponsePayload>(
+            $"/api/channels/search?nonProjectOnly=true&limit=10");
+        Assert.NotNull(nonProjectResults);
+        Assert.Single(nonProjectResults.Items);
+        Assert.Null(nonProjectResults.Items[0].ChannelProjectId);
+
+        // Search by message kind
+        var kindResults = await client.GetFromJsonAsync<SearchMessagesResponsePayload>(
+            $"/api/channels/search?messageKind=system_event&limit=10");
+        Assert.NotNull(kindResults);
+        Assert.Single(kindResults.Items);
+        Assert.Equal("system_event", kindResults.Items[0].MessageKind);
+
+        // Search with no criteria → bad request
+        using var emptyResponse = await client.GetAsync("/api/channels/search");
+        Assert.Equal(HttpStatusCode.BadRequest, emptyResponse.StatusCode);
+
+        // Pagination
+        var pageResults = await client.GetFromJsonAsync<SearchMessagesResponsePayload>(
+            $"/api/channels/search?q=database&limit=1&offset=0");
+        Assert.NotNull(pageResults);
+        Assert.Single(pageResults.Items);
+        Assert.Equal(2, pageResults.TotalCount);
+        Assert.Equal(0, pageResults.Offset);
+        Assert.Equal(1, pageResults.Limit);
+    }
+
     public void Dispose()
     {
         _factory.Dispose();
@@ -1209,4 +1292,38 @@ public sealed class ChannelApiTests : IDisposable
         string AssignmentId,
         IReadOnlyList<MessagePayload> Messages,
         IReadOnlyList<ActivityEventPayload> ActivityEvents);
+
+    private sealed record SearchMessagesResponsePayload(
+        IReadOnlyList<SearchableMessagePayload> Items,
+        int TotalCount,
+        int Offset,
+        int Limit,
+        string? Query);
+
+    private sealed record SearchableMessagePayload(
+        long Id,
+        long ChannelId,
+        string ChannelSlug,
+        string ChannelDisplayName,
+        string? ChannelProjectId,
+        string SenderType,
+        string SenderIdentity,
+        string Body,
+        string MessageKind,
+        string? SourceKind,
+        string? SourceId,
+        string? SourceProjectId,
+        string? TargetProjectId,
+        long? TargetTaskId,
+        string? WorkerRunId,
+        string? WorkerRole,
+        string? ProfileIdentity,
+        string? Summary,
+        string? DeepLink,
+        long? ThreadRootMessageId,
+        long? ReplyToMessageId,
+        string? MetadataJson,
+        string CreatedAt,
+        string? EditedAt,
+        string? DeletedAt);
 }
