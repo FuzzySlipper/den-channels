@@ -11,7 +11,9 @@ namespace DenChannels.Service.DirectAgentEvents;
 
 /// <summary>
 /// Shared internal helpers for direct-agent event routes.
-/// Used by both DirectAgentEventRoutes (canonical) and GatewayRoutes (compatibility aliases).
+/// Used by DirectAgentEventRoutes (canonical). The legacy GatewayRoutes
+/// compatibility aliases were retired (task #2022); this shared code
+/// remains in use by the canonical route only.
 /// </summary>
 internal static class DirectAgentEventShared
 {

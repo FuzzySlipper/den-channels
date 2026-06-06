@@ -121,16 +121,12 @@ The compatibility writer rejects missing `channelId` / `agentIdentity`, defaults
 soft `degraded` results plus recent-failure diagnostics when persistence fails. It is
 still non-waking observability; it does not create messages or delivery requests.
 
-Gateway-prefixed compatibility aliases are available only for migration/readback and
-should not be the target for new callers:
+Gateway-prefixed compatibility aliases were retired in task #2022 and now return 410 Gone:
 
 ```http
-POST /api/gateway/channel-activity-events?channelId=...
-GET /api/gateway/channel-activity-events/status
+POST /api/gateway/channel-activity-events?channelId=...    -> 410 Gone (use POST /api/channels/{channelId}/activity-events)
+GET /api/gateway/channel-activity-events/status            -> 410 Gone (use GET /api/channel-activity-events/status)
 ```
-
-Remove the Gateway-prefixed alias once Hermes/bridge callers no longer emit to the old
-Gateway-shaped base path.
 
 Use `terminal=false` and a non-final `deliveryStage` such as `assistant_interim`, `tool`, `status`, or `compression` for pre-tool text/status/progress. Reserve `terminal=true` for explicit terminal outcome breadcrumbs; the actual human-visible assistant answer remains a normal `channel_message` row with the `gateway-delivery:<delivery_id>:final` dedupe key.
 

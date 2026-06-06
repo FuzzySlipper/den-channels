@@ -21,9 +21,9 @@ automatically a runtime session lane and must not be treated as the agent sessio
   activity display, authorization, and audit.
 - `agent_instance_id` / `session_owner_id` / `session_id` identify the target durable agent
   instance and its runtime session. These fields are carried in Channels-owned direct-agent
-  event payloads (primary: `POST /api/direct-agent-events`; compatibility alias:
-  `POST /api/gateway/direct-agent-messages`) so den-host/Gateway consumers can use one active session
-  across channels for the same concrete agent instance.
+  event payloads through the canonical `POST /api/direct-agent-events`. The legacy
+  compatibility alias `POST /api/gateway/direct-agent-messages` was retired in task #2022
+  and returns 410 Gone.
 - The same target agent instance receiving messages from two source channels carries the
   same `session_owner_id` and `session_id` regardless of which channel originated the
   request. See `GatewayDirectAgentMessages_SameInstanceOwner_TwoSourceChannels_PreservesConcreteIdentity` test.

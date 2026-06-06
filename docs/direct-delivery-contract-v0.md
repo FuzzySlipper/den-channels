@@ -52,7 +52,7 @@ All status/kind/policy fields are pinned as named constants in `DirectDeliveryCo
 
 ### Wait-for target (`waitFor`)
 
-Applies only to the Gateway compatibility route `/api/gateway/direct-agent-messages`.
+Retired as of task #2022. The Gateway compatibility route `POST /api/gateway/direct-agent-messages` now returns 410 Gone. The `waitFor` vocabulary is preserved here for historical reference only; new callers must use `POST /api/direct-agent-events` which has no `waitFor` control.
 
 | Constant | Value |
 | --- | --- |
@@ -194,7 +194,7 @@ The `AssignmentTraceResponse` now uses typed DTOs:
 ## Boundary decisions
 
 1. **Core is workflow truth.** Channels does not write assignment, lease, run, completion, release, or quarantine state to Core. It observes Core through explicit HTTP/event contracts.
-2. **Gateway compatibility is transitional.** `Gateway*` DTO names remain as compatibility aliases but semantics are Direct Delivery / Channels operations.
+2. **Gateway compatibility aliases retired (task #2022).** `POST /api/gateway/direct-agent-messages`, `POST /api/gateway/test-wakes`, `GET /api/gateway/events`, `POST /api/gateway/channel-activity-events`, and `GET /api/gateway/channel-activity-events/status` return 410 Gone. `Gateway*` DTO names persist in the contract for historical/compatibility reference but are no longer produced by live routes.
 3. **`UseStubProjectMetadata` / Core metadata/outbox** remains a separate Channels↔Core integration concern. It does not block Direct Delivery contract hardening.
 4. **`sourceProjectId` preserved** for backward compatibility but target-work fields are explicit and must not be inferred from channel/project.
 5. **No Hermes/Pi/Codex/OpenCode/Claude Code terms** in public Core/Channels contract names.
@@ -204,20 +204,23 @@ The `AssignmentTraceResponse` now uses typed DTOs:
 | Route | Owner | Description |
 | --- | --- | --- |
 | `POST /api/direct-agent-events` | Channels | Primary direct-agent event creation. No Gateway dependency. |
+| `GET /api/direct-agent-events` | Channels | Cursor-paged direct-agent event subscription. |
 | `GET /api/direct-agent-events/{eventId}` | Channels | Readback for a single direct-agent event. |
-| `POST /api/gateway/direct-agent-messages` | Channels (compat) | Alias returning immediately by default. Legacy spin-wait gated behind explicit `waitFor`. |
+| `POST /api/gateway/direct-agent-messages` | Channels (retired) | RETIRED (task #2022). Returns 410 Gone pointing to `POST /api/direct-agent-events`. |
+| `POST /api/gateway/test-wakes` | Channels (retired) | RETIRED (task #2022). Returns 410 Gone pointing to `POST /api/direct-agent-events`. |
+| `GET /api/gateway/events` | Channels (retired) | RETIRED (task #2022). Returns 410 Gone pointing to `GET /api/direct-agent-events`. |
 | `POST /api/gateway/system-messages` | Channels (compat) | Gateway-generated channel messages. |
-| `POST /api/channel-activity-events` | Channels (compat) | Gateway-shaped non-waking progress/activity writer with Channels-owned validation/defaulting/status diagnostics. Prefer `POST /api/channels/{channelId}/activity-events` for new callers. |
-| `POST /api/gateway/channel-activity-events` | Channels (migration alias) | Temporary alias for older Gateway-era callers; remove after adapters target Channels directly. |
+| `POST /api/channel-activity-events` | Channels | Non-waking progress/activity writer with Channels-owned validation/defaulting/status diagnostics. Prefer `POST /api/channels/{channelId}/activity-events` for new callers. |
+| `POST /api/gateway/channel-activity-events` | Channels (retired) | RETIRED (task #2022). Returns 410 Gone pointing to `POST /api/channels/{channelId}/activity-events`. |
+| `GET /api/gateway/channel-activity-events/status` | Channels (retired) | RETIRED (task #2022). Returns 410 Gone pointing to `GET /api/channel-activity-events/status`. |
 | `GET /api/gateway/assignments/{assignmentId}/trace` | Channels | Assignment trace aggregate from Core + Channels + Gateway evidence. |
 | `GET /api/assignments/{assignmentId}/trace` | Channels | Den Web alias for assignment trace. |
-| `GET /api/gateway/events` | Channels | Cursor-paged event subscription. |
 | `GET /api/gateway/messages/{messageId}` | Channels | Single message lookup. |
 | `GET /api/gateway/memberships` | Channels | Channel membership/wake-policy snapshot. |
 
 ## Safety rules
 
 1. Do not report `received`, `acknowledged`, or `completed` solely because Channels wrote a wake_event.
-2. `recorded_but_not_claimed_yet` is durable recording evidence only; follow `deliveryRequestId`, `requestId`, or `gatewayEventsUrl` later.
+2. `recorded_but_not_claimed_yet` is durable recording evidence only; follow `deliveryRequestId`, `requestId`, or `eventsUrl` later.
 3. `completed` delivery is delivery completion only. Use task-thread or worker/review packets for task completion truth.
 4. Bridge/Gateway local state is not canonical for assignments, leases, runs, completion, release, or quarantine.

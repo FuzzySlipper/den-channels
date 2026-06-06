@@ -279,10 +279,12 @@ public static class ChannelRoutes
         });
 
         // -----------------------------------------------------------------------
-        // Gateway-shaped activity/breadcrumb compatibility route.
+        // Channels-owned non-waking activity/breadcrumb route.
         // Canonical Channels ownership is /api/channels/{channelId}/activity-events;
-        // this alias accepts the old body/query channelId shape while preserving
+        // this route accepts the old body/query channelId shape while preserving
         // non-waking soft-failure diagnostics for breadcrumb writes.
+        // The Gateway-prefixed alias (/api/gateway/channel-activity-events) was
+        // retired in task #2022 and returns 410 Gone.
         // -----------------------------------------------------------------------
         api.MapPost("/channel-activity-events", async Task<IResult> (ChannelActivityEventRoutingService activityRouter,
             string? channelId, ChannelActivityRouteRequest request, CancellationToken cancellationToken) =>

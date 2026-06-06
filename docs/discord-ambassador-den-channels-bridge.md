@@ -38,18 +38,16 @@ The ambassador should summarize evidence and link/source ids; it should not sile
 
 ## Existing live Den Channels endpoints the ambassador can use
 
-The live Den Channels service on `http://192.168.1.10:18080` reports Gateway health and these relevant endpoints:
+The live Den Channels service on `http://192.168.1.10:18080` reports health and these relevant endpoints:
 
 - `GET /health/ready`
 - `GET /api/gateway/health`
 - `GET /api/gateway/memberships?projectId={projectId}`
 - `GET /api/gateway/memberships?channelId={channelId}`
-- `GET /api/gateway/events?projectId={projectId}&afterId={id}&limit={n}`
-- `GET /api/gateway/events?channelId={id}&afterId={id}&limit={n}`
+- `GET /api/direct-agent-events?channelId={id}&afterId={id}&limit={n}` (replaces retired `GET /api/gateway/events`)
 - `GET /api/gateway/messages/{messageId}`
 - `GET /api/gateway/sources/{sourceKind}/{sourceId}?sourceProjectId={projectId}`
-- `POST /api/gateway/direct-agent-messages`
-- `POST /api/gateway/test-wakes`
+- `POST /api/direct-agent-events` (replaces retired `POST /api/gateway/direct-agent-messages` and `POST /api/gateway/test-wakes`)
 - `POST /api/gateway/system-messages`
 
 Live readiness verified:
@@ -123,10 +121,10 @@ If the evidence is missing, say so directly rather than fabricating activity:
 
 ### 2. Send: "message/wake agent X"
 
-If the target agent has an active Den Channels membership for the requested project/channel, the ambassador can record a direct-agent message:
+If the target agent has an active Den Channels membership for the requested project/channel, the ambassador records a wake via the canonical route (the retired `POST /api/gateway/direct-agent-messages` returns 410 Gone as of task #2022):
 
 ```bash
-curl -fsS -X POST http://192.168.1.10:18080/api/gateway/direct-agent-messages \
+curl -fsS -X POST http://192.168.1.10:18080/api/direct-agent-events \
   -H 'Content-Type: application/json' \
   --data-binary @- <<'JSON'
 {
@@ -143,22 +141,18 @@ Expected result shape:
 ```json
 {
   "status": "recorded",
-  "deliveryStatus": "recorded_pending_claim",
-  "claimStatus": "pending",
-  "completionStatus": "pending",
-  "suppressionStatus": "none",
+  "eventId": 123,
+  "channelId": 2,
+  "requestId": "direct-agent-message:2:den-channels-runner:...",
   "memberIdentity": "den-channels-runner",
   "wakePolicy": "all_human_messages",
-  "messageId": 123,
-  "channelId": 2,
-  "requestId": "direct-agent-message:2:1:...",
-  "gatewayMessageUrl": "/api/gateway/messages/123",
-  "gatewayEventsUrl": "/api/gateway/events?channelId=2&afterId=122&limit=10",
+  "eventUrl": "/api/direct-agent-events/123",
+  "eventsUrl": "/api/direct-agent-events?channelId=2&afterId=122&limit=10",
   "evidenceSummary": "..."
 }
 ```
 
-The ambassador should then poll or re-read `gatewayEventsUrl` to report whether a visible `agent_text` reply appeared. The direct-agent-message itself is Channels-owned evidence; actual wake/claim/completion is still performed by Den Gateway + the target agent's Hermes Gateway session.
+The ambassador should then poll or re-read `eventsUrl` to report whether a visible `agent_text` reply appeared. The wake event itself is Channels-owned evidence; actual wake/claim/completion is still performed by Den Gateway + the target agent's Hermes Gateway session.
 
 ### 3. Fall back when the target is not a Channels member
 
@@ -188,7 +182,7 @@ For a phone-usable ambassador, prefer typed tools over asking the model to run `
 - `den_channels_get_memberships(project_id?, channel_id?)`
 - `den_channels_get_events(project_id?, channel_id?, after_id=0, limit=20)`
 - `den_channels_get_message(message_id)`
-- `den_channels_send_direct_agent_message(project_id/channel_id, member_identity, body, sender_identity='discord-ambassador')`
+- `den_channels_send_direct_agent_event(project_id/channel_id, member_identity, body, sender_identity='discord-ambassador')`
 
 These can live in one of two places:
 
@@ -209,7 +203,7 @@ Do not add Den Channels DB writes to Den Core/den-mcp.
 
 ## Safety and privacy rules
 
-- Only send direct-agent messages to active memberships in the requested project/channel.
+- Only send direct-agent events to active memberships in the requested project/channel.
 - Do not infer cross-project targets; require explicit project/channel if ambiguous.
 - Keep Den as source of truth; summarize in Discord but write durable operational context back to Den when it matters.
 - Do not mirror private Discord content into Den Channels unless the user explicitly asks the ambassador to send that content.
@@ -221,7 +215,7 @@ Do not add Den Channels DB writes to Den Core/den-mcp.
 1. Ask in Discord: `status den-channels-runner in den-channels`.
 2. Ambassador reads memberships and recent events, then replies with evidence.
 3. Ask in Discord: `message den-channels-runner: please reply with a short ack in Den Channels`.
-4. Ambassador posts `POST /api/gateway/direct-agent-messages` and reports `messageId`, `requestId`, and `gatewayEventsUrl`.
+4. Ambassador posts `POST /api/direct-agent-events` and reports `eventId`, `requestId`, and `eventsUrl`.
 5. Verify a later Den Channels event contains an `agent_text` reply with `sourceKind=gateway_delivery`.
 
 Passing this smoke proves the Discord bot can cross into Channels information and initiate a Den Channels wake without sharing the same Hermes conversation session.

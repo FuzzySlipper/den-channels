@@ -23,9 +23,9 @@ All coupling to Den core happens through explicit HTTP/event contracts. MCP tool
 This contract uses the task #1555 vocabulary from Core's `docs/communication-api-surface-naming.md` and Den document `den-core/den-communication-surfaces-concept-map`:
 
 - `channel_message` means a visible Den Channels transcript row written through `POST /api/channels/{channelId}/messages` or the Gateway compatibility seam.
-- `direct_agent_message` / `direct_agent_event` means the wakeable Channels-owned request written primarily through `POST /api/direct-agent-events`; its backing transcript row has `sourceKind=wake_event`. `POST /api/gateway/direct-agent-messages` is a transitional compatibility alias for older Gateway/adapter callers.
+- `direct_agent_message` / `direct_agent_event` means the wakeable Channels-owned request written through `POST /api/direct-agent-events`; its backing transcript row has `sourceKind=wake_event`. The legacy alias `POST /api/gateway/direct-agent-messages` was retired in task #2022 and now returns 410 Gone.
 - `gateway_delivery_final_message` means the true terminal visible reply for a Gateway delivery; it is a `channel_message` with `sourceKind=gateway_delivery`, a `deliveryRequestId`, and a final dedupe key shaped `gateway-delivery:{delivery_request_id}:final`.
-- `channel_activity_event` / `delivery_activity_event` means non-waking progress/activity written primarily through `POST /api/channels/{channelId}/activity-events` or the Channels-owned Gateway-shaped compatibility route `POST /api/channel-activity-events`. `POST /api/gateway/channel-activity-events` is a migration alias only.
+- `channel_activity_event` / `delivery_activity_event` means non-waking progress/activity written primarily through `POST /api/channels/{channelId}/activity-events` or `POST /api/channel-activity-events`. The legacy alias `POST /api/gateway/channel-activity-events` was retired in task #2022 and now returns 410 Gone.
 - Core `project_message` / `task_message`, `user_notification`, `agent_stream_entry`, and worker/review packets remain Core-owned records; Channels may mirror or link them, but does not become their source of truth.
 
 New docs should avoid unqualified "message" when the surface is not already obvious from the route/DTO namespace.

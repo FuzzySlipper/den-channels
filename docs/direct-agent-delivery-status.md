@@ -17,23 +17,15 @@ Primary Channels-owned callers should send:
 }
 ```
 
-The Channels-owned route has no `waitFor` control and never depends on Gateway availability.
+The Channels-owned route has no `waitFor` control and never depends on Gateway availability. The retired compatibility alias `POST /api/gateway/direct-agent-messages` returned 410 Gone as of task #2022; callers must use `POST /api/direct-agent-events` instead.
 
-Optional backwards-compatible acknowledgement controls on the compatibility route only (`POST /api/gateway/direct-agent-messages`):
-
-- `waitFor`: `none`, `claim`, `ack`, or `completion`; default `none`.
-- `timeoutMs`: bounded wait in milliseconds; clamped to `0..5000`; default `1500`.
-
-The compatibility wait is best-effort and bounded. It never proves task completion, and it never blocks indefinitely.
-
-## Response handles
+## Response handles (canonical POST /api/direct-agent-events)
 
 The response includes stable handles for follow-up diagnostics:
 
 - `eventId` / `eventUrl`: the Channels wake-event message that was recorded and can be read via `GET /api/direct-agent-events/{eventId}`.
-- `messageId` / `gatewayMessageUrl`: compatibility names for the same Channels wake-event record when using `/api/gateway/direct-agent-messages`.
 - `requestId`: stable source id shaped `direct-agent-message:{channelId}:{memberIdentity}:{guid}`.
-- `gatewayEventsUrl`: Channels event cursor near the recorded message.
+- `eventsUrl`: Channels event cursor near the recorded message (pointing at `/api/direct-agent-events`).
 - `deliveryRequestId`: Gateway delivery request id when Gateway has created one for this request.
 - `attemptId`: latest Gateway delivery attempt id when an adapter/runtime has attempted or claimed delivery.
 

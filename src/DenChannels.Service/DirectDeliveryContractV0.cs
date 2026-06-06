@@ -1,7 +1,8 @@
 // =========================================================================
 // Direct Delivery / Channels Operations Contract v0
 // Task #1848: Pin the cross-boundary vocabulary as named constants.
-// Gateway* DTO names remain as transitional compatibility aliases.
+// Gateway* DTO names are retained for historical/compatibility reference.
+// The Gateway compatibility alias routes were retired in task #2022 (410 Gone).
 // Semantics are Direct Delivery / Channels operations, not Gateway-owned.
 // =========================================================================
 
@@ -97,9 +98,10 @@ public static class SuppressionStatus
 // -------------------------------------------------------------------------
 
 /// <summary>
-/// Wait target for the Gateway compatibility spin-wait path.
-/// The Channels-owned <c>/api/direct-agent-events</c> route never uses waitFor;
-/// this vocabulary applies only to the <c>/api/gateway/direct-agent-messages</c> compatibility alias.
+/// Wait target vocabulary — historical only (task #2022).
+/// The Channels-owned <c>/api/direct-agent-events</c> route never uses waitFor.
+/// The <c>/api/gateway/direct-agent-messages</c> compatibility alias that used this
+/// vocabulary was retired in task #2022 and returns 410 Gone.
 /// </summary>
 public static class WaitForTarget
 {
