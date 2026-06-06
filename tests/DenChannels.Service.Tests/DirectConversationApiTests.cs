@@ -665,6 +665,84 @@ public sealed class DirectConversationApiTests : IDisposable
         Assert.Equal("piw_test_123", entry.SourceWorkerRunId);
     }
 
+    // ── Source badge projections on linked entries ───────────────────────
+
+    [Fact]
+    public async Task LinkedEntry_HasSourceBadgesFromCanonicalMessage()
+    {
+        using var client = _factory.CreateClient();
+
+        // Setup channel + membership
+        var channelSlug = $"ops-{Guid.NewGuid():N}"[..20];
+        using var channelResponse = await client.PostAsJsonAsync("/api/channels", new
+        {
+            slug = channelSlug,
+            displayName = "LinkBadge Test Channel",
+            kind = "project_default",
+            projectId = "den-core",
+            createdBy = "test"
+        });
+        var channel = await channelResponse.Content.ReadFromJsonAsync<ChannelPayload>();
+
+        using var membershipResponse = await client.PutAsJsonAsync(
+            $"/api/channels/{channel!.Id}/memberships", new
+        {
+            memberType = "agent",
+            memberIdentity = "linkbadge-agent",
+            membershipStatus = "active",
+            wakePolicy = "all_human_messages"
+        });
+        Assert.True(membershipResponse.IsSuccessStatusCode);
+
+        using var convResponse = await client.PostAsJsonAsync("/api/direct-conversations", new
+        {
+            humanIdentity = "patch",
+            agentIdentity = "linkbadge-agent",
+            scopeProjectId = "den-core"
+        });
+        var conv = await convResponse.Content.ReadFromJsonAsync<DirectConversationDto>();
+        Assert.NotNull(conv);
+
+        // Send a wake event with rich target-work/session attribution
+        using var eventResponse = await client.PostAsJsonAsync("/api/direct-agent-events", new
+        {
+            channelId = channel.Id,
+            memberIdentity = "linkbadge-agent",
+            senderIdentity = "linkbadge-agent",
+            body = "Task #55 done.",
+            sourceProjectId = "den-core",
+            targetProjectId = "den-core",
+            targetTaskId = (long?)55,
+            workerRunId = "piw_link_999",
+            workerRole = "coder",
+            sessionOwnerId = "session-owner-1",
+            sessionId = "sess-abc"
+        });
+        Assert.Equal(HttpStatusCode.Created, eventResponse.StatusCode);
+        var evt = await eventResponse.Content.ReadFromJsonAsync<DirectAgentEventDto>();
+
+        // Link the agent response; source badges should come from the canonical message
+        using var linkResponse = await client.PostAsJsonAsync(
+            $"/api/direct-conversations/{conv.Id}/link-message", new
+        {
+            channelMessageId = evt!.EventId,
+            direction = "agent_to_human",
+            senderIdentity = "linkbadge-agent",
+            recipientIdentity = "patch",
+            bodyPreview = "Task #55 done."
+        });
+        Assert.Equal(HttpStatusCode.Created, linkResponse.StatusCode);
+        var linkedEntry = await linkResponse.Content.ReadFromJsonAsync<DirectConversationEntryDto>();
+        Assert.NotNull(linkedEntry);
+
+        // Source badges are now populated from the canonical channel_message
+        Assert.Equal(channel.Id, linkedEntry.SourceChannelId);
+        Assert.Equal("den-core", linkedEntry.SourceProjectId);
+        Assert.Equal(55, linkedEntry.SourceTaskId);
+        Assert.Equal("piw_link_999", linkedEntry.SourceWorkerRunId);
+        Assert.Equal("session-owner-1", linkedEntry.SourceSessionOwnerId);
+    }
+
     // ── JSON payload types for deserialization ──────────────────────────
 
     private sealed record ChannelPayload(long Id, string Slug, string DisplayName, string Kind,

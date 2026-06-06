@@ -2098,13 +2098,43 @@ public sealed partial class ChannelsRepository
         string? bodyPreview = null, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
+
+        // Read canonical channel_message source fields for source badge attribution
+        long? sourceChannelId = null;
+        string? sourceProjectId = null;
+        long? sourceTaskId = null;
+        string? sourceSessionOwnerId = null;
+        string? sourceWorkerRunId = null;
+
+        await using (var readCmd = connection.CreateCommand())
+        {
+            readCmd.CommandText = """
+                SELECT channel_id, source_project_id, target_project_id, target_task_id,
+                       session_owner_id, worker_run_id
+                FROM channel_messages WHERE id = $id;
+                """;
+            readCmd.Parameters.AddWithValue("$id", channelMessageId);
+            await using var readReader = await readCmd.ExecuteReaderAsync(cancellationToken);
+            if (await readReader.ReadAsync(cancellationToken))
+            {
+                sourceChannelId = readReader.IsDBNull(0) ? null : readReader.GetInt64(0);
+                sourceProjectId = readReader.IsDBNull(1) ? null : readReader.GetString(1)
+                    ?? (readReader.IsDBNull(2) ? null : readReader.GetString(2));
+                sourceTaskId = readReader.IsDBNull(3) ? null : readReader.GetInt64(3);
+                sourceSessionOwnerId = readReader.IsDBNull(4) ? null : readReader.GetString(4);
+                sourceWorkerRunId = readReader.IsDBNull(5) ? null : readReader.GetString(5);
+            }
+        }
+
         await using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO direct_conversation_entries(
                 conversation_id, channel_message_id, direction, sender_identity, recipient_identity,
-                body_preview)
+                source_channel_id, source_project_id, source_task_id,
+                source_session_owner_id, source_worker_run_id, body_preview)
             VALUES ($conversationId, $channelMessageId, $direction, $senderIdentity, $recipientIdentity,
-                $bodyPreview)
+                $sourceChannelId, $sourceProjectId, $sourceTaskId,
+                $sourceSessionOwnerId, $sourceWorkerRunId, $bodyPreview)
             RETURNING id, conversation_id, channel_message_id, direction, sender_identity, recipient_identity,
                 source_channel_id, source_project_id, source_task_id,
                 source_session_owner_id, source_worker_run_id, body_preview, created_at;
@@ -2114,6 +2144,11 @@ public sealed partial class ChannelsRepository
         command.Parameters.AddWithValue("$direction", direction);
         command.Parameters.AddWithValue("$senderIdentity", senderIdentity.Trim());
         command.Parameters.AddWithValue("$recipientIdentity", recipientIdentity.Trim());
+        command.Parameters.AddWithValue("$sourceChannelId", (object?)sourceChannelId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sourceProjectId", (object?)sourceProjectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sourceTaskId", (object?)sourceTaskId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sourceSessionOwnerId", (object?)sourceSessionOwnerId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sourceWorkerRunId", (object?)sourceWorkerRunId ?? DBNull.Value);
         command.Parameters.AddWithValue("$bodyPreview", (object?)bodyPreview ?? DBNull.Value);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         await reader.ReadAsync(cancellationToken);
