@@ -17,7 +17,8 @@ public sealed record DirectConversationDto(
     string? LastEntryPreview,
     string? LastEntrySender,
     string CreatedAt,
-    string UpdatedAt);
+    string UpdatedAt,
+    long UnreadCount = 0);
 
 public sealed record DirectConversationListResponse(
     IReadOnlyList<DirectConversationDto> Conversations,
@@ -84,5 +85,12 @@ public sealed record DirectConversationReadCursorDto(
 public sealed record UpsertDirectReadCursorRequest(
     string ReaderIdentity,
     long? LastReadEntryId);
+
+public sealed record LinkDirectMessageRequest(
+    long ChannelMessageId,
+    string Direction,
+    string SenderIdentity,
+    string RecipientIdentity,
+    string? BodyPreview = null);
 
 public sealed record DirectConversationErrorDto(string Code, string Detail);

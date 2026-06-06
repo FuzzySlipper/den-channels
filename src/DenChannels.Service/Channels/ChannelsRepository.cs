@@ -1857,7 +1857,8 @@ public sealed partial class ChannelsRepository
             RETURNING id, human_identity, agent_identity, scope_project_id, display_title,
                 is_archived, is_muted, settings_json,
                 last_entry_at, last_entry_preview, last_entry_sender,
-                created_at, updated_at;
+                created_at, updated_at,
+                0;
             """;
         command.Parameters.AddWithValue("$humanIdentity", request.HumanIdentity.Trim());
         command.Parameters.AddWithValue("$agentIdentity", request.AgentIdentity.Trim());
@@ -1876,27 +1877,38 @@ public sealed partial class ChannelsRepository
         await using var command = connection.CreateCommand();
         command.CommandText = afterId is null
             ? """
-                SELECT id, human_identity, agent_identity, scope_project_id, display_title,
-                    is_archived, is_muted, settings_json,
-                    last_entry_at, last_entry_preview, last_entry_sender,
-                    created_at, updated_at
-                FROM direct_conversations
-                WHERE human_identity = $humanIdentity
-                ORDER BY last_entry_at DESC, id DESC
+                SELECT dc.id, dc.human_identity, dc.agent_identity, dc.scope_project_id, dc.display_title,
+                    dc.is_archived, dc.is_muted, dc.settings_json,
+                    dc.last_entry_at, dc.last_entry_preview, dc.last_entry_sender,
+                    dc.created_at, dc.updated_at,
+                    (SELECT COUNT(*) FROM direct_conversation_entries dce
+                     WHERE dce.conversation_id = dc.id
+                       AND (rc.last_read_entry_id IS NULL OR dce.id > rc.last_read_entry_id)) AS unread_count
+                FROM direct_conversations dc
+                LEFT JOIN direct_conversation_read_cursors rc
+                    ON rc.conversation_id = dc.id AND rc.reader_identity = $readerIdentity
+                WHERE dc.human_identity = $humanIdentity
+                ORDER BY dc.last_entry_at DESC, dc.id DESC
                 LIMIT $limit;
                 """
             : """
-                SELECT id, human_identity, agent_identity, scope_project_id, display_title,
-                    is_archived, is_muted, settings_json,
-                    last_entry_at, last_entry_preview, last_entry_sender,
-                    created_at, updated_at
-                FROM direct_conversations
-                WHERE human_identity = $humanIdentity
-                  AND id < $afterId
-                ORDER BY last_entry_at DESC, id DESC
+                SELECT dc.id, dc.human_identity, dc.agent_identity, dc.scope_project_id, dc.display_title,
+                    dc.is_archived, dc.is_muted, dc.settings_json,
+                    dc.last_entry_at, dc.last_entry_preview, dc.last_entry_sender,
+                    dc.created_at, dc.updated_at,
+                    (SELECT COUNT(*) FROM direct_conversation_entries dce
+                     WHERE dce.conversation_id = dc.id
+                       AND (rc.last_read_entry_id IS NULL OR dce.id > rc.last_read_entry_id)) AS unread_count
+                FROM direct_conversations dc
+                LEFT JOIN direct_conversation_read_cursors rc
+                    ON rc.conversation_id = dc.id AND rc.reader_identity = $readerIdentity
+                WHERE dc.human_identity = $humanIdentity
+                  AND dc.id < $afterId
+                ORDER BY dc.last_entry_at DESC, dc.id DESC
                 LIMIT $limit;
                 """;
         command.Parameters.AddWithValue("$humanIdentity", humanIdentity.Trim());
+        command.Parameters.AddWithValue("$readerIdentity", humanIdentity.Trim());
         command.Parameters.AddWithValue("$limit", limit);
         if (afterId is not null)
             command.Parameters.AddWithValue("$afterId", afterId.Value);
@@ -1915,7 +1927,8 @@ public sealed partial class ChannelsRepository
             SELECT id, human_identity, agent_identity, scope_project_id, display_title,
                 is_archived, is_muted, settings_json,
                 last_entry_at, last_entry_preview, last_entry_sender,
-                created_at, updated_at
+                created_at, updated_at,
+                0
             FROM direct_conversations
             WHERE id = $id;
             """;
@@ -2078,6 +2091,53 @@ public sealed partial class ChannelsRepository
         return value is long count ? count : 0;
     }
 
+    // ── Agent response transcript linking ────────────────────────────────
+
+    public async Task<DirectConversationEntryDto> LinkMessageToConversationAsync(long conversationId,
+        long channelMessageId, string direction, string senderIdentity, string recipientIdentity,
+        string? bodyPreview = null, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO direct_conversation_entries(
+                conversation_id, channel_message_id, direction, sender_identity, recipient_identity,
+                body_preview)
+            VALUES ($conversationId, $channelMessageId, $direction, $senderIdentity, $recipientIdentity,
+                $bodyPreview)
+            RETURNING id, conversation_id, channel_message_id, direction, sender_identity, recipient_identity,
+                source_channel_id, source_project_id, source_task_id,
+                source_session_owner_id, source_worker_run_id, body_preview, created_at;
+            """;
+        command.Parameters.AddWithValue("$conversationId", conversationId);
+        command.Parameters.AddWithValue("$channelMessageId", channelMessageId);
+        command.Parameters.AddWithValue("$direction", direction);
+        command.Parameters.AddWithValue("$senderIdentity", senderIdentity.Trim());
+        command.Parameters.AddWithValue("$recipientIdentity", recipientIdentity.Trim());
+        command.Parameters.AddWithValue("$bodyPreview", (object?)bodyPreview ?? DBNull.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        var entry = ReadConversationEntry(reader);
+
+        // Update conversation last-entry projection
+        await using var updateCmd = connection.CreateCommand();
+        updateCmd.CommandText = """
+            UPDATE direct_conversations
+            SET last_entry_at = $entryAt,
+                last_entry_preview = $preview,
+                last_entry_sender = $sender,
+                updated_at = datetime('now')
+            WHERE id = $conversationId;
+            """;
+        updateCmd.Parameters.AddWithValue("$entryAt", entry.CreatedAt);
+        updateCmd.Parameters.AddWithValue("$preview", Truncate(bodyPreview ?? "", 200));
+        updateCmd.Parameters.AddWithValue("$sender", senderIdentity.Trim());
+        updateCmd.Parameters.AddWithValue("$conversationId", conversationId);
+        await updateCmd.ExecuteNonQueryAsync(cancellationToken);
+
+        return entry;
+    }
+
     // ── Private row readers ─────────────────────────────────────────────
 
     private static DirectConversationDto ReadConversation(SqliteDataReader reader) => new(
@@ -2093,7 +2153,8 @@ public sealed partial class ChannelsRepository
         LastEntryPreview: reader.IsDBNull(9) ? null : reader.GetString(9),
         LastEntrySender: reader.IsDBNull(10) ? null : reader.GetString(10),
         CreatedAt: reader.GetString(11),
-        UpdatedAt: reader.GetString(12));
+        UpdatedAt: reader.GetString(12),
+        UnreadCount: reader.IsDBNull(13) ? 0 : reader.GetInt64(13));
 
     private static DirectConversationEntryDto ReadConversationEntry(SqliteDataReader reader) => new(
         Id: reader.GetInt64(0),

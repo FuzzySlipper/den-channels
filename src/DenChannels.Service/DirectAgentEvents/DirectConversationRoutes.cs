@@ -235,6 +235,45 @@ public static class DirectConversationRoutes
             return Results.Ok(new { conversationId, readerIdentity, cursor.LastReadEntryId, unreadCount = unread, hasUnread = unread > 0 });
         });
 
+        // ---------------------------------------------------------------
+        // POST /api/direct-conversations/{conversationId}/link-message
+        // Link an existing canonical channel_message into the DM transcript.
+        // Used by the host/bridge to link agent responses carrying
+        // directConversationId metadata. Does NOT derive session identity
+        // from direct_conversation_id.
+        // ---------------------------------------------------------------
+        group.MapPost("/{conversationId:long}/link-message", async (
+            ChannelsRepository repository,
+            long conversationId,
+            LinkDirectMessageRequest request,
+            CancellationToken cancellationToken) =>
+        {
+            var conversation = await repository.GetConversationAsync(conversationId, cancellationToken);
+            if (conversation is null)
+                return Results.NotFound(new DirectConversationErrorDto("conversation_not_found",
+                    $"Conversation {conversationId} not found."));
+
+            if (request.ChannelMessageId <= 0)
+                return Results.BadRequest(new DirectConversationErrorDto("invalid_channel_message_id",
+                    "Provide a valid channelMessageId."));
+            if (string.IsNullOrWhiteSpace(request.SenderIdentity))
+                return Results.BadRequest(new DirectConversationErrorDto("missing_sender_identity",
+                    "Provide senderIdentity."));
+            if (string.IsNullOrWhiteSpace(request.RecipientIdentity))
+                return Results.BadRequest(new DirectConversationErrorDto("missing_recipient_identity",
+                    "Provide recipientIdentity."));
+            if (request.Direction is not "agent_to_human" and not "human_to_agent" and not "system_note")
+                return Results.BadRequest(new DirectConversationErrorDto("invalid_direction",
+                    "Direction must be agent_to_human, human_to_agent, or system_note."));
+
+            var entry = await repository.LinkMessageToConversationAsync(
+                conversationId, request.ChannelMessageId, request.Direction,
+                request.SenderIdentity, request.RecipientIdentity,
+                request.BodyPreview, cancellationToken);
+
+            return Results.Created($"/api/direct-conversations/{conversationId}/entries/{entry.Id}", entry);
+        });
+
         return group;
     }
 }
