@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 
 namespace DenChannels.Service.Channels;
@@ -34,40 +36,128 @@ public static class ChannelRoutes
         // -----------------------------------------------------------------------
         // GET /api/channels/search
         // Cross-channel FTS5 search. Read-only; no wake/delivery/claim side effects.
-        // Query params: q, channel_id, sender_identity, project_id,
-        //   non_project_only, message_kind, created_after, created_before,
-        //   order_by, offset, limit
+        // Restricted to detective/sysadmin profiles via X-Profile-Identity header.
+        // Query params (both camelCase and snake_case aliases supported):
+        //   q, channelId/channel_id, senderIdentity/sender_identity,
+        //   projectId/project_id, nonProjectOnly/non_project_only,
+        //   messageKind/message_kind, createdAfter/created_after,
+        //   createdBefore/created_before, orderBy/order_by,
+        //   offset, limit
         // -----------------------------------------------------------------------
-        api.MapGet("/channels/search", async (ChannelsRepository repository,
+        api.MapGet("/channels/search", async (
+            ChannelsRepository repository,
+            HttpContext httpContext,
             string? q,
-            long? channelId,
-            string? senderIdentity,
-            string? projectId,
+            long? channelId = null,
+            [FromQuery(Name = "channel_id")] long? channelIdSnake = null,
+            string? senderIdentity = null,
+            [FromQuery(Name = "sender_identity")] string? senderIdentitySnake = null,
+            string? projectId = null,
+            [FromQuery(Name = "project_id")] string? projectIdSnake = null,
             bool nonProjectOnly = false,
+            [FromQuery(Name = "non_project_only")] bool nonProjectOnlySnake = false,
             string? messageKind = null,
+            [FromQuery(Name = "message_kind")] string? messageKindSnake = null,
             string? createdAfter = null,
+            [FromQuery(Name = "created_after")] string? createdAfterSnake = null,
             string? createdBefore = null,
+            [FromQuery(Name = "created_before")] string? createdBeforeSnake = null,
             string? orderBy = null,
+            [FromQuery(Name = "order_by")] string? orderBySnake = null,
             int offset = 0,
             int limit = 20,
             CancellationToken cancellationToken = default) =>
         {
+            // Merge camelCase + snake_case aliases (snake_case wins if both set)
+            channelId ??= channelIdSnake;
+            senderIdentity ??= senderIdentitySnake;
+            projectId ??= projectIdSnake;
+            nonProjectOnly = nonProjectOnly || nonProjectOnlySnake;
+            messageKind ??= messageKindSnake;
+            createdAfter ??= createdAfterSnake;
+            createdBefore ??= createdBeforeSnake;
+            orderBy ??= orderBySnake;
+            // ── Profile authorization ──────────────────────────────────────
+            // Only detective and sysadmin profiles may search across channels.
+            // The caller sends X-Profile-Identity header, which the den-channels
+            // MCP facade sets from tool_profile during MCP tool invocation.
+            var profileIdentity = httpContext.Request.Headers["X-Profile-Identity"].FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(profileIdentity))
+            {
+                return Results.Json(new ProblemDetailsDto(
+                    "missing_profile_identity",
+                    401,
+                    "X-Profile-Identity header required. Only detective and sysadmin profiles may search channels."),
+                    statusCode: 401);
+            }
+            if (!string.Equals(profileIdentity, "detective", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(profileIdentity, "sysadmin", StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.Json(new ProblemDetailsDto(
+                    "profile_not_authorized",
+                    403,
+                    $"Profile '{profileIdentity}' is not authorized to search channels. Only detective and sysadmin profiles have this capability."),
+                    statusCode: 403);
+            }
+
+            // ── Time bound validation ──────────────────────────────────────
+            DateTime? parsedCreatedAfter = null;
+            DateTime? parsedCreatedBefore = null;
+
+            if (!string.IsNullOrWhiteSpace(createdAfter))
+            {
+                if (!DateTime.TryParse(createdAfter.Trim(), CultureInfo.InvariantCulture,
+                        DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                        out var after))
+                {
+                    return Results.BadRequest(new ProblemDetailsDto(
+                        "invalid_created_after",
+                        400,
+                        $"created_after '{createdAfter}' is not a valid ISO 8601 timestamp."));
+                }
+                parsedCreatedAfter = after;
+            }
+
+            if (!string.IsNullOrWhiteSpace(createdBefore))
+            {
+                if (!DateTime.TryParse(createdBefore.Trim(), CultureInfo.InvariantCulture,
+                        DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                        out var before))
+                {
+                    return Results.BadRequest(new ProblemDetailsDto(
+                        "invalid_created_before",
+                        400,
+                        $"created_before '{createdBefore}' is not a valid ISO 8601 timestamp."));
+                }
+                parsedCreatedBefore = before;
+            }
+
+            if (parsedCreatedAfter.HasValue && parsedCreatedBefore.HasValue
+                && parsedCreatedAfter.Value > parsedCreatedBefore.Value)
+            {
+                return Results.BadRequest(new ProblemDetailsDto(
+                    "inverted_time_bounds",
+                    400,
+                    "created_after must not be later than created_before."));
+            }
+
+            // ── Standard search criteria guard ────────────────────────────
             if (string.IsNullOrWhiteSpace(q) && channelId is null
                 && string.IsNullOrWhiteSpace(senderIdentity)
                 && string.IsNullOrWhiteSpace(projectId) && !nonProjectOnly
                 && string.IsNullOrWhiteSpace(messageKind)
-                && string.IsNullOrWhiteSpace(createdAfter)
-                && string.IsNullOrWhiteSpace(createdBefore))
+                && !parsedCreatedAfter.HasValue
+                && !parsedCreatedBefore.HasValue)
             {
                 return Results.BadRequest(new ProblemDetailsDto(
                     "missing_search_criteria",
                     400,
-                    "Provide at least one search criterion (q, channelId, senderIdentity, projectId, nonProjectOnly, messageKind, or time range)."));
+                    "Provide at least one search criterion (q, channel_id, sender_identity, project_id, non_project_only, message_kind, or time range)."));
             }
 
             var result = await repository.SearchMessagesAsync(
                 q, channelId, senderIdentity, projectId, nonProjectOnly,
-                messageKind, createdAfter, createdBefore, orderBy,
+                messageKind, parsedCreatedAfter, parsedCreatedBefore, orderBy,
                 offset, limit, cancellationToken);
             return Results.Ok(result);
         });

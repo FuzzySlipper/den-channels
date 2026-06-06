@@ -299,8 +299,8 @@ public sealed partial class ChannelsRepository
         string? projectId = null,
         bool nonProjectOnly = false,
         string? messageKind = null,
-        string? createdAfter = null,
-        string? createdBefore = null,
+        DateTime? createdAfter = null,
+        DateTime? createdBefore = null,
         string? orderBy = null,
         int offset = 0,
         int limit = 20,
@@ -359,16 +359,16 @@ public sealed partial class ChannelsRepository
             cmd.Parameters.AddWithValue("$messageKind", messageKind.Trim());
         }
 
-        if (!string.IsNullOrWhiteSpace(createdAfter))
+        if (createdAfter.HasValue)
         {
             conditions.Add("channel_messages.created_at >= $createdAfter");
-            cmd.Parameters.AddWithValue("$createdAfter", createdAfter.Trim());
+            cmd.Parameters.AddWithValue("$createdAfter", createdAfter.Value.ToString("o"));
         }
 
-        if (!string.IsNullOrWhiteSpace(createdBefore))
+        if (createdBefore.HasValue)
         {
             conditions.Add("channel_messages.created_at <= $createdBefore");
-            cmd.Parameters.AddWithValue("$createdBefore", createdBefore.Trim());
+            cmd.Parameters.AddWithValue("$createdBefore", createdBefore.Value.ToString("o"));
         }
 
         var whereClause = string.Join(" AND ", conditions);
