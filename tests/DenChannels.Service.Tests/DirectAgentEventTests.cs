@@ -512,7 +512,7 @@ public sealed class DirectAgentEventTests : IDisposable
     }
 
     // -------------------------------------------------------------------------
-    // Gateway compatibility alias still works
+    // Gateway compatibility alias returns 410 Gone (retired task #2022)
     // -------------------------------------------------------------------------
 
     [Fact]

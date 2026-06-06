@@ -56,5 +56,5 @@ Supplemental fields:
 ## Safety rules
 
 - Do not report `received`, `acknowledged`, or `completed` solely because Channels wrote a wake_event.
-- If the response says `recorded_but_not_claimed_yet`, treat it as durable recording evidence only; follow `deliveryRequestId`, `requestId`, or `gatewayEventsUrl` later.
+- If the response says `recorded_but_not_claimed_yet`, treat it as durable recording evidence only; follow `deliveryRequestId`, `requestId`, `eventUrl`, or `eventsUrl` later.
 - A `completed` delivery is only delivery completion. Use task-thread or worker/review packets for task completion truth.

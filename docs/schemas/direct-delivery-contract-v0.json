@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://den-channels.nousresearch.com/schemas/direct-delivery-contract-v0.json",
   "title": "Direct Delivery / Channels Operations Contract v0",
-  "description": "Frozen v0 contract for cross-boundary Direct Delivery and Channels operations. Gateway* names are transitional compatibility aliases. Core remains workflow truth.",
+  "description": "Frozen v0 contract for cross-boundary Direct Delivery and Channels operations. Gateway* DTO names are historical only; the Gateway compatibility alias routes (POST /api/gateway/direct-agent-messages, /api/gateway/events, /api/gateway/channel-activity-events, /api/gateway/test-wakes) were retired in task #2022 and return 410 Gone. Core remains workflow truth.",
   "version": "0.1.0",
   "task": "#1848",
   "frozenAt": "2026-06-03",
@@ -45,7 +45,7 @@
     "waitForTarget": {
       "type": "string",
       "enum": ["none", "claim", "ack", "completion"],
-      "description": "Wait target for Gateway compatibility spin-wait path."
+      "description": "Wait target vocabulary — historical only (task #2022). The Gateway compatibility alias using this path was retired."
     },
 
     "messageKind": {
@@ -162,9 +162,9 @@
   "boundaryDecisions": {
     "v0": {
       "contractOwner": "Den Channels",
-      "gatewayCompatibility": "transitional",
+      "gatewayCompatibility": "retired",
+      "naming": "Gateway* DTO names are retained for historical compatibility reference only. The Gateway alias routes were retired in task #2022 (410 Gone). Semantics are Direct Delivery / Channels operations.",
       "coreTruth": "Core remains workflow truth for assignments, leases, runs, completion, release, quarantine.",
-      "naming": "Gateway* DTO names are transitional compatibility aliases; semantics are Direct Delivery / Channels operations.",
       "useStubProjectMetadata": "Separate Channels↔Core integration concern; does not block Direct Delivery contract hardening."
     }
   }
