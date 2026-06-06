@@ -25,10 +25,10 @@ This repo currently contains the service skeleton for Den task #1320:
 - `/api/channel-messages/{messageId}/reactions` — idempotent reaction add.
 - `/api/channels/{channelId}/activity-events` — append/query non-waking agent/tool-call breadcrumbs.
 - `/api/channel-activity-events` and `/api/channel-activity-events/status` — Channels-owned Gateway-shaped breadcrumb compatibility writer plus recent failure diagnostics; new callers should prefer the per-channel route.
-- `/api/gateway/memberships?channelId={id}|projectId={projectId}` — Gateway-facing participant/wake-policy snapshot for channel routing.
+- `/api/gateway/memberships?channelId={id}|projectId={projectId}` — participant/wake-policy snapshot for channel routing.
 - `/api/channel-memberships?memberIdentity={identity}` — member-identity channel membership discovery for spawned worker polling; `includeOrdinaryMemberships=true` lets long-lived runtime agents discover ordinary null-purpose memberships without widening the worker default. See `docs/worker-pool-discovery.md`.
-- `/api/gateway/test-wakes` — controlled synthetic wake-event recorder for an active agent membership; it records Channels-owned evidence only and returns Gateway message/events URLs for downstream delivery/claim/complete/fail follow-up.
-- `/api/gateway/direct-agent-messages` — active-member direct-agent wake/message recorder with optional bounded Gateway claim/ack wait (`waitFor`, `timeoutMs`) and explicit delivery status handles. See `docs/direct-agent-delivery-status.md`.
+- `POST /api/direct-agent-events` — canonical direct-agent wake event creation with target metadata. The retired Gateway alias `POST /api/gateway/direct-agent-messages` now returns 410 Gone pointing here (task #2022).
+- `GET /api/direct-agent-events` — cursor-paged direct-agent event listing. The retired alias `GET /api/gateway/events` now returns 410 Gone (task #2022).
 
 The Den Web channel chat panel (in the `den-web` repo) exposes the same boundary:
 it lists project/space channels, shows channel participants/active agent bindings, lets a tester

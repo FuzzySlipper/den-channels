@@ -516,10 +516,10 @@ public sealed class DirectAgentEventTests : IDisposable
     // -------------------------------------------------------------------------
 
     [Fact]
-    public async Task GatewayDirectAgentMessages_NoWaitFor_ReturnsImmediatelyWithoutGateway()
+    public async Task GatewayDirectAgentMessages_Returns410Gone_Tombstone()
     {
-        // Calling the old /api/gateway/direct-agent-messages without waitFor
-        // should now return immediately (no spin-wait), matching #1902 behavior.
+        // Task #2022: Gateway compatibility alias retired. The canonical route is
+        // POST /api/direct-agent-events.
         var channel = await EnsureDefaultChannelAsync("dae-gw-alias-proj");
         await UpsertMembershipAsync(channel.Id, new
         {
@@ -533,16 +533,13 @@ public sealed class DirectAgentEventTests : IDisposable
             channelId = channel.Id,
             memberIdentity = "alias-agent",
             senderIdentity = "operator",
-            body = "Gateway alias test without waitFor"
-            // No waitFor — should default to "none" per #1902
+            body = "Gateway alias test (should be gone)"
         });
 
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        var payload = await response.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
-        Assert.NotNull(payload);
-        Assert.Equal("recorded", payload.Status);
-        Assert.Contains("wake_event recorded", payload.EvidenceSummary);
-        Assert.False(payload.TimedOut);
+        Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+        var raw = await response.Content.ReadAsStringAsync();
+        Assert.Contains("route_gone", raw);
+        Assert.Contains("direct-agent-events", raw);
     }
 
     // -------------------------------------------------------------------------

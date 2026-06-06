@@ -686,15 +686,16 @@ public sealed class ChannelApiTests : IDisposable
     }
 
     [Fact]
-    public async Task GatewayActivityEndpoint_RecordsNonWakingProgressWithoutCreatingMessages()
+    public async Task GatewayActivityEndpoint_Returns410Gone_Tombstone()
     {
+        // Task #2022: Gateway compatibility alias retired. Use canonical route.
         using var client = _factory.CreateClient();
         var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
         {
             displayName = "Den Channels"
         });
 
-        var recorded = await PostJsonAsync<ChannelActivityRouteResultPayload>(client,
+        using var response = await client.PostAsJsonAsync(
             $"/api/gateway/channel-activity-events?channelId={channel.Id}", new
             {
                 projectId = "den-channels",
@@ -709,17 +710,10 @@ public sealed class ChannelApiTests : IDisposable
                 dedupeKey = "activity:delivery-1546:interim:1"
             });
 
-        Assert.Equal("recorded", recorded.Status);
-        Assert.True(recorded.Recorded);
-        Assert.Equal(recorded.ActivityEventId, recorded.ActivityEvent?.Id.ToString());
-        Assert.NotNull(recorded.ActivityEvent);
-        Assert.Equal("assistant_interim", recorded.ActivityEvent.DeliveryStage);
-        Assert.False(recorded.ActivityEvent.Terminal);
-        Assert.Equal("delivery-1546", recorded.ActivityEvent.DeliveryRequestId);
-
-        var messages = await client.GetFromJsonAsync<List<MessagePayload>>($"/api/channels/{channel.Id}/messages?afterId=0&limit=10");
-        Assert.NotNull(messages);
-        Assert.Empty(messages);
+        Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+        var raw = await response.Content.ReadAsStringAsync();
+        Assert.Contains("route_gone", raw);
+        Assert.Contains("activity-events", raw);
     }
 
     [Fact]

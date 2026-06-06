@@ -23,28 +23,28 @@ public static class GatewayRoutes
 
         // -----------------------------------------------------------------------
         // GET /api/gateway/health
-        // Compatibility alias introspection endpoint.
+        // Introspection endpoint showing currently supported routes.
+        // Gateway compatibility aliases have been retired (task #2022).
         // -----------------------------------------------------------------------
         gw.MapGet("/health", () => Results.Ok(new GatewayHealthDto(
             Service: "den-channels",
             Status: "ready",
             Endpoints:
             [
-                "GET /api/gateway/health (compatibility alias)",
+                "GET /api/gateway/health",
                 "GET /api/gateway/memberships?channelId={id}",
                 "GET /api/gateway/memberships?projectId={projectId}",
                 "GET /api/gateway/messages/{messageId}",
                 "GET /api/gateway/sources/{sourceKind}/{sourceId}?sourceProjectId={projectId}",
-                "GET /api/gateway/events?channelId={id}&afterId={id}&limit={n} (compatibility alias)",
-                "GET /api/gateway/events?projectId={projectId}&afterId={id}&limit={n} (compatibility alias)",
                 "POST /api/gateway/system-messages",
-                "POST /api/gateway/channel-activity-events (compatibility alias)",
-                "GET /api/gateway/channel-activity-events/status (compatibility alias)",
-                "POST /api/gateway/direct-agent-messages (compatibility alias)",
-                "POST /api/direct-agent-events",
-                "GET /api/direct-agent-events/{eventId}",
-                "POST /api/gateway/test-wakes (compatibility alias)",
                 "GET /api/gateway/assignments/{assignmentId}/trace",
+                "POST /api/direct-agent-events",
+                "GET /api/direct-agent-events",
+                "GET /api/direct-agent-events/{eventId}",
+                "POST /api/channels/{channelId}/activity-events",
+                "GET /api/channels/{channelId}/activity-events",
+                "POST /api/channel-activity-events",
+                "GET /api/channel-activity-events/status",
                 "GET /api/channels/{channelId}/linked-projects",
                 "GET /api/projects/{projectId}/linked-channels",
                 "POST /api/channel-project-links",
@@ -132,86 +132,22 @@ public static class GatewayRoutes
         });
 
         // -----------------------------------------------------------------------
-        // GET /api/gateway/events
-        // Compatibility alias: lists channel messages as Gateway event items.
-        // The Channels-owned /api/direct-agent-events endpoint is the primary path.
-        // Delegates channel resolution to the shared DirectAgentEventShared resolver.
+        // GET /api/gateway/events — RETIRED (task #2022)
+        // Replaced by GET /api/direct-agent-events.
         // -----------------------------------------------------------------------
-        gw.MapGet("/events", async (
-            ChannelsRepository repository,
-            long? channelId,
-            string? projectId,
-            long? afterId,
-            int? limit,
-            CancellationToken cancellationToken) =>
-        {
-            if (channelId is null && string.IsNullOrWhiteSpace(projectId))
-                return Results.BadRequest(new GatewayErrorDto("missing_parameter",
-                    "Provide channelId or projectId."));
-
-            var channel = await DirectAgentEventShared.ResolveChannelAsync(
-                repository, channelId, projectId, cancellationToken);
-            if (channel is null)
-                return Results.NotFound(new GatewayErrorDto("channel_not_found",
-                    channelId is not null
-                        ? $"Channel {channelId} not found."
-                        : $"No default channel found for project '{projectId}'."));
-
-            var pageSize = Math.Clamp(limit ?? 50, 1, 200);
-            var fetched = await repository.ListMessagesAsync(
-                channel.Id, afterId ?? 0L, null, pageSize + 1, cancellationToken);
-
-            var hasMore = fetched.Count > pageSize;
-            var items = hasMore ? fetched.Take(pageSize).ToList() : fetched.ToList();
-            long? nextAfterId = hasMore ? items[^1].Id : null;
-
-            var eventItems = items.Select(m => new GatewayEventItemDto(
-                m.Id,
-                m.ChannelId,
-                m.MessageKind,
-                m.SenderType,
-                m.SenderIdentity,
-                m.SourceKind,
-                m.SourceId,
-                m.SourceProjectId,
-                m.TargetProjectId,
-                m.TargetTaskId,
-                m.AssignmentId,
-                m.WorkerRunId,
-                m.WorkerRole,
-                m.ProfileIdentity,
-                m.PoolMemberId,
-                m.AgentInstanceId,
-                m.SessionOwnerId,
-                m.SessionId,
-                m.DeliveryRequestId,
-                m.DedupeKey,
-                m.DeepLink,
-                m.Summary,
-                m.Body,
-                m.CreatedAt)).ToList();
-
-            return Results.Ok(new GatewayEventsDto(eventItems, nextAfterId, hasMore));
-        });
+        gw.MapGet("/events", () => GatewayTombstone("GET /api/direct-agent-events"));
 
         // -----------------------------------------------------------------------
-        // POST /api/gateway/channel-activity-events
-        // Compatibility alias for the old Gateway breadcrumb router. Channels owns
-        // persistence and diagnostics; callers should migrate to
-        // /api/channel-activity-events or /api/channels/{channelId}/activity-events.
+        // POST /api/gateway/channel-activity-events — RETIRED (task #2022)
+        // Replaced by POST /api/channels/{channelId}/activity-events.
         // -----------------------------------------------------------------------
-        gw.MapPost("/channel-activity-events", async Task<IResult> (
-            ChannelActivityEventRoutingService activityRouter,
-            string? channelId,
-            ChannelActivityRouteRequest request,
-            CancellationToken cancellationToken) =>
-        {
-            var result = await activityRouter.RouteAsync(request, channelId, cancellationToken);
-            return result.Status == "rejected" ? Results.BadRequest(result) : Results.Ok(result);
-        });
+        gw.MapPost("/channel-activity-events", () => GatewayTombstone("POST /api/channels/{channelId}/activity-events"));
 
-        gw.MapGet("/channel-activity-events/status", (ChannelActivityEventRoutingService activityRouter) =>
-            Results.Ok(activityRouter.GetStatus()));
+        // -----------------------------------------------------------------------
+        // GET /api/gateway/channel-activity-events/status — RETIRED (task #2022)
+        // Replaced by GET /api/channel-activity-events/status.
+        // -----------------------------------------------------------------------
+        gw.MapGet("/channel-activity-events/status", () => GatewayTombstone("GET /api/channel-activity-events/status"));
 
         // -----------------------------------------------------------------------
         // POST /api/gateway/system-messages
@@ -295,198 +231,16 @@ public static class GatewayRoutes
 
 
         // -----------------------------------------------------------------------
-        // POST /api/gateway/direct-agent-messages
-        // Compatibility alias: records a direct-agent wake event and returns
-        // immediately. Delegates core logic to DirectAgentEventShared helpers.
-        // The Channels-owned /api/direct-agent-events endpoint is the primary path.
-        // Gateway-specific spin-wait and delivery-loop poll have been removed;
-        // this route always returns recorded-pending status.
+        // POST /api/gateway/direct-agent-messages — RETIRED (task #2022)
+        // Replaced by POST /api/direct-agent-events.
         // -----------------------------------------------------------------------
-        gw.MapPost("/direct-agent-messages", async (
-            ChannelsRepository repository,
-            PostGatewayDirectAgentMessageRequest request,
-            CancellationToken cancellationToken) =>
-        {
-            if (request.ChannelId is null && string.IsNullOrWhiteSpace(request.ProjectId))
-                return Results.BadRequest(new GatewayErrorDto("missing_parameter",
-                    "Provide channelId or projectId."));
-
-            if (string.IsNullOrWhiteSpace(request.MemberIdentity))
-                return Results.BadRequest(new GatewayErrorDto("missing_member_identity",
-                    "Provide memberIdentity for the target agent binding."));
-
-            if (string.IsNullOrWhiteSpace(request.SenderIdentity))
-                return Results.BadRequest(new GatewayErrorDto("missing_sender_identity",
-                    "Provide senderIdentity for the direct message request."));
-
-            if (string.IsNullOrWhiteSpace(request.Body))
-                return Results.BadRequest(new GatewayErrorDto("missing_body",
-                    "Provide body for the direct message request."));
-
-            var channel = await DirectAgentEventShared.ResolveChannelAsync(
-                repository, request.ChannelId, request.ProjectId, cancellationToken);
-            if (channel is null)
-                return Results.NotFound(new GatewayErrorDto("channel_not_found",
-                    request.ChannelId is not null
-                        ? $"Channel {request.ChannelId} not found."
-                        : $"No default channel found for project '{request.ProjectId}'."));
-
-            var member = await DirectAgentEventShared.FindActiveAgentMemberAsync(
-                repository, channel.Id, request.MemberIdentity, cancellationToken);
-            if (member is null)
-                return Results.NotFound(new GatewayErrorDto("member_not_active_agent",
-                    $"Active agent member '{request.MemberIdentity}' is not joined to channel {channel.Id}."));
-
-            var requestId = $"direct-agent-message:{channel.Id}:{Uri.EscapeDataString(member.MemberIdentity)}:{Guid.NewGuid():N}";
-            var resolvedSourceProjectId = request.SourceProjectId ?? channel.ProjectId;
-            var gatewayEventsUrl = $"/api/direct-agent-events?channelId={channel.Id}&afterId=0&limit=50";
-
-            var metadataPayload = DirectAgentEventShared.BuildWakeMetadata(
-                requestId, member, resolvedSourceProjectId,
-                request.SourceProjectId, request.TargetProjectId, request.TargetTaskId,
-                request.AssignmentId, request.WorkerRunId, request.WorkerRole,
-                request.ProfileIdentity, request.PoolMemberId,
-                request.AgentInstanceId, request.SessionOwnerId, request.SessionId,
-                gatewayEventsUrl);
-
-            var metadataJson = JsonSerializer.Serialize(metadataPayload);
-
-            var msg = await DirectAgentEventShared.PostWakeMessageAsync(
-                repository, channel.Id,
-                request.SenderIdentity, request.Body, requestId,
-                resolvedSourceProjectId, request.TargetProjectId, request.TargetTaskId,
-                request.WorkerRunId, request.WorkerRole,
-                request.ProfileIdentity, request.PoolMemberId,
-                request.AgentInstanceId, request.SessionOwnerId, request.SessionId,
-                request.AssignmentId, request.CheckpointType, request.CheckpointHandle,
-                member.MemberIdentity, metadataJson, cancellationToken);
-
-            var gatewayMessageUrl = $"/api/gateway/messages/{msg.Id}";
-            gatewayEventsUrl = $"/api/direct-agent-events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10";
-
-            // Always return recorded-pending; no Gateway spin-wait.
-            var deliveryObservation = DirectAgentDeliveryObservation.RecordedPending(
-                "Direct agent wake_event recorded (Gateway compatibility alias).");
-
-            var evidenceSummary = deliveryObservation.EvidenceSummary
-                ?? "Direct agent wake_event recorded (Gateway compatibility alias).";
-
-            return Results.Created(gatewayMessageUrl, new GatewayDirectAgentMessageDto(
-                Status: Recorded,
-                DeliveryStatus: deliveryObservation.DeliveryStatus,
-                ClaimStatus: deliveryObservation.ClaimStatus,
-                CompletionStatus: deliveryObservation.CompletionStatus,
-                SuppressionStatus: deliveryObservation.SuppressionStatus,
-                MemberIdentity: member.MemberIdentity,
-                WakePolicy: member.WakePolicy,
-                MessageId: msg.Id,
-                ChannelId: channel.Id,
-                RequestId: requestId,
-                SourceProjectId: resolvedSourceProjectId,
-                TargetProjectId: request.TargetProjectId,
-                TargetTaskId: request.TargetTaskId,
-                AssignmentId: request.AssignmentId,
-                WorkerRunId: request.WorkerRunId,
-                WorkerRole: request.WorkerRole,
-                ProfileIdentity: request.ProfileIdentity,
-                PoolMemberId: request.PoolMemberId,
-                AgentInstanceId: request.AgentInstanceId,
-                SessionOwnerId: request.SessionOwnerId,
-                SessionId: request.SessionId,
-                DeliveryRequestId: null,
-                AttemptId: null,
-                GatewayDeliveryState: null,
-                GatewayAttemptStatus: null,
-                TimedOut: false,
-                GatewayUnavailable: false,
-                GatewayMessageUrl: gatewayMessageUrl,
-                GatewayEventsUrl: gatewayEventsUrl,
-                EvidenceSummary: evidenceSummary));
-        });
+        gw.MapPost("/direct-agent-messages", () => GatewayTombstone("POST /api/direct-agent-events"));
 
         // -----------------------------------------------------------------------
-        // POST /api/gateway/test-wakes
-        // Compatibility alias for ad-hoc wake probe requests.
+        // POST /api/gateway/test-wakes — RETIRED (task #2022)
+        // Replaced by POST /api/direct-agent-events with test-wake metadata.
         // -----------------------------------------------------------------------
-        gw.MapPost("/test-wakes", async (
-            ChannelsRepository repository,
-            PostGatewayTestWakeRequest request,
-            CancellationToken cancellationToken) =>
-        {
-            if (request.ChannelId is null && string.IsNullOrWhiteSpace(request.ProjectId))
-                return Results.BadRequest(new GatewayErrorDto("missing_parameter",
-                    "Provide channelId or projectId."));
-
-            if (string.IsNullOrWhiteSpace(request.MemberIdentity))
-                return Results.BadRequest(new GatewayErrorDto("missing_member_identity",
-                    "Provide memberIdentity for the binding to probe."));
-
-            ChannelDto? channel;
-            if (request.ChannelId is not null)
-            {
-                channel = await repository.GetChannelAsync(request.ChannelId.Value, cancellationToken);
-                if (channel is null)
-                    return Results.NotFound(new GatewayErrorDto("channel_not_found",
-                        $"Channel {request.ChannelId} not found."));
-            }
-            else
-            {
-                var channels = await repository.ListChannelsAsync(request.ProjectId, "project_default", 1, cancellationToken);
-                channel = channels.Count > 0 ? channels[0] : null;
-                if (channel is null)
-                    return Results.NotFound(new GatewayErrorDto("channel_not_found",
-                        $"No default channel found for project '{request.ProjectId}'."));
-            }
-
-            var members = await repository.ListMembershipsAsync(channel.Id, 200, cancellationToken);
-            var member = members.FirstOrDefault(m =>
-                string.Equals(m.MemberIdentity, request.MemberIdentity.Trim(), StringComparison.OrdinalIgnoreCase));
-            if (member is null)
-                return Results.NotFound(new GatewayErrorDto("member_not_found",
-                    $"Member '{request.MemberIdentity}' is not joined to channel {channel.Id}."));
-
-            if (!string.Equals(member.MemberType, "agent", StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(member.MembershipStatus, "active", StringComparison.OrdinalIgnoreCase))
-                return Results.BadRequest(new GatewayErrorDto("member_not_active_agent",
-                    "Only active agent memberships can receive a controlled test wake."));
-
-            var sourceId = $"test-wake:{channel.Id}:{member.Id}:{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
-            var note = string.IsNullOrWhiteSpace(request.Note) ? null : request.Note.Trim();
-            var metadataJson = System.Text.Json.JsonSerializer.Serialize(new
-            {
-                probe = "channel_agent_test_wake",
-                memberIdentity = member.MemberIdentity,
-                wakePolicy = member.WakePolicy,
-                requestedBy = string.IsNullOrWhiteSpace(request.RequestedBy) ? "den-web" : request.RequestedBy.Trim(),
-                note
-            });
-            var body = $"Controlled test wake recorded for {member.MemberIdentity} ({member.WakePolicy}). Gateway/bridge consumers may claim this wake_event if enabled.";
-            var msg = await repository.PostMessageAsync(channel.Id, new PostChannelMessageRequest(
-                SenderType: "system",
-                SenderIdentity: "den-gateway",
-                Body: body,
-                MessageKind: SystemEvent,
-                SourceKind: WakeEvent,
-                SourceId: sourceId,
-                SourceProjectId: channel.ProjectId,
-                Summary: $"Test wake for {member.MemberIdentity}",
-                DeepLink: null,
-                ThreadRootMessageId: null,
-                ReplyToMessageId: null,
-                MetadataJson: metadataJson,
-                DeliveryRequestId: null,
-                DedupeKey: null), cancellationToken);
-
-            return Results.Created($"/api/gateway/messages/{msg.Id}", new GatewayTestWakeDto(
-                Status: Recorded,
-                MemberIdentity: member.MemberIdentity,
-                WakePolicy: member.WakePolicy,
-                MessageId: msg.Id,
-                ChannelId: channel.Id,
-                GatewayMessageUrl: $"/api/gateway/messages/{msg.Id}",
-                GatewayEventsUrl: $"/api/direct-agent-events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10",
-                EvidenceSummary: "Synthetic wake_event recorded in Den Channels; Gateway/bridge delivery, claim, complete, or fail evidence appears as follow-up channel/gateway events."));
-        });
+        gw.MapPost("/test-wakes", () => GatewayTombstone("POST /api/direct-agent-events"));
 
         // -----------------------------------------------------------------------
         // GET /api/gateway/assignments/{assignmentId}/trace
@@ -766,6 +520,20 @@ public static class GatewayRoutes
     }
 
     private sealed record GatewayErrorDto(string Code, string Detail);
+
+    /// <summary>
+    /// Returns a 410 Gone tombstone response for retired Gateway compatibility aliases.
+    /// Callers receive an unambiguous removal error pointing at the canonical replacement.
+    /// </summary>
+    private static IResult GatewayTombstone(string replacement)
+    {
+        return Results.Json(new
+        {
+            code = "route_gone",
+            message = $"This Gateway compatibility route has been retired. Use the canonical Channels route instead.",
+            replacement
+        }, statusCode: 410);
+    }
 
     // -------------------------------------------------------------------------
     // Assignment trace aggregate handler (shared between Gateway and Channel routes)

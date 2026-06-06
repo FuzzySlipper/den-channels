@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using DenChannels.Service.AgentsOverview;
 using DenChannels.Service.Configuration;
 using DenChannels.Service.Gateway;
@@ -14,6 +15,9 @@ namespace DenChannels.Service.Tests;
 
 /// <summary>
 /// Tests for the /api/gateway endpoint group (task #1351).
+/// After task #2022, the Gateway compatibility aliases for direct-agent
+/// events, events lists, test-wakes, and channel-activity-events routes
+/// return 410 Gone with canonical replacement pointers.
 /// </summary>
 public sealed class GatewayContractTests : IDisposable
 {
@@ -54,10 +58,17 @@ public sealed class GatewayContractTests : IDisposable
         // Should advertise the gateway membership and message endpoints
         Assert.Contains(payload.Endpoints, e => e.Contains("memberships"));
         Assert.Contains(payload.Endpoints, e => e.Contains("messages"));
+        // Must NOT advertise any Gateway compatibility aliases as active green paths
+        Assert.DoesNotContain(payload.Endpoints, e => e.Contains("/api/gateway/direct-agent-messages"));
+        Assert.DoesNotContain(payload.Endpoints, e => e.Contains("/api/gateway/test-wakes"));
+        Assert.DoesNotContain(payload.Endpoints, e => e.Contains("/api/gateway/events"));
+        Assert.DoesNotContain(payload.Endpoints, e => e.Contains("/api/gateway/channel-activity-events"));
+        // Canonical direct-agent route should be advertised
+        Assert.Contains(payload.Endpoints, e => e.Contains("/api/direct-agent-events"));
     }
 
     // -------------------------------------------------------------------------
-    // Membership lookup
+    // Membership lookup (keep)
     // -------------------------------------------------------------------------
 
     [Fact]
@@ -239,7 +250,7 @@ public sealed class GatewayContractTests : IDisposable
     }
 
     // -------------------------------------------------------------------------
-    // Message lookup
+    // Message lookup (keep)
     // -------------------------------------------------------------------------
 
     [Fact]
@@ -287,7 +298,7 @@ public sealed class GatewayContractTests : IDisposable
     }
 
     // -------------------------------------------------------------------------
-    // Source pointer lookup
+    // Source pointer lookup (keep)
     // -------------------------------------------------------------------------
 
     [Fact]
@@ -362,166 +373,46 @@ public sealed class GatewayContractTests : IDisposable
         Assert.All(messages, m => Assert.Equal("run-999", m.SourceId));
     }
 
-    // -------------------------------------------------------------------------
-    // Events cursor
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // TOMBSTONED: GET /api/gateway/events
+    // Replaced by GET /api/direct-agent-events
+    // =========================================================================
 
     [Fact]
-    public async Task GatewayEvents_ByChannelId_ReturnsCursorResponse()
+    public async Task GatewayEvents_Returns410Gone_WithReplacementRoute()
     {
-        var channel = await EnsureDefaultChannelAsync("gw-events-proj-1");
-        for (var i = 1; i <= 5; i++)
-        {
-            await PostMessageAsync(channel.Id, new
-            {
-                senderType = "system",
-                senderIdentity = "den-gateway",
-                body = $"event {i}",
-                messageKind = "system_event"
-            });
-        }
-
-        var response = await _client.GetFromJsonAsync<GatewayEventsPayload>(
-            $"/api/gateway/events?channelId={channel.Id}&limit=3");
-
-        Assert.NotNull(response);
-        Assert.Equal(3, response.Items.Count);
-        Assert.True(response.HasMore);
-        Assert.NotNull(response.NextAfterId);
-        // Should be in ascending order
-        for (var i = 1; i < response.Items.Count; i++)
-            Assert.True(response.Items[i].Id > response.Items[i - 1].Id);
+        using var response = await _client.GetAsync("/api/gateway/events?channelId=1&limit=3");
+        Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+        var body = await AssertGatewayTombstone(response, "GET /api/direct-agent-events");
     }
 
     [Fact]
-    public async Task GatewayEvents_AfterIdCursor_ReturnsNextPage()
-    {
-        var channel = await EnsureDefaultChannelAsync("gw-events-proj-2");
-        for (var i = 1; i <= 6; i++)
-        {
-            await PostMessageAsync(channel.Id, new
-            {
-                senderType = "system",
-                senderIdentity = "den-gateway",
-                body = $"page event {i}",
-                messageKind = "system_event"
-            });
-        }
-
-        var page1 = await _client.GetFromJsonAsync<GatewayEventsPayload>(
-            $"/api/gateway/events?channelId={channel.Id}&limit=4");
-        Assert.NotNull(page1);
-        Assert.Equal(4, page1.Items.Count);
-        Assert.True(page1.HasMore);
-
-        var page2 = await _client.GetFromJsonAsync<GatewayEventsPayload>(
-            $"/api/gateway/events?channelId={channel.Id}&afterId={page1.NextAfterId}&limit=4");
-        Assert.NotNull(page2);
-        Assert.Equal(2, page2.Items.Count);
-        Assert.False(page2.HasMore);
-        Assert.Null(page2.NextAfterId);
-    }
-
-    [Fact]
-    public async Task GatewayEvents_ReactionsDoNotCreateWakePulseEvents()
-    {
-        var channel = await EnsureDefaultChannelAsync("gw-events-reactions-no-pulse");
-        await UpsertMembershipAsync(channel.Id, new
-        {
-            memberType = "agent",
-            memberIdentity = "agent-a",
-            wakePolicy = "all_messages_except_self"
-        });
-        await UpsertMembershipAsync(channel.Id, new
-        {
-            memberType = "agent",
-            memberIdentity = "agent-b",
-            wakePolicy = "all_messages_except_self"
-        });
-        var message = await PostMessageAsync(channel.Id, new
-        {
-            senderType = "user",
-            senderIdentity = "patch",
-            body = "please acknowledge without adding noise",
-            messageKind = "human_text"
-        });
-
-        using var reactionResponse = await _client.PostAsJsonAsync($"/api/channel-messages/{message.Id}/reactions", new
-        {
-            reactorType = "agent",
-            reactorIdentity = "agent-a",
-            reactionKey = "✅"
-        });
-        reactionResponse.EnsureSuccessStatusCode();
-
-        var response = await _client.GetFromJsonAsync<GatewayEventsPayload>(
-            $"/api/gateway/events?channelId={channel.Id}&limit=10");
-
-        Assert.NotNull(response);
-        var item = Assert.Single(response.Items);
-        Assert.Equal(message.Id, item.Id);
-        Assert.Equal("human_text", item.MessageKind);
-        Assert.Equal("user", item.SenderType);
-    }
-
-    [Fact]
-    public async Task GatewayEvents_ByProjectId_ResolvesDefaultChannel()
-    {
-        var channel = await EnsureDefaultChannelAsync("gw-events-proj-3");
-        await PostMessageAsync(channel.Id, new
-        {
-            senderType = "system",
-            senderIdentity = "den-gateway",
-            body = "project event",
-            messageKind = "system_event"
-        });
-
-        var response = await _client.GetFromJsonAsync<GatewayEventsPayload>(
-            "/api/gateway/events?projectId=gw-events-proj-3&limit=10");
-
-        Assert.NotNull(response);
-        Assert.NotEmpty(response.Items);
-    }
-
-    [Fact]
-    public async Task GatewayEvents_MissingParams_Returns400()
+    public async Task GatewayEvents_MissingParams_Returns410Gone()
     {
         using var response = await _client.GetAsync("/api/gateway/events");
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+        var body = await AssertGatewayTombstone(response, "GET /api/direct-agent-events");
     }
 
     [Fact]
-    public async Task GatewayEvents_ItemsContainExpectedFields()
+    public async Task GatewayEvents_AfterIdCursor_Returns410Gone()
     {
-        var channel = await EnsureDefaultChannelAsync("gw-events-fields");
-        await PostMessageAsync(channel.Id, new
-        {
-            senderType = "agent",
-            senderIdentity = "den-pi",
-            body = "event with fields",
-            messageKind = "agent_text",
-            sourceKind = "task_message",
-            sourceId = "123",
-            dedupeKey = "evt:123"
-        });
-
-        var response = await _client.GetFromJsonAsync<GatewayEventsPayload>(
-            $"/api/gateway/events?channelId={channel.Id}&limit=10");
-
-        Assert.NotNull(response);
-        var item = Assert.Single(response.Items);
-        Assert.Equal("agent_text", item.MessageKind);
-        Assert.Equal("agent", item.SenderType);
-        Assert.Equal("den-pi", item.SenderIdentity);
-        Assert.Equal("task_message", item.SourceKind);
-        Assert.Equal("123", item.SourceId);
-        Assert.Equal("evt:123", item.DedupeKey);
-        Assert.NotEmpty(item.CreatedAt);
+        using var response = await _client.GetAsync("/api/gateway/events?channelId=1&afterId=5&limit=4");
+        Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+        var body = await AssertGatewayTombstone(response, "GET /api/direct-agent-events");
     }
 
-    // -------------------------------------------------------------------------
-    // System message post (Gateway-generated)
-    // -------------------------------------------------------------------------
+    [Fact]
+    public async Task GatewayEvents_ByProjectId_Returns410Gone()
+    {
+        using var response = await _client.GetAsync("/api/gateway/events?projectId=any-proj&limit=10");
+        Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+        var body = await AssertGatewayTombstone(response, "GET /api/direct-agent-events");
+    }
+
+    // =========================================================================
+    // System message post (keep — still live for delivery system)
+    // =========================================================================
 
     [Fact]
     public async Task GatewaySystemMessages_Post_IdempotentByDedupeKey()
@@ -644,150 +535,103 @@ public sealed class GatewayContractTests : IDisposable
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
-    [Fact]
-    public async Task GatewayTestWakes_Post_RecordsWakeEventForActiveAgentMembership()
-    {
-        var channel = await EnsureDefaultChannelAsync("gw-test-wake-proj");
-        await UpsertMembershipAsync(channel.Id, new
-        {
-            memberType = "agent",
-            memberIdentity = "hermes-coder",
-            wakePolicy = "direct_questions_only",
-            settingsJson = "{\"profile\":\"den-hermes-coder\",\"transportPreview\":\"redacted-by-test\"}"
-        });
+    // =========================================================================
+    // TOMBSTONED: POST /api/gateway/test-wakes
+    // Replaced by POST /api/direct-agent-events (with memberIdentity + test-wake metadata)
+    // =========================================================================
 
+    [Fact]
+    public async Task GatewayTestWakes_Post_Returns410Gone_WithReplacementRoute()
+    {
         using var response = await _client.PostAsJsonAsync("/api/gateway/test-wakes", new
         {
-            channelId = channel.Id,
+            channelId = 1,
             memberIdentity = "hermes-coder",
             requestedBy = "tester"
         });
-
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        var payload = await response.Content.ReadFromJsonAsync<GatewayTestWakePayload>();
-        Assert.NotNull(payload);
-        Assert.Equal("recorded", payload.Status);
-        Assert.Equal("hermes-coder", payload.MemberIdentity);
-        Assert.Equal("direct_questions_only", payload.WakePolicy);
-        Assert.Equal(channel.Id, payload.ChannelId);
-        Assert.Contains($"/api/gateway/messages/{payload.MessageId}", payload.GatewayMessageUrl);
-
-        var message = await _client.GetFromJsonAsync<GatewayMessageDto>(payload.GatewayMessageUrl);
-        Assert.NotNull(message);
-        Assert.Equal("wake_event", message.SourceKind);
-        Assert.Contains("Controlled test wake", message.Body);
-        Assert.DoesNotContain("redacted-by-test", message.Body);
+        Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+        var body = await AssertGatewayTombstone(response, "POST /api/direct-agent-events");
     }
 
-    [Fact]
-    public async Task GatewayDirectAgentMessages_Post_ReturnsEvidenceAndPendingStatuses()
-    {
-        var channel = await EnsureDefaultChannelAsync("gw-direct-agent-proj");
-        await UpsertMembershipAsync(channel.Id, new
-        {
-            memberType = "agent",
-            memberIdentity = "hermes-reviewer",
-            wakePolicy = "direct_questions_only",
-            settingsJson = "{\"profile\":\"den-hermes-reviewer\",\"apiKey\":\"must-not-leak\"}"
-        });
+    // =========================================================================
+    // TOMBSTONED: POST /api/gateway/direct-agent-messages
+    // Replaced by POST /api/direct-agent-events
+    // =========================================================================
 
+    [Fact]
+    public async Task GatewayDirectAgentMessages_Post_Returns410Gone_WithReplacementRoute()
+    {
         using var response = await _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
         {
-            channelId = channel.Id,
+            channelId = 1,
             memberIdentity = "hermes-reviewer",
             senderIdentity = "operator",
-            body = "Please review the fix.",
-            waitFor = "none"
+            body = "Please review the fix."
         });
-
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        var payload = await response.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
-        Assert.NotNull(payload);
-        Assert.Equal("recorded", payload.Status);
-        Assert.Equal("recorded_but_not_claimed_yet", payload.DeliveryStatus);
-        Assert.Equal("unclaimed", payload.ClaimStatus);
-        Assert.Equal("pending", payload.CompletionStatus);
-        Assert.Equal("not_suppressed", payload.SuppressionStatus);
-        Assert.False(payload.TimedOut);
-        Assert.False(payload.GatewayUnavailable);
-        Assert.Equal("hermes-reviewer", payload.MemberIdentity);
-        Assert.Equal("direct_questions_only", payload.WakePolicy);
-        Assert.Equal(channel.Id, payload.ChannelId);
-        Assert.StartsWith($"direct-agent-message:{channel.Id}:hermes-reviewer:", payload.RequestId);
-        Assert.DoesNotContain($"direct-agent-message:{channel.Id}:1:", payload.RequestId);
-        Assert.Equal($"/api/gateway/messages/{payload.MessageId}", payload.GatewayMessageUrl);
-        Assert.Contains($"/api/direct-agent-events?channelId={channel.Id}", payload.GatewayEventsUrl);
-        Assert.Contains("wake_event recorded", payload.EvidenceSummary);
-
-        var message = await _client.GetFromJsonAsync<GatewayMessageDto>(payload.GatewayMessageUrl);
-        Assert.NotNull(message);
-        Assert.Equal("wake_event", message.SourceKind);
-        Assert.Equal(payload.RequestId, message.SourceId);
-        Assert.Equal("Please review the fix.", message.Body);
-        Assert.Contains("recorded, pending claim/completion", message.Summary);
+        Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+        var body = await AssertGatewayTombstone(response, "POST /api/direct-agent-events");
     }
 
     [Fact]
-    public async Task GatewayDirectAgentMessages_Post_UsesNonTimestampUniqueRequestIds()
+    public async Task GatewayDirectAgentMessages_Post_AnyPayload_Returns410Gone()
     {
-        var channel = await EnsureDefaultChannelAsync("gw-direct-agent-unique-proj");
-        await UpsertMembershipAsync(channel.Id, new
+        using var response = await _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
         {
-            memberType = "agent",
-            memberIdentity = "spawned-coder",
-            wakePolicy = "mentions_only"
-        });
-
-        var firstPost = _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
-        {
-            channelId = channel.Id,
+            channelId = 1,
             memberIdentity = "spawned-coder",
             senderIdentity = "operator",
-            body = "First concrete slot wake.",
-            waitFor = "none",
-            assignmentId = "101",
-            poolMemberId = "pool-coder-01"
+            body = "Wake with target-work fields.",
+            sourceProjectId = "den-core",
+            targetProjectId = "goblinbench",
+            targetTaskId = 1845,
+            assignmentId = "81",
+            workerRunId = "run-001",
+            workerRole = "spawned-coder",
+            profileIdentity = "den-hermes-coder",
+            poolMemberId = "pool-member-81",
+            agentInstanceId = "inst-001",
+            sessionOwnerId = "runner-001",
+            sessionId = "session-abc"
         });
-        var secondPost = _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
+        Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+        var body = await AssertGatewayTombstone(response, "POST /api/direct-agent-events");
+    }
+
+    // =========================================================================
+    // TOMBSTONED: POST /api/gateway/channel-activity-events
+    // Replaced by POST /api/channels/{channelId}/activity-events
+    // =========================================================================
+
+    [Fact]
+    public async Task GatewayChannelActivityEvents_Post_Returns410Gone_WithReplacementRoute()
+    {
+        using var response = await _client.PostAsJsonAsync("/api/gateway/channel-activity-events", new
         {
-            channelId = channel.Id,
-            memberIdentity = "spawned-coder",
-            senderIdentity = "operator",
-            body = "Second concrete slot wake.",
-            waitFor = "none",
-            assignmentId = "102",
-            poolMemberId = "pool-coder-02"
+            channelId = 1,
+            agentIdentity = "test-agent",
+            eventType = "lifecycle_status",
+            status = "interim"
         });
+        Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+        var body = await AssertGatewayTombstone(response, "POST /api/channels/{channelId}/activity-events");
+    }
 
-        await Task.WhenAll(firstPost, secondPost);
-        using var firstResponse = await firstPost;
-        using var secondResponse = await secondPost;
-        Assert.Equal(HttpStatusCode.Created, firstResponse.StatusCode);
-        Assert.Equal(HttpStatusCode.Created, secondResponse.StatusCode);
-        var first = await firstResponse.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
-        var second = await secondResponse.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
-        Assert.NotNull(first);
-        Assert.NotNull(second);
-        Assert.NotEqual(first.RequestId, second.RequestId);
+    // =========================================================================
+    // TOMBSTONED: GET /api/gateway/channel-activity-events/status
+    // Replaced by GET /api/channel-activity-events/status
+    // =========================================================================
 
-        var firstToken = first.RequestId.Split(':').Last();
-        var secondToken = second.RequestId.Split(':').Last();
-        Assert.True(Guid.TryParseExact(firstToken, "N", out _), $"Expected GUID request token, got {firstToken}");
-        Assert.True(Guid.TryParseExact(secondToken, "N", out _), $"Expected GUID request token, got {secondToken}");
-
-        var firstMessage = await _client.GetFromJsonAsync<GatewayMessageDto>(first.GatewayMessageUrl);
-        var secondMessage = await _client.GetFromJsonAsync<GatewayMessageDto>(second.GatewayMessageUrl);
-        Assert.NotNull(firstMessage);
-        Assert.NotNull(secondMessage);
-        Assert.Equal(first.RequestId, firstMessage.SourceId);
-        Assert.Equal(second.RequestId, secondMessage.SourceId);
-        Assert.Equal("101", firstMessage.AssignmentId);
-        Assert.Equal("102", secondMessage.AssignmentId);
-        Assert.Equal("pool-coder-01", firstMessage.PoolMemberId);
+    [Fact]
+    public async Task GatewayChannelActivityEventsStatus_Get_Returns410Gone_WithReplacementRoute()
+    {
+        using var response = await _client.GetAsync("/api/gateway/channel-activity-events/status");
+        Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+        var body = await AssertGatewayTombstone(response, "GET /api/channel-activity-events/status");
     }
 
     // =========================================================================
     // Existing APIs still work
+    // =========================================================================
 
     [Fact]
     public async Task ExistingChannelApi_StillWorksAfterGatewayRoutes()
@@ -802,501 +646,8 @@ public sealed class GatewayContractTests : IDisposable
         Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
-
-    private async Task<ChannelStub> EnsureDefaultChannelAsync(string projectId)
-    {
-        var response = await _client.PutAsJsonAsync($"/api/projects/{projectId}/default-channel", new
-        {
-            displayName = projectId,
-            createdBy = "test"
-        });
-        response.EnsureSuccessStatusCode();
-        var payload = await response.Content.ReadFromJsonAsync<ChannelStub>();
-        Assert.NotNull(payload);
-        return payload;
-    }
-
-    private async Task UpsertMembershipAsync(long channelId, object request)
-    {
-        using var response = await _client.PutAsJsonAsync($"/api/channels/{channelId}/memberships", request);
-        response.EnsureSuccessStatusCode();
-    }
-
-    private async Task SetMembershipUpdatedAtMinutesAgoAsync(long channelId, string memberIdentity, int minutesAgo)
-    {
-        await using var connection = new SqliteConnection($"Data Source={_databasePath}");
-        await connection.OpenAsync();
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            UPDATE channel_memberships
-            SET updated_at = datetime('now', '-' || $minutesAgo || ' minutes')
-            WHERE channel_id = $channelId
-              AND member_identity = $memberIdentity;
-            """;
-        command.Parameters.AddWithValue("$channelId", channelId);
-        command.Parameters.AddWithValue("$memberIdentity", memberIdentity);
-        command.Parameters.AddWithValue("$minutesAgo", minutesAgo);
-        var updated = await command.ExecuteNonQueryAsync();
-        Assert.Equal(1, updated);
-    }
-
-    private async Task<MessageStub> PostMessageAsync(long channelId, object request)
-    {
-        using var response = await _client.PostAsJsonAsync($"/api/channels/{channelId}/messages", request);
-        response.EnsureSuccessStatusCode();
-        var payload = await response.Content.ReadFromJsonAsync<MessageStub>();
-        Assert.NotNull(payload);
-        return payload;
-    }
-
-    public void Dispose()
-    {
-        _client.Dispose();
-        _factory.Dispose();
-        if (File.Exists(_databasePath))
-            File.Delete(_databasePath);
-    }
-
-    // ---- Local payload records ----
-
-    private sealed record ChannelStub(long Id, string Slug, string Kind, string? ProjectId);
-    private sealed record MessageStub(long Id, long ChannelId, string Body);
-
-    private sealed record GatewayHealthPayload(string Service, string Status, string[] Endpoints);
-
-    private sealed record GatewayMembershipsPayload(
-        long ChannelId,
-        string ChannelSlug,
-        string ChannelKind,
-        string? ProjectId,
-        List<GatewayMemberPayload> Members);
-
-    private sealed record GatewayMemberPayload(
-        long Id,
-        string MemberType,
-        string MemberIdentity,
-        string MembershipStatus,
-        string WakePolicy,
-        bool CanSend,
-        bool CanReact,
-        bool CanInvite,
-        int CooldownSeconds,
-        int MaxAutoRepliesPerWindow,
-        string? SettingsLabel,
-        string? MembershipPurpose,
-        string CreatedAt,
-        string UpdatedAt,
-        string? LeftAt);
-
-    private sealed record GatewayDirectAgentMessagePayload(
-        string Status,
-        string DeliveryStatus,
-        string ClaimStatus,
-        string CompletionStatus,
-        string SuppressionStatus,
-        string MemberIdentity,
-        string WakePolicy,
-        long MessageId,
-        long ChannelId,
-        string RequestId,
-        string? SourceProjectId,
-        string? TargetProjectId,
-        int? TargetTaskId,
-        int? AssignmentId,
-        string? WorkerRunId,
-        string? WorkerRole,
-        string? ProfileIdentity,
-        string? PoolMemberId,
-        string? AgentInstanceId,
-        string? SessionOwnerId,
-        string? SessionId,
-        long? DeliveryRequestId,
-        long? AttemptId,
-        string? GatewayDeliveryState,
-        string? GatewayAttemptStatus,
-        bool TimedOut,
-        bool GatewayUnavailable,
-        string GatewayMessageUrl,
-        string GatewayEventsUrl,
-        string EvidenceSummary);
-
-    [Fact]
-    public async Task GatewayDirectAgentMessages_Post_WithSourceProjectId_UsesCallerProjectNotChannel()
-    {
-        var channel = await EnsureDefaultChannelAsync("gw-da-srcproj");
-        await UpsertMembershipAsync(channel.Id, new
-        {
-            memberType = "agent",
-            memberIdentity = "smoke-reviewer",
-            wakePolicy = "direct_questions_only"
-        });
-
-        using var response = await _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
-        {
-            channelId = channel.Id,
-            memberIdentity = "smoke-reviewer",
-            senderIdentity = "operator",
-            body = "Review den-core task #1820",
-            sourceProjectId = "den-core",
-            targetTaskId = 1820,
-            assignmentId = "63",
-            waitFor = "none"
-        });
-
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        var payload = await response.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
-        Assert.NotNull(payload);
-        Assert.Equal("recorded", payload.Status);
-        Assert.Equal("den-core", payload.SourceProjectId);
-        Assert.NotEqual("gw-da-srcproj", payload.SourceProjectId);
-        Assert.Equal(1820, payload.TargetTaskId);
-        Assert.Equal(63, payload.AssignmentId);
-
-        var message = await _client.GetFromJsonAsync<GatewayMessageDto>(payload.GatewayMessageUrl);
-        Assert.NotNull(message);
-        Assert.Equal("den-core", message.SourceProjectId);
-    }
-
-    [Fact]
-    public async Task GatewayDirectAgentMessages_Post_WithoutSourceProjectId_UsesChannelProject()
-    {
-        var channel = await EnsureDefaultChannelAsync("gw-da-nosrc");
-        await UpsertMembershipAsync(channel.Id, new
-        {
-            memberType = "agent",
-            memberIdentity = "wake-reviewer",
-            wakePolicy = "direct_questions_only"
-        });
-
-        using var response = await _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
-        {
-            channelId = channel.Id,
-            memberIdentity = "wake-reviewer",
-            senderIdentity = "operator",
-            body = "Wake reviewer.",
-            waitFor = "none"
-        });
-
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        var payload = await response.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
-        Assert.NotNull(payload);
-        Assert.Equal("gw-da-nosrc", payload.SourceProjectId);
-    }
-
-    [Fact]
-    public async Task GatewayDirectAgentMessages_Post_SharedControlChannel_DifferentTargetProject()
-    {
-        // Simulate a shared worker-control channel (e.g. den-hermes-bridge) delivering
-        // work for a different target project (e.g. goblinbench). The response DTO and
-        // stored message must preserve both source/control attribution and target-work fields.
-        var channel = await EnsureDefaultChannelAsync("gw-shared-control");
-        await UpsertMembershipAsync(channel.Id, new
-        {
-            memberType = "agent",
-            memberIdentity = "goblinbench-worker",
-            wakePolicy = "direct_questions_only"
-        });
-
-        using var response = await _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
-        {
-            channelId = channel.Id,
-            memberIdentity = "goblinbench-worker",
-            senderIdentity = "den-hermes-bridge",
-            body = "Run task #1845 on goblinbench.",
-            sourceProjectId = "den-hermes-bridge",       // control/transport project
-            targetProjectId = "goblinbench",             // target work project
-            targetTaskId = 1845,
-            assignmentId = "81",
-            workerRunId = "dc-1845-20260602083828-coder",
-            workerRole = "spawned-coder",
-            profileIdentity = "den-hermes-coder",
-            poolMemberId = "pool-member-81",
-            waitFor = "none"
-        });
-
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        var payload = await response.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
-        Assert.NotNull(payload);
-
-        // Source/control project must be preserved from the request, not inferred from channel
-        Assert.Equal("den-hermes-bridge", payload.SourceProjectId);
-        Assert.NotEqual("gw-shared-control", payload.SourceProjectId);
-
-        // Target-work fields must be surfaced separately from source/control project
-        Assert.Equal("goblinbench", payload.TargetProjectId);
-        Assert.Equal(1845, payload.TargetTaskId);
-        Assert.Equal(81, payload.AssignmentId);
-        Assert.Equal("dc-1845-20260602083828-coder", payload.WorkerRunId);
-        Assert.Equal("spawned-coder", payload.WorkerRole);
-        Assert.Equal("den-hermes-coder", payload.ProfileIdentity);
-        Assert.Equal("pool-member-81", payload.PoolMemberId);
-
-        // Verify the stored message preserves both source/control and target-work fields
-        var message = await _client.GetFromJsonAsync<GatewayMessageDto>(payload.GatewayMessageUrl);
-        Assert.NotNull(message);
-        Assert.Equal("den-hermes-bridge", message.SourceProjectId);
-        Assert.Equal("goblinbench", message.TargetProjectId);
-        Assert.Equal(1845, message.TargetTaskId);
-        Assert.Equal("81", message.AssignmentId);
-        Assert.Equal("dc-1845-20260602083828-coder", message.WorkerRunId);
-        Assert.Equal("spawned-coder", message.WorkerRole);
-        Assert.Equal("den-hermes-coder", message.ProfileIdentity);
-        Assert.Equal("pool-member-81", message.PoolMemberId);
-
-        // Events projection should surface target-work fields
-        var events = await _client.GetFromJsonAsync<GatewayEventsPayload>(
-            $"/api/gateway/events?channelId={channel.Id}&limit=10");
-        Assert.NotNull(events);
-        Assert.NotEmpty(events.Items);
-        var eventItem = events.Items.FirstOrDefault(e => e.SourceKind == "wake_event");
-        Assert.NotNull(eventItem);
-        Assert.Equal("goblinbench", eventItem.TargetProjectId);
-        Assert.Equal(1845, eventItem.TargetTaskId);
-        Assert.Equal("81", eventItem.AssignmentId);
-        Assert.Equal("dc-1845-20260602083828-coder", eventItem.WorkerRunId);
-        Assert.Equal("spawned-coder", eventItem.WorkerRole);
-        Assert.Equal("den-hermes-coder", eventItem.ProfileIdentity);
-        Assert.Equal("pool-member-81", eventItem.PoolMemberId);
-    }
-
-    /// <summary>
-    /// Two source channels targeting the same durable agent should carry the same concrete
-    /// instance/session owner fields, so Bridge can reuse one active session across channels.
-    /// </summary>
-    [Fact]
-    public async Task GatewayDirectAgentMessages_SameInstanceOwner_TwoSourceChannels_PreservesConcreteIdentity()
-    {
-        // Channel A (source project "den-channels")
-        var channelA = await EnsureDefaultChannelAsync("gw-da-instance-proj-a");
-        await UpsertMembershipAsync(channelA.Id, new
-        {
-            memberType = "agent",
-            memberIdentity = "den-channels-runner",
-            wakePolicy = "all_messages_except_self"
-        });
-
-        // Channel B (source project "den-core") — different source channel
-        var channelB = await EnsureDefaultChannelAsync("gw-da-instance-proj-b");
-        await UpsertMembershipAsync(channelB.Id, new
-        {
-            memberType = "agent",
-            memberIdentity = "den-channels-runner",
-            wakePolicy = "all_messages_except_self"
-        });
-
-        // Same concrete session owner identity across both channels
-        const string sharedInstanceId = "inst-runner-001";
-        const string sharedSessionOwnerId = "runner-profile";
-        const string sharedSessionId = "session-abc-123";
-
-        // Post from channel A with session-owner metadata
-        using var responseA = await _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
-        {
-            channelId = channelA.Id,
-            memberIdentity = "den-channels-runner",
-            senderIdentity = "operator",
-            body = "Direct message from channel A",
-            sourceProjectId = "den-channels",
-            agentInstanceId = sharedInstanceId,
-            sessionOwnerId = sharedSessionOwnerId,
-            sessionId = sharedSessionId,
-            workerRunId = "run-001",
-            workerRole = "spawned-coder",
-            waitFor = "none"
-        });
-        Assert.Equal(HttpStatusCode.Created, responseA.StatusCode);
-        var payloadA = await responseA.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
-        Assert.NotNull(payloadA);
-        Assert.Equal(sharedInstanceId, payloadA.AgentInstanceId);
-        Assert.Equal(sharedSessionOwnerId, payloadA.SessionOwnerId);
-        Assert.Equal(sharedSessionId, payloadA.SessionId);
-
-        // Post from channel B with the SAME session-owner metadata
-        using var responseB = await _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
-        {
-            channelId = channelB.Id,
-            memberIdentity = "den-channels-runner",
-            senderIdentity = "ui-user",
-            body = "Direct message from channel B",
-            sourceProjectId = "den-core",
-            agentInstanceId = sharedInstanceId,
-            sessionOwnerId = sharedSessionOwnerId,
-            sessionId = sharedSessionId,
-            workerRunId = "run-002",
-            workerRole = "spawned-coder",
-            waitFor = "none"
-        });
-        Assert.Equal(HttpStatusCode.Created, responseB.StatusCode);
-        var payloadB = await responseB.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
-        Assert.NotNull(payloadB);
-        Assert.Equal(sharedInstanceId, payloadB.AgentInstanceId);
-        Assert.Equal(sharedSessionOwnerId, payloadB.SessionOwnerId);
-        Assert.Equal(sharedSessionId, payloadB.SessionId);
-
-        // Source channel identity must differ
-        Assert.NotEqual(payloadA.ChannelId, payloadB.ChannelId);
-        Assert.NotEqual(payloadA.SourceProjectId, payloadB.SourceProjectId);
-
-        // But session owner identity must be identical
-        Assert.Equal(payloadA.AgentInstanceId, payloadB.AgentInstanceId);
-        Assert.Equal(payloadA.SessionOwnerId, payloadB.SessionOwnerId);
-        Assert.Equal(payloadA.SessionId, payloadB.SessionId);
-
-        // Verify stored messages in each channel carry their own source context
-        // but share the same session-owner identity
-        var msgA = await _client.GetFromJsonAsync<GatewayMessageDto>(payloadA.GatewayMessageUrl);
-        Assert.NotNull(msgA);
-        Assert.Equal("den-channels", msgA.SourceProjectId);
-        Assert.Equal(sharedInstanceId, msgA.AgentInstanceId);
-        Assert.Equal(sharedSessionOwnerId, msgA.SessionOwnerId);
-        Assert.Equal(sharedSessionId, msgA.SessionId);
-
-        var msgB = await _client.GetFromJsonAsync<GatewayMessageDto>(payloadB.GatewayMessageUrl);
-        Assert.NotNull(msgB);
-        Assert.Equal("den-core", msgB.SourceProjectId);
-        Assert.Equal(sharedInstanceId, msgB.AgentInstanceId);
-        Assert.Equal(sharedSessionOwnerId, msgB.SessionOwnerId);
-        Assert.Equal(sharedSessionId, msgB.SessionId);
-    }
-
-    /// <summary>
-    /// Two worker instances sharing a profile identity must carry distinct
-    /// agent_instance_id/pool_member_id/session_owner so they remain isolated
-    /// even when profile config is shared.
-    /// </summary>
-    [Fact]
-    public async Task GatewayDirectAgentMessages_TwoInstancesSharedProfile_DistinctSessionOwners()
-    {
-        var channel = await EnsureDefaultChannelAsync("gw-da-shared-profile");
-        await UpsertMembershipAsync(channel.Id, new
-        {
-            memberType = "agent",
-            memberIdentity = "spawned-coder",
-            wakePolicy = "all_messages_except_self"
-        });
-
-        // Instance A: spawned-coder assignment 141
-        using var responseA = await _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
-        {
-            channelId = channel.Id,
-            memberIdentity = "spawned-coder",
-            senderIdentity = "orch-runner",
-            body = "Assignment 141: implement task #1887",
-            sourceProjectId = "den-channels",
-            profileIdentity = "den-hermes-coder",
-            agentInstanceId = "inst-runner-141",
-            poolMemberId = "pool-member-141",
-            sessionOwnerId = "runner-inst-141",
-            sessionId = "session-runner-141",
-            workerRunId = "dc-1887-run-141",
-            workerRole = "spawned-coder",
-            assignmentId = "141",
-            waitFor = "none"
-        });
-        Assert.Equal(HttpStatusCode.Created, responseA.StatusCode);
-        var payloadA = await responseA.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
-        Assert.NotNull(payloadA);
-        Assert.Equal("inst-runner-141", payloadA.AgentInstanceId);
-        Assert.Equal("pool-member-141", payloadA.PoolMemberId);
-        Assert.Equal("runner-inst-141", payloadA.SessionOwnerId);
-        Assert.Equal("session-runner-141", payloadA.SessionId);
-
-        // Instance B: spawned-coder assignment 188 — same profile, distinct instance
-        using var responseB = await _client.PostAsJsonAsync("/api/gateway/direct-agent-messages", new
-        {
-            channelId = channel.Id,
-            memberIdentity = "spawned-coder",
-            senderIdentity = "orch-runner",
-            body = "Assignment 188: implement task #1890",
-            sourceProjectId = "den-channels",
-            profileIdentity = "den-hermes-coder",
-            agentInstanceId = "inst-runner-188",
-            poolMemberId = "pool-member-188",
-            sessionOwnerId = "runner-inst-188",
-            sessionId = "session-runner-188",
-            workerRunId = "dc-1890-run-188",
-            workerRole = "spawned-coder",
-            assignmentId = "188",
-            waitFor = "none"
-        });
-        Assert.Equal(HttpStatusCode.Created, responseB.StatusCode);
-        var payloadB = await responseB.Content.ReadFromJsonAsync<GatewayDirectAgentMessagePayload>();
-        Assert.NotNull(payloadB);
-        Assert.Equal("inst-runner-188", payloadB.AgentInstanceId);
-        Assert.Equal("pool-member-188", payloadB.PoolMemberId);
-        Assert.Equal("runner-inst-188", payloadB.SessionOwnerId);
-        Assert.Equal("session-runner-188", payloadB.SessionId);
-
-        // Same profile identity but distinct instance/session-owner fields
-        Assert.Equal(payloadA.ProfileIdentity, payloadB.ProfileIdentity);
-        Assert.NotEqual(payloadA.AgentInstanceId, payloadB.AgentInstanceId);
-        Assert.NotEqual(payloadA.PoolMemberId, payloadB.PoolMemberId);
-        Assert.NotEqual(payloadA.SessionOwnerId, payloadB.SessionOwnerId);
-        Assert.NotEqual(payloadA.SessionId, payloadB.SessionId);
-        Assert.NotEqual(payloadA.WorkerRunId, payloadB.WorkerRunId);
-        Assert.NotEqual(payloadA.AssignmentId, payloadB.AssignmentId);
-
-        // Verify stored messages carry distinct instance identity
-        var msgA = await _client.GetFromJsonAsync<GatewayMessageDto>(payloadA.GatewayMessageUrl);
-        Assert.NotNull(msgA);
-        Assert.Equal("inst-runner-141", msgA.AgentInstanceId);
-        Assert.Equal("runner-inst-141", msgA.SessionOwnerId);
-
-        var msgB = await _client.GetFromJsonAsync<GatewayMessageDto>(payloadB.GatewayMessageUrl);
-        Assert.NotNull(msgB);
-        Assert.Equal("inst-runner-188", msgB.AgentInstanceId);
-        Assert.Equal("runner-inst-188", msgB.SessionOwnerId);
-    }
-
     // =========================================================================
-    // Assignment trace aggregate tests (#1737)
-    // =========================================================================
-
-    private sealed record GatewayTestWakePayload(
-        string Status,
-        string MemberIdentity,
-        string WakePolicy,
-        long MessageId,
-        long ChannelId,
-        string GatewayMessageUrl,
-        string GatewayEventsUrl,
-        string EvidenceSummary);
-
-    private sealed record GatewayEventsPayload(
-        List<GatewayEventItemPayload> Items,
-        long? NextAfterId,
-        bool HasMore);
-
-    private sealed record GatewayEventItemPayload(
-        long Id,
-        long ChannelId,
-        string MessageKind,
-        string SenderType,
-        string SenderIdentity,
-        string? SourceKind,
-        string? SourceId,
-        string? SourceProjectId,
-        string? TargetProjectId,
-        long? TargetTaskId,
-        string? AssignmentId,
-        string? WorkerRunId,
-        string? WorkerRole,
-        string? ProfileIdentity,
-        string? PoolMemberId,
-        string? AgentInstanceId,
-        string? SessionOwnerId,
-        string? SessionId,
-        string? DedupeKey,
-        string? DeepLink,
-        string? Summary,
-        string Body,
-        string CreatedAt);
-
-    // =========================================================================
-    // Assignment trace aggregate tests (#1737)
+    // Assignment trace aggregate tests (#1737) — keep
     // =========================================================================
 
     [Fact]
@@ -1452,7 +803,7 @@ public sealed class GatewayContractTests : IDisposable
               "claimStatus": "unclaimed",
               "completionStatus": "pending",
               "suppressionStatus": "not_suppressed",
-              "evidence": { "gatewayEventsUrl": "/api/gateway/events?channelId={{channel.Id}}&afterId=0&limit=50" }
+              "evidence": { "gatewayEventsUrl": "/api/direct-agent-events?channelId={{channel.Id}}&afterId=0&limit=50" }
             }
             """
         });
@@ -1466,8 +817,125 @@ public sealed class GatewayContractTests : IDisposable
         Assert.NotNull(trace.GatewayEvidence);
         Assert.Equal(requestId, trace.GatewayEvidence.DeliveryRequestId);
         Assert.Equal("recorded_pending_claim", trace.GatewayEvidence.DeliveryStatus);
-        Assert.Equal($"/api/gateway/events?channelId={channel.Id}&afterId=0&limit=50", trace.GatewayEvidence.GatewayEventsUrl);
+        Assert.Equal($"/api/direct-agent-events?channelId={channel.Id}&afterId=0&limit=50", trace.GatewayEvidence.GatewayEventsUrl);
     }
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Asserts a Gateway tombstone 410 response has the expected JSON body
+    /// with a canonical route pointer. Returns the parsed JSON body.
+    /// </summary>
+    private async Task<JsonElement> AssertGatewayTombstone(HttpResponseMessage response, string expectedReplacement)
+    {
+        var raw = await response.Content.ReadAsStringAsync();
+        Assert.NotEmpty(raw);
+
+        using var doc = JsonDocument.Parse(raw);
+        var root = doc.RootElement;
+        Assert.Equal(JsonValueKind.Object, root.ValueKind);
+
+        // Must have a code field indicating the route is gone
+        Assert.True(root.TryGetProperty("code", out var code), "Tombstone response missing 'code' field");
+        Assert.Equal("route_gone", code.GetString());
+
+        // Must have a message indicating retirement
+        Assert.True(root.TryGetProperty("message", out var message), "Tombstone response missing 'message' field");
+        Assert.Contains("retired", message.GetString() ?? "", StringComparison.OrdinalIgnoreCase);
+
+        // Must have a replacement field pointing to the canonical route
+        Assert.True(root.TryGetProperty("replacement", out var replacement), "Tombstone response missing 'replacement' field");
+        Assert.Equal(expectedReplacement, replacement.GetString());
+
+        return root;
+    }
+
+    private async Task<ChannelStub> EnsureDefaultChannelAsync(string projectId)
+    {
+        var response = await _client.PutAsJsonAsync($"/api/projects/{projectId}/default-channel", new
+        {
+            displayName = projectId,
+            createdBy = "test"
+        });
+        response.EnsureSuccessStatusCode();
+        var payload = await response.Content.ReadFromJsonAsync<ChannelStub>();
+        Assert.NotNull(payload);
+        return payload;
+    }
+
+    private async Task UpsertMembershipAsync(long channelId, object request)
+    {
+        using var response = await _client.PutAsJsonAsync($"/api/channels/{channelId}/memberships", request);
+        response.EnsureSuccessStatusCode();
+    }
+
+    private async Task SetMembershipUpdatedAtMinutesAgoAsync(long channelId, string memberIdentity, int minutesAgo)
+    {
+        await using var connection = new SqliteConnection($"Data Source={_databasePath}");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE channel_memberships
+            SET updated_at = datetime('now', '-' || $minutesAgo || ' minutes')
+            WHERE channel_id = $channelId
+              AND member_identity = $memberIdentity;
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$memberIdentity", memberIdentity);
+        command.Parameters.AddWithValue("$minutesAgo", minutesAgo);
+        var updated = await command.ExecuteNonQueryAsync();
+        Assert.Equal(1, updated);
+    }
+
+    private async Task<MessageStub> PostMessageAsync(long channelId, object request)
+    {
+        using var response = await _client.PostAsJsonAsync($"/api/channels/{channelId}/messages", request);
+        response.EnsureSuccessStatusCode();
+        var payload = await response.Content.ReadFromJsonAsync<MessageStub>();
+        Assert.NotNull(payload);
+        return payload;
+    }
+
+    public void Dispose()
+    {
+        _client.Dispose();
+        _factory.Dispose();
+        if (File.Exists(_databasePath))
+            File.Delete(_databasePath);
+    }
+
+    // ---- Local payload records ----
+
+    private sealed record ChannelStub(long Id, string Slug, string Kind, string? ProjectId);
+    private sealed record MessageStub(long Id, long ChannelId, string Body);
+
+    private sealed record GatewayHealthPayload(string Service, string Status, string[] Endpoints);
+
+    private sealed record GatewayMembershipsPayload(
+        long ChannelId,
+        string ChannelSlug,
+        string ChannelKind,
+        string? ProjectId,
+        List<GatewayMemberPayload> Members);
+
+    private sealed record GatewayMemberPayload(
+        long Id,
+        string MemberType,
+        string MemberIdentity,
+        string MembershipStatus,
+        string WakePolicy,
+        bool CanSend,
+        bool CanReact,
+        bool CanInvite,
+        int CooldownSeconds,
+        int MaxAutoRepliesPerWindow,
+        string? SettingsLabel,
+        string? MembershipPurpose,
+        string CreatedAt,
+        string UpdatedAt,
+        string? LeftAt);
 
     // ---- Assignment trace local payload records ----
 

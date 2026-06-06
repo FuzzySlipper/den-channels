@@ -274,67 +274,6 @@ public sealed class DirectDeliveryContractV0Tests
     // -------------------------------------------------------------------------
 
     [Fact]
-    public void GatewayDirectAgentMessageDto_HasAllTargetWorkFields()
-    {
-        // Assert that the DTO type exists and has the expected property shapes
-        var dto = new GatewayDirectAgentMessageDto(
-            Status: "recorded",
-            DeliveryStatus: "recorded_but_not_claimed_yet",
-            ClaimStatus: "unclaimed",
-            CompletionStatus: "pending",
-            SuppressionStatus: "not_suppressed",
-            MemberIdentity: "test-agent",
-            WakePolicy: "direct_questions_only",
-            MessageId: 1,
-            ChannelId: 1,
-            RequestId: "test",
-            SourceProjectId: "src-proj",
-            TargetProjectId: "target-proj",
-            TargetTaskId: 1848,
-            AssignmentId: "149",
-            WorkerRunId: "dc-1848-run",
-            WorkerRole: "coder",
-            ProfileIdentity: "den-hermes-coder",
-            PoolMemberId: "pool-149",
-            AgentInstanceId: "inst-149",
-            SessionOwnerId: "runner-149",
-            SessionId: "session-149",
-            DeliveryRequestId: null,
-            AttemptId: null,
-            GatewayDeliveryState: null,
-            GatewayAttemptStatus: null,
-            TimedOut: false,
-            GatewayUnavailable: false,
-            GatewayMessageUrl: "/api/gateway/messages/1",
-            GatewayEventsUrl: "/api/gateway/events",
-            EvidenceSummary: "test");
-
-        // Source context fields
-        Assert.Equal("src-proj", dto.SourceProjectId);
-        Assert.Equal(1, dto.ChannelId);
-
-        // Target-work attribution fields (#1845)
-        Assert.Equal("target-proj", dto.TargetProjectId);
-        Assert.Equal(1848, dto.TargetTaskId);
-        Assert.Equal("149", dto.AssignmentId);
-        Assert.Equal("dc-1848-run", dto.WorkerRunId);
-        Assert.Equal("coder", dto.WorkerRole);
-        Assert.Equal("den-hermes-coder", dto.ProfileIdentity);
-        Assert.Equal("pool-149", dto.PoolMemberId);
-
-        // Session-owner fields (#1887)
-        Assert.Equal("inst-149", dto.AgentInstanceId);
-        Assert.Equal("runner-149", dto.SessionOwnerId);
-        Assert.Equal("session-149", dto.SessionId);
-
-        // Delivery/checkpoint visibility
-        Assert.Equal("recorded_but_not_claimed_yet", dto.DeliveryStatus);
-        Assert.Equal("unclaimed", dto.ClaimStatus);
-        Assert.Equal("pending", dto.CompletionStatus);
-        Assert.Equal("not_suppressed", dto.SuppressionStatus);
-    }
-
-    [Fact]
     public void DirectAgentEventDto_HasAllTargetWorkFields()
     {
         var dto = new DirectAgentEventDto(
@@ -356,7 +295,7 @@ public sealed class DirectDeliveryContractV0Tests
             SessionOwnerId: "runner-149",
             SessionId: "session-149",
             EventUrl: "/api/direct-agent-events/1",
-            EventsUrl: "/api/gateway/events",
+            EventsUrl: "/api/direct-agent-events?channelId=1&afterId=0&limit=50",
             EvidenceSummary: "test");
 
         // Source context
