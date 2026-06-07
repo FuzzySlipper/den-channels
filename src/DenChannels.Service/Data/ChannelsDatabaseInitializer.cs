@@ -1399,7 +1399,8 @@ public sealed class ChannelsDatabaseInitializer
             pool_member_id          TEXT,
 
             subscription_identity   TEXT NOT NULL,
-            subscription_purpose    TEXT NOT NULL,
+            subscription_purpose    TEXT NOT NULL
+                                    CHECK (subscription_purpose IN ('ordinary_channel','agent_commons','worker_pool_control','target_work','workflow_analysis','coordination_call','observer')),
             subscription_status     TEXT NOT NULL DEFAULT 'active'
                                     CHECK (subscription_status IN ('active','idle','busy','degraded','offline','left','released','quarantined','needs_rebind')),
 
@@ -1434,6 +1435,11 @@ public sealed class ChannelsDatabaseInitializer
         CREATE INDEX IF NOT EXISTS idx_channel_subscriptions_pool
             ON channel_subscriptions(pool_member_id)
             WHERE pool_member_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_subscriptions_purpose
+            ON channel_subscriptions(subscription_purpose, subscription_status);
+        CREATE INDEX IF NOT EXISTS idx_channel_subscriptions_target_work
+            ON channel_subscriptions(target_project_id, target_task_id)
+            WHERE target_project_id IS NOT NULL AND target_task_id IS NOT NULL;
 
         -- =====================================================================
         -- PART 2: Create channel_subscription_cursors table
@@ -1453,12 +1459,38 @@ public sealed class ChannelsDatabaseInitializer
 
         CREATE INDEX IF NOT EXISTS idx_channel_subscription_cursors_subscription
             ON channel_subscription_cursors(subscription_id);
+        CREATE INDEX IF NOT EXISTS idx_channel_subscription_cursors_stream
+            ON channel_subscription_cursors(subscription_id, stream_kind, last_seen_id DESC);
 
         -- =====================================================================
         -- PART 3: Add membership v8 columns (profile_identity, member_role, left_at)
         -- =====================================================================
         -- These are additive; ALTER TABLE ADD COLUMN is safe for existing rows.
         -- Use idempotent column checks via the helper pattern.
+
+        ALTER TABLE channel_memberships ADD COLUMN profile_identity TEXT;
+        ALTER TABLE channel_memberships ADD COLUMN member_role TEXT;
+        ALTER TABLE channel_memberships ADD COLUMN left_at TEXT;
+
+        -- Backfill: set profile_identity from settings_json for agent members.
+        -- For non-agent members, fall back to member_identity.
+        UPDATE channel_memberships
+        SET profile_identity = COALESCE(
+                json_extract(settings_json, '$.profile'),
+                CASE WHEN member_type = 'agent' THEN member_identity ELSE NULL END
+            )
+        WHERE profile_identity IS NULL;
+
+        -- Backfill: set member_role from settings_json when present.
+        UPDATE channel_memberships
+        SET member_role = json_extract(settings_json, '$.role')
+        WHERE member_role IS NULL
+          AND json_extract(settings_json, '$.role') IS NOT NULL;
+
+        -- Backfill: set left_at for rows that are already 'left'.
+        UPDATE channel_memberships
+        SET left_at = updated_at
+        WHERE membership_status = 'left' AND left_at IS NULL;
 
         -- =====================================================================
         -- PART 4: Backfill subscriptions from existing membership rows

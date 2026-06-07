@@ -8,6 +8,8 @@ using DenChannels.Service.DenCore;
 using DenChannels.Service.DirectAgentEvents;
 using DenChannels.Service.Gateway;
 using DenChannels.Service.Mirrors;
+using DenChannels.Service.Presence;
+using DenChannels.Service.Subscriptions;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -23,6 +25,7 @@ builder.Services.AddOptions<DenChannelsOptions>()
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSingleton<ChannelsDatabaseInitializer>();
 builder.Services.AddSingleton<ChannelsRepository>();
+builder.Services.AddSingleton<SubscriptionRepository>();
 builder.Services.AddHttpClient<IDenCoreProjectClient, DenCoreProjectClient>();
 builder.Services.AddSingleton<ProjectChannelSyncService>();
 builder.Services.AddSingleton<MirrorSummaryIngestionService>();
@@ -33,6 +36,7 @@ builder.Services.AddHttpClient<IWorkerPoolStateClient, WorkerPoolStateClient>(cl
 builder.Services.AddSingleton<AgentsOverviewService>();
 builder.Services.AddSingleton<ActiveWorkRoutingService>();
 builder.Services.AddSingleton<ChannelActivityEventRoutingService>();
+builder.Services.AddSingleton<PresenceProjectionService>();
 
 var app = builder.Build();
 
@@ -79,6 +83,7 @@ app.MapGet("/health/ready", (IOptions<DenChannelsOptions> options) =>
 });
 
 app.MapChannelRoutes();
+app.MapSubscriptionRoutes();
 app.MapProjectChannelSyncRoutes();
 app.MapMirrorSummaryRoutes();
 app.MapDenCoreApiProxy();
@@ -88,6 +93,7 @@ app.MapGatewayRoutes();
 app.MapAgentsOverviewRoutes();
 app.MapActiveWorkRoutingRoutes();
 app.MapAgentWorkLifecycleRoutes();
+app.MapPresenceRoutes();
 
 // API misses: machine-readable JSON. Root/public paths: serve the moved-page.
 app.MapFallback((HttpContext context, IWebHostEnvironment environment) =>

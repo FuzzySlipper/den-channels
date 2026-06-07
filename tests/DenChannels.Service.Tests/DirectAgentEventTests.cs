@@ -397,7 +397,7 @@ public sealed class DirectAgentEventTests : IDisposable
             memberType = "agent",
             memberIdentity = "subscribed-agent",
             subscriptionIdentity = $"subscribed-agent:{subscriptionStatus}",
-            subscriptionPurpose = "direct_agent_wake",
+            subscriptionPurpose = "target_work",
             subscriptionStatus
         });
 

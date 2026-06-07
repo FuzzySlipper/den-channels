@@ -1,4 +1,5 @@
 using DenChannels.Service.Channels;
+using DenChannels.Service.Subscriptions;
 
 using static DenChannels.Service.SourceKind;
 using static DenChannels.Service.MessageKind;
@@ -105,6 +106,7 @@ public static class DirectConversationRoutes
         // ---------------------------------------------------------------
         group.MapPost("/{conversationId:long}/send", async (
             ChannelsRepository repository,
+            SubscriptionRepository subscriptionRepo,
             long conversationId,
             SendDirectMessageRequest request,
             CancellationToken cancellationToken) =>
@@ -135,7 +137,7 @@ public static class DirectConversationRoutes
 
             var targetMemberIdentity = conversation.AgentIdentity.Trim();
             var subscriptionState = await DirectAgentEventShared.ResolveSubscriptionStateAsync(
-                repository, channel.Id, targetMemberIdentity, cancellationToken);
+                subscriptionRepo, channel.Id, targetMemberIdentity, cancellationToken);
             const string targetMemberType = "agent";
             const string wakePolicy = "subscription";
 

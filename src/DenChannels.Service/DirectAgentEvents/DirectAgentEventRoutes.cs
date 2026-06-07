@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DenChannels.Service.Channels;
+using DenChannels.Service.Subscriptions;
 
 using static DenChannels.Service.EventRecordingStatus;
 using static DenChannels.Service.SourceKind;
@@ -66,6 +67,7 @@ public static class DirectAgentEventRoutes
         // -----------------------------------------------------------------------
         group.MapPost("/", async (
             ChannelsRepository repository,
+            SubscriptionRepository subscriptionRepo,
             RecordDirectAgentEventRequest request,
             CancellationToken cancellationToken) =>
         {
@@ -95,7 +97,7 @@ public static class DirectAgentEventRoutes
 
             var targetMemberIdentity = request.MemberIdentity.Trim();
             var subscriptionState = await DirectAgentEventShared.ResolveSubscriptionStateAsync(
-                repository, channel.Id, targetMemberIdentity, cancellationToken);
+                subscriptionRepo, channel.Id, targetMemberIdentity, cancellationToken);
             const string targetMemberType = "agent";
             const string wakePolicy = "subscription";
 
@@ -110,6 +112,38 @@ public static class DirectAgentEventRoutes
                 request.ProfileIdentity, request.PoolMemberId,
                 request.AgentInstanceId, request.SessionOwnerId, request.SessionId,
                 gatewayEventsUrl, subscriptionState);
+
+            // Merge caller-supplied coordination-call metadata under a controlled namespace.
+            string? coordinationCallId = null;
+            string? requestKind = null;
+            string? resultDestinationJson = null;
+            if (!string.IsNullOrWhiteSpace(request.MetadataJson))
+            {
+                try
+                {
+                    using var callerDoc = JsonDocument.Parse(request.MetadataJson);
+                    var callerRoot = callerDoc.RootElement;
+                    if (callerRoot.ValueKind != JsonValueKind.Object)
+                        return Results.BadRequest(new DirectAgentEventErrorDto("invalid_metadata",
+                            "MetadataJson must be a JSON object."));
+
+                    // Merge under controlled namespace to prevent overwriting system keys.
+                    metadataPayload["callerMetadata"] = JsonSerializer.Deserialize<JsonElement>(callerRoot.GetRawText());
+
+                    // Extract coordination-call fields if present (they are surfaced in readback).
+                    if (callerRoot.TryGetProperty("coordinationCallId", out var ccid) && ccid.ValueKind == JsonValueKind.String)
+                        coordinationCallId = ccid.GetString();
+                    if (callerRoot.TryGetProperty("requestKind", out var rk) && rk.ValueKind == JsonValueKind.String)
+                        requestKind = rk.GetString();
+                    if (callerRoot.TryGetProperty("resultDestinationJson", out var rdj) && rdj.ValueKind == JsonValueKind.String)
+                        resultDestinationJson = rdj.GetString();
+                }
+                catch (JsonException)
+                {
+                    return Results.BadRequest(new DirectAgentEventErrorDto("malformed_metadata",
+                        "MetadataJson must be valid JSON."));
+                }
+            }
 
             var metadataJson = JsonSerializer.Serialize(metadataPayload);
 
@@ -152,7 +186,10 @@ public static class DirectAgentEventRoutes
                 CompletionStatus: subscriptionState.CompletionStatus,
                 ActiveSubscriptionCount: subscriptionState.ActiveSubscriptionCount,
                 SubscriptionStatuses: subscriptionState.SubscriptionStatuses,
-                SubscriptionIdentities: subscriptionState.SubscriptionIdentities));
+                SubscriptionIdentities: subscriptionState.SubscriptionIdentities,
+                CoordinationCallId: coordinationCallId,
+                RequestKind: requestKind,
+                ResultDestinationJson: resultDestinationJson));
         });
 
         // -----------------------------------------------------------------------
@@ -162,6 +199,7 @@ public static class DirectAgentEventRoutes
         // -----------------------------------------------------------------------
         group.MapGet("/{eventId:long}", async (
             ChannelsRepository repository,
+            SubscriptionRepository subscriptionRepo,
             long eventId,
             CancellationToken cancellationToken) =>
         {
@@ -185,7 +223,7 @@ public static class DirectAgentEventRoutes
             if (!string.IsNullOrWhiteSpace(memberIdentity))
             {
                 subscriptionState = await DirectAgentEventShared.ResolveSubscriptionStateAsync(
-                    repository, msg.ChannelId, memberIdentity, cancellationToken);
+                    subscriptionRepo, msg.ChannelId, memberIdentity, cancellationToken);
             }
 
             var deliveryStatus = subscriptionState?.DeliveryStatus ?? metadataDeliveryStatus;

@@ -28,7 +28,8 @@ public sealed record RecordDirectAgentEventRequest(
     string? SessionOwnerId = null,
     string? SessionId = null,
     string? CheckpointType = null,
-    string? CheckpointHandle = null);
+    string? CheckpointHandle = null,
+    string? MetadataJson = null);
 
 /// <summary>
 /// Result of a Channels-owned direct-agent event recording.
@@ -62,7 +63,10 @@ public sealed record DirectAgentEventDto(
     string? CompletionStatus = null,
     int ActiveSubscriptionCount = 0,
     IReadOnlyList<string>? SubscriptionStatuses = null,
-    IReadOnlyList<string>? SubscriptionIdentities = null);
+    IReadOnlyList<string>? SubscriptionIdentities = null,
+    string? CoordinationCallId = null,
+    string? RequestKind = null,
+    string? ResultDestinationJson = null);
 
 /// <summary>
 /// Readback response for a single direct-agent event.

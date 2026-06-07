@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DenChannels.Service.Channels;
+using DenChannels.Service.Subscriptions;
 
 using static DenChannels.Service.MessageKind;
 using static DenChannels.Service.SourceKind;
@@ -58,12 +59,12 @@ internal static class DirectAgentEventShared
         IReadOnlyList<string> SubscriptionIdentities);
 
     internal static async Task<DirectAgentSubscriptionState> ResolveSubscriptionStateAsync(
-        ChannelsRepository repository,
+        SubscriptionRepository subscriptionRepo,
         long channelId,
         string memberIdentity,
         CancellationToken cancellationToken)
     {
-        var subscriptions = await repository.ListSubscriptionsByMemberAsync(
+        var subscriptions = await subscriptionRepo.ListSubscriptionsByMemberAsync(
             memberIdentity, subscriptionPurpose: null, projectId: null, channelId: channelId,
             limit: 100, cancellationToken);
 
@@ -150,7 +151,7 @@ internal static class DirectAgentEventShared
             {
                 gatewayEventsUrl,
                 subscriptionSource = "channel_subscriptions",
-                subscriptionCursorSource = "subscription_message_cursors"
+                subscriptionCursorSource = "channel_subscription_cursors"
             }
         };
 

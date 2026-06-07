@@ -146,7 +146,6 @@ public static class MessageKind
 public static class SourceKind
 {
     public const string WakeEvent = "wake_event";
-    public const string GatewayDelivery = "gateway_delivery";
     public const string TaskMessage = "task_message";
     public const string AgentStreamEntry = "agent_stream_entry";
     public const string Notification = "notification";
@@ -155,10 +154,29 @@ public static class SourceKind
     public const string ReviewFinding = "review_finding";
     public const string ExternalAdapterMessage = "external_adapter_message";
 
+    /// <summary>
+    /// Historical/tombstone compatibility value. gateway_delivery rows are migrated
+    /// to external_adapter_message; green-path code must not write this value.
+    /// All compatibility readback goes through Compatibility/Gateway module.
+    /// </summary>
+    public const string GatewayDelivery = "gateway_delivery";
+
     public static readonly string[] All =
     [
-        WakeEvent, GatewayDelivery, TaskMessage, AgentStreamEntry,
+        WakeEvent, TaskMessage, AgentStreamEntry,
         Notification, WorkerRun, ReviewRound, ReviewFinding, ExternalAdapterMessage
+    ];
+}
+
+/// <summary>
+/// Historical/tombstone source-kind values preserved for compatibility
+/// readback only. Green-path code must not use these directly.
+/// </summary>
+public static class HistoricalSourceKind
+{
+    public static readonly string[] All =
+    [
+        SourceKind.GatewayDelivery
     ];
 }
 

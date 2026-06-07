@@ -39,7 +39,8 @@ public static class EvidenceProvenance
     /// <summary>Direct-agent wake_event message recorded, no lifecycle event yet.</summary>
     public const string DirectAgentEvent = "direct_agent_event";
 
-    /// <summary>Gateway delivery occurred but no lifecycle event recorded.</summary>
+    /// <summary>Gateway delivery occurred — historical/tombstone compatibility only.
+    /// Rows migrated to external_adapter_message; green-path lifecycle readback uses direct-agent events.</summary>
     public const string GatewayDelivery = "gateway_delivery";
 
     /// <summary>Channels cannot safely join Core assignment/run facts.</summary>
