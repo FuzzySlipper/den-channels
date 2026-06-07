@@ -60,7 +60,11 @@ public sealed class DirectAgentEventTests : IDisposable
         Assert.True(payload.EventId > 0);
         Assert.Equal(channel.Id, payload.ChannelId);
         Assert.Equal("test-runner", payload.MemberIdentity);
-        Assert.Equal("direct_questions_only", payload.WakePolicy);
+        Assert.Equal("subscription", payload.WakePolicy);
+        Assert.Equal("recorded_no_subscriber", payload.DeliveryStatus);
+        Assert.Equal("no_subscriber", payload.ClaimStatus);
+        Assert.Equal("pending", payload.CompletionStatus);
+        Assert.Equal(0, payload.ActiveSubscriptionCount);
         Assert.StartsWith($"direct-agent-message:{channel.Id}:test-runner:", payload.RequestId);
         Assert.Contains($"/api/direct-agent-events/{payload.EventId}", payload.EventUrl);
         Assert.Contains($"/api/direct-agent-events?channelId={channel.Id}", payload.EventsUrl);
@@ -144,7 +148,7 @@ public sealed class DirectAgentEventTests : IDisposable
         Assert.Equal(postPayload.EventId, readback.EventId);
         Assert.Equal(channel.Id, readback.ChannelId);
         Assert.Equal("readback-agent", readback.MemberIdentity);
-        Assert.Equal("direct_questions_only", readback.WakePolicy);
+        Assert.Equal("subscription", readback.WakePolicy);
         Assert.Equal("wake_event", readback.SourceKind);
 
         Assert.Equal("target-project", readback.TargetProjectId);
@@ -160,9 +164,11 @@ public sealed class DirectAgentEventTests : IDisposable
         Assert.Equal("Readback test body.", readback.Body);
         Assert.Equal("user", readback.SenderType);
         Assert.Equal("operator", readback.SenderIdentity);
-        Assert.Equal("recorded_pending_claim", readback.DeliveryStatus);
-        Assert.Equal("unclaimed", readback.ClaimStatus);
+        Assert.Equal("recorded_no_subscriber", readback.DeliveryStatus);
+        Assert.Equal("no_subscriber", readback.ClaimStatus);
         Assert.Equal("pending", readback.CompletionStatus);
+        Assert.Equal(0, readback.ActiveSubscriptionCount);
+        Assert.Empty(readback.SubscriptionStatuses);
         Assert.NotEmpty(readback.CreatedAt);
     }
 
@@ -375,6 +381,52 @@ public sealed class DirectAgentEventTests : IDisposable
         Assert.Equal("runner-202", readbackB.SessionOwnerId);
     }
 
+    [Theory]
+    [InlineData("idle", "recorded_pending_claim", "unclaimed", "pending")]
+    [InlineData("busy", "claimed", "claimed", "pending")]
+    [InlineData("degraded", "recorded_unreachable_subscription", "subscription_unreachable", "failed")]
+    public async Task DirectAgentEvent_ReadbackUsesChannelSubscriptionState(
+        string subscriptionStatus,
+        string expectedDeliveryStatus,
+        string expectedClaimStatus,
+        string expectedCompletionStatus)
+    {
+        var channel = await EnsureDefaultChannelAsync($"dae-subscription-state-{subscriptionStatus}");
+        await UpsertSubscriptionAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "subscribed-agent",
+            subscriptionIdentity = $"subscribed-agent:{subscriptionStatus}",
+            subscriptionPurpose = "direct_agent_wake",
+            subscriptionStatus
+        });
+
+        using var postResponse = await _client.PostAsJsonAsync("/api/direct-agent-events", new
+        {
+            channelId = channel.Id,
+            memberIdentity = "subscribed-agent",
+            senderIdentity = "operator",
+            body = $"Subscription state {subscriptionStatus}."
+        });
+        Assert.Equal(HttpStatusCode.Created, postResponse.StatusCode);
+        var postPayload = await postResponse.Content.ReadFromJsonAsync<DirectAgentEventPayload>();
+        Assert.NotNull(postPayload);
+        Assert.Equal(expectedDeliveryStatus, postPayload.DeliveryStatus);
+        Assert.Equal(expectedClaimStatus, postPayload.ClaimStatus);
+        Assert.Equal(expectedCompletionStatus, postPayload.CompletionStatus);
+        Assert.Equal(1, postPayload.ActiveSubscriptionCount);
+        Assert.Contains(subscriptionStatus, postPayload.SubscriptionStatuses ?? Array.Empty<string>());
+
+        var readback = await _client.GetFromJsonAsync<DirectAgentEventReadbackPayload>(
+            $"/api/direct-agent-events/{postPayload.EventId}");
+        Assert.NotNull(readback);
+        Assert.Equal(expectedDeliveryStatus, readback.DeliveryStatus);
+        Assert.Equal(expectedClaimStatus, readback.ClaimStatus);
+        Assert.Equal(expectedCompletionStatus, readback.CompletionStatus);
+        Assert.Equal(1, readback.ActiveSubscriptionCount);
+        Assert.Contains(subscriptionStatus, readback.SubscriptionStatuses);
+    }
+
     // -------------------------------------------------------------------------
     // Validation
     // -------------------------------------------------------------------------
@@ -418,7 +470,7 @@ public sealed class DirectAgentEventTests : IDisposable
     }
 
     [Fact]
-    public async Task PostDirectAgentEvent_InactiveMember_Returns404()
+    public async Task PostDirectAgentEvent_NoSubscription_RecordsNoSubscriberReadback()
     {
         var channel = await EnsureDefaultChannelAsync("dae-inactive-member");
         await UpsertMembershipAsync(channel.Id, new
@@ -436,7 +488,13 @@ public sealed class DirectAgentEventTests : IDisposable
             senderIdentity = "operator",
             body = "Target is muted."
         });
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<DirectAgentEventPayload>();
+        Assert.NotNull(payload);
+        Assert.Equal("recorded_no_subscriber", payload.DeliveryStatus);
+        Assert.Equal("no_subscriber", payload.ClaimStatus);
+        Assert.Equal("pending", payload.CompletionStatus);
+        Assert.Equal(0, payload.ActiveSubscriptionCount);
     }
 
     // -------------------------------------------------------------------------
@@ -565,6 +623,12 @@ public sealed class DirectAgentEventTests : IDisposable
         response.EnsureSuccessStatusCode();
     }
 
+    private async Task UpsertSubscriptionAsync(long channelId, object request)
+    {
+        using var response = await _client.PutAsJsonAsync($"/api/channels/{channelId}/subscriptions", request);
+        response.EnsureSuccessStatusCode();
+    }
+
     private async Task<MessageStub> PostMessageAsync(long channelId, object request)
     {
         using var response = await _client.PostAsJsonAsync($"/api/channels/{channelId}/messages", request);
@@ -607,7 +671,13 @@ public sealed class DirectAgentEventTests : IDisposable
         string? SessionId,
         string EventUrl,
         string EventsUrl,
-        string EvidenceSummary);
+        string EvidenceSummary,
+        string? DeliveryStatus,
+        string? ClaimStatus,
+        string? CompletionStatus,
+        int ActiveSubscriptionCount,
+        IReadOnlyList<string>? SubscriptionStatuses,
+        IReadOnlyList<string>? SubscriptionIdentities);
 
     private sealed record DirectAgentEventReadbackPayload(
         long EventId,
@@ -635,6 +705,9 @@ public sealed class DirectAgentEventTests : IDisposable
         string? DeliveryStatus,
         string? ClaimStatus,
         string? CompletionStatus,
+        int ActiveSubscriptionCount,
+        IReadOnlyList<string> SubscriptionStatuses,
+        IReadOnlyList<string> SubscriptionIdentities,
         string CreatedAt);
 
     private sealed record GatewayDirectAgentMessagePayload(

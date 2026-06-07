@@ -47,23 +47,63 @@ internal static class DirectAgentEventShared
         return null;
     }
 
-    // ── Member lookup ──────────────────────────────────────────────────
+    // ── Subscription lookup ─────────────────────────────────────────────
 
-    /// <summary>
-    /// Find an active agent member by identity within a channel.
-    /// Returns null if no matching active agent membership exists.
-    /// </summary>
-    internal static async Task<ChannelMembershipDto?> FindActiveAgentMemberAsync(
+    internal sealed record DirectAgentSubscriptionState(
+        string DeliveryStatus,
+        string ClaimStatus,
+        string CompletionStatus,
+        int ActiveSubscriptionCount,
+        IReadOnlyList<string> SubscriptionStatuses,
+        IReadOnlyList<string> SubscriptionIdentities);
+
+    internal static async Task<DirectAgentSubscriptionState> ResolveSubscriptionStateAsync(
         ChannelsRepository repository,
         long channelId,
         string memberIdentity,
         CancellationToken cancellationToken)
     {
-        var members = await repository.ListMembershipsAsync(channelId, 200, cancellationToken);
-        return members.FirstOrDefault(m =>
-            string.Equals(m.MemberIdentity, memberIdentity.Trim(), StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(m.MemberType, "agent", StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(m.MembershipStatus, "active", StringComparison.OrdinalIgnoreCase));
+        var subscriptions = await repository.ListSubscriptionsByMemberAsync(
+            memberIdentity, subscriptionPurpose: null, projectId: null, channelId: channelId,
+            limit: 100, cancellationToken);
+
+        var statuses = subscriptions
+            .Select(s => s.SubscriptionStatus)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var identities = subscriptions
+            .Select(s => s.SubscriptionIdentity)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (subscriptions.Count == 0)
+        {
+            return new DirectAgentSubscriptionState(
+                "recorded_no_subscriber", "no_subscriber", CompS.Pending,
+                0, statuses, identities);
+        }
+
+        if (statuses.Any(s => string.Equals(s, "busy", StringComparison.OrdinalIgnoreCase)))
+        {
+            return new DirectAgentSubscriptionState(
+                "claimed", CS.Claimed, CompS.Pending,
+                subscriptions.Count, statuses, identities);
+        }
+
+        if (statuses.All(s => s is "degraded" or "offline" or "needs_rebind"))
+        {
+            return new DirectAgentSubscriptionState(
+                "recorded_unreachable_subscription", "subscription_unreachable", CompS.Failed,
+                subscriptions.Count, statuses, identities);
+        }
+
+        return new DirectAgentSubscriptionState(
+            "recorded_pending_claim", CS.Unclaimed, CompS.Pending,
+            subscriptions.Count, statuses, identities);
     }
 
     // ── Metadata payload construction ──────────────────────────────────
@@ -74,7 +114,9 @@ internal static class DirectAgentEventShared
     /// </summary>
     internal static Dictionary<string, object?> BuildWakeMetadata(
         string requestId,
-        ChannelMembershipDto member,
+        string targetMemberIdentity,
+        string targetMemberType,
+        string wakePolicy,
         string? resolvedSourceProjectId,
         string? sourceProjectId,
         string? targetProjectId,
@@ -87,20 +129,29 @@ internal static class DirectAgentEventShared
         string? agentInstanceId,
         string? sessionOwnerId,
         string? sessionId,
-        string gatewayEventsUrl)
+        string gatewayEventsUrl,
+        DirectAgentSubscriptionState subscriptionState)
     {
         var metadata = new Dictionary<string, object?>
         {
             ["requestId"] = requestId,
-            ["targetMemberIdentity"] = member.MemberIdentity,
-            ["targetMemberType"] = member.MemberType,
-            ["wakePolicy"] = member.WakePolicy,
+            ["targetMemberIdentity"] = targetMemberIdentity,
+            ["targetMemberType"] = targetMemberType,
+            ["wakePolicy"] = wakePolicy,
             ["deliveryMode"] = "direct_agent_message",
-            ["deliveryStatus"] = "recorded_pending_claim",
-            ["claimStatus"] = CS.Unclaimed,
-            ["completionStatus"] = CompS.Pending,
+            ["deliveryStatus"] = subscriptionState.DeliveryStatus,
+            ["claimStatus"] = subscriptionState.ClaimStatus,
+            ["completionStatus"] = subscriptionState.CompletionStatus,
+            ["activeSubscriptionCount"] = subscriptionState.ActiveSubscriptionCount,
+            ["subscriptionStatuses"] = subscriptionState.SubscriptionStatuses,
+            ["subscriptionIdentities"] = subscriptionState.SubscriptionIdentities,
             ["suppressionStatus"] = SupS.NotSuppressed,
-            ["evidence"] = new { gatewayEventsUrl }
+            ["evidence"] = new
+            {
+                gatewayEventsUrl,
+                subscriptionSource = "channel_subscriptions",
+                subscriptionCursorSource = "subscription_message_cursors"
+            }
         };
 
         if (sourceProjectId is not null)

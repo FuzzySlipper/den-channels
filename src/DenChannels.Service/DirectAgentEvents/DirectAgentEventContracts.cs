@@ -56,7 +56,13 @@ public sealed record DirectAgentEventDto(
     string? SessionId,
     string EventUrl,
     string EventsUrl,
-    string EvidenceSummary);
+    string EvidenceSummary,
+    string? DeliveryStatus = null,
+    string? ClaimStatus = null,
+    string? CompletionStatus = null,
+    int ActiveSubscriptionCount = 0,
+    IReadOnlyList<string>? SubscriptionStatuses = null,
+    IReadOnlyList<string>? SubscriptionIdentities = null);
 
 /// <summary>
 /// Readback response for a single direct-agent event.
@@ -89,6 +95,9 @@ public sealed record DirectAgentEventReadbackDto(
     string? DeliveryStatus,
     string? ClaimStatus,
     string? CompletionStatus,
+    int ActiveSubscriptionCount,
+    IReadOnlyList<string> SubscriptionStatuses,
+    IReadOnlyList<string> SubscriptionIdentities,
     string CreatedAt);
 
 // ── Events list (cursor-paged event subscription) ─────────────────────

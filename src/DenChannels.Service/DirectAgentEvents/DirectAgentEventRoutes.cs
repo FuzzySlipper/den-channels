@@ -93,23 +93,23 @@ public static class DirectAgentEventRoutes
                         ? $"Channel {request.ChannelId} not found."
                         : $"No default channel found for project '{request.ProjectId}'."));
 
-            var member = await DirectAgentEventShared.FindActiveAgentMemberAsync(
-                repository, channel.Id, request.MemberIdentity, cancellationToken);
-            if (member is null)
-                return Results.NotFound(new DirectAgentEventErrorDto("member_not_active_agent",
-                    $"Active agent member '{request.MemberIdentity}' is not joined to channel {channel.Id}."));
+            var targetMemberIdentity = request.MemberIdentity.Trim();
+            var subscriptionState = await DirectAgentEventShared.ResolveSubscriptionStateAsync(
+                repository, channel.Id, targetMemberIdentity, cancellationToken);
+            const string targetMemberType = "agent";
+            const string wakePolicy = "subscription";
 
-            var requestId = $"direct-agent-message:{channel.Id}:{Uri.EscapeDataString(member.MemberIdentity)}:{Guid.NewGuid():N}";
+            var requestId = $"direct-agent-message:{channel.Id}:{Uri.EscapeDataString(targetMemberIdentity)}:{Guid.NewGuid():N}";
             var resolvedSourceProjectId = request.SourceProjectId ?? channel.ProjectId;
             var gatewayEventsUrl = $"/api/direct-agent-events?channelId={channel.Id}&afterId=0&limit=50";
 
             var metadataPayload = DirectAgentEventShared.BuildWakeMetadata(
-                requestId, member, resolvedSourceProjectId,
+                requestId, targetMemberIdentity, targetMemberType, wakePolicy, resolvedSourceProjectId,
                 request.SourceProjectId, request.TargetProjectId, request.TargetTaskId,
                 request.AssignmentId, request.WorkerRunId, request.WorkerRole,
                 request.ProfileIdentity, request.PoolMemberId,
                 request.AgentInstanceId, request.SessionOwnerId, request.SessionId,
-                gatewayEventsUrl);
+                gatewayEventsUrl, subscriptionState);
 
             var metadataJson = JsonSerializer.Serialize(metadataPayload);
 
@@ -121,7 +121,7 @@ public static class DirectAgentEventRoutes
                 request.ProfileIdentity, request.PoolMemberId,
                 request.AgentInstanceId, request.SessionOwnerId, request.SessionId,
                 request.AssignmentId, request.CheckpointType, request.CheckpointHandle,
-                member.MemberIdentity, metadataJson, cancellationToken);
+                targetMemberIdentity, metadataJson, cancellationToken);
 
             var eventUrl = $"/api/direct-agent-events/{msg.Id}";
             var eventsUrl = $"/api/direct-agent-events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10";
@@ -131,8 +131,8 @@ public static class DirectAgentEventRoutes
                 EventId: msg.Id,
                 ChannelId: channel.Id,
                 RequestId: requestId,
-                MemberIdentity: member.MemberIdentity,
-                WakePolicy: member.WakePolicy,
+                MemberIdentity: targetMemberIdentity,
+                WakePolicy: wakePolicy,
                 SourceProjectId: resolvedSourceProjectId,
                 TargetProjectId: request.TargetProjectId,
                 TargetTaskId: request.TargetTaskId,
@@ -146,7 +146,13 @@ public static class DirectAgentEventRoutes
                 SessionId: request.SessionId,
                 EventUrl: eventUrl,
                 EventsUrl: eventsUrl,
-                EvidenceSummary: $"Direct agent wake_event recorded as event {msg.Id}. Gateway/den-host consumers may claim this event. Readback: GET {eventUrl}"));
+                EvidenceSummary: $"Direct agent wake_event recorded as event {msg.Id}. Subscription readback: {subscriptionState.DeliveryStatus}/{subscriptionState.ClaimStatus}/{subscriptionState.CompletionStatus}. GET {eventUrl}",
+                DeliveryStatus: subscriptionState.DeliveryStatus,
+                ClaimStatus: subscriptionState.ClaimStatus,
+                CompletionStatus: subscriptionState.CompletionStatus,
+                ActiveSubscriptionCount: subscriptionState.ActiveSubscriptionCount,
+                SubscriptionStatuses: subscriptionState.SubscriptionStatuses,
+                SubscriptionIdentities: subscriptionState.SubscriptionIdentities));
         });
 
         // -----------------------------------------------------------------------
@@ -170,11 +176,24 @@ public static class DirectAgentEventRoutes
                     $"Message {eventId} is not a direct-agent event."));
 
             // Extract direct-agent tracking fields from metadata if present.
-            var (deliveryStatus, claimStatus, completionStatus, wakePolicy) =
+            var (metadataDeliveryStatus, metadataClaimStatus, metadataCompletionStatus, wakePolicy) =
                 DirectAgentEventShared.ExtractDirectAgentMetadata(msg.MetadataJson);
 
             // Resolve member identity from sourceId pattern: direct-agent-message:{channelId}:{memberIdentity}:{guid}
             var memberIdentity = DirectAgentEventShared.ExtractMemberIdentity(msg.SourceId);
+            DirectAgentEventShared.DirectAgentSubscriptionState? subscriptionState = null;
+            if (!string.IsNullOrWhiteSpace(memberIdentity))
+            {
+                subscriptionState = await DirectAgentEventShared.ResolveSubscriptionStateAsync(
+                    repository, msg.ChannelId, memberIdentity, cancellationToken);
+            }
+
+            var deliveryStatus = subscriptionState?.DeliveryStatus ?? metadataDeliveryStatus;
+            var claimStatus = subscriptionState?.ClaimStatus ?? metadataClaimStatus;
+            var completionStatus = subscriptionState?.CompletionStatus ?? metadataCompletionStatus;
+            var activeSubscriptionCount = subscriptionState?.ActiveSubscriptionCount ?? 0;
+            var subscriptionStatuses = subscriptionState?.SubscriptionStatuses ?? Array.Empty<string>();
+            var subscriptionIdentities = subscriptionState?.SubscriptionIdentities ?? Array.Empty<string>();
 
             return Results.Ok(new DirectAgentEventReadbackDto(
                 EventId: msg.Id,
@@ -202,6 +221,9 @@ public static class DirectAgentEventRoutes
                 DeliveryStatus: deliveryStatus,
                 ClaimStatus: claimStatus,
                 CompletionStatus: completionStatus,
+                ActiveSubscriptionCount: activeSubscriptionCount,
+                SubscriptionStatuses: subscriptionStatuses,
+                SubscriptionIdentities: subscriptionIdentities,
                 CreatedAt: msg.CreatedAt));
         });
 

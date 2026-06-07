@@ -182,6 +182,7 @@ public sealed class ChannelApiTests : IDisposable
             body = "Gateway delivered reply fallback",
             sourceKind = "gateway_delivery",
             sourceId = "source-45",
+            deliveryRequestId = "source-45",
             dedupeKey = "gateway-delivery:45"
         });
         Assert.Equal("source-45", fallbackDelivery.DeliveryRequestId);

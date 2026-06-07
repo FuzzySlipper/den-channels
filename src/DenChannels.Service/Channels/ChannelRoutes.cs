@@ -319,6 +319,56 @@ public static class ChannelRoutes
         });
 
         // -----------------------------------------------------------------------
+        // Subscription endpoints (v8 membership/subscription split)
+        // -----------------------------------------------------------------------
+
+        api.MapGet("/channel-subscriptions", async Task<IResult> (ChannelsRepository repository,
+            string? memberIdentity, string? purpose, string? projectId, long? channelId,
+            int? limit, CancellationToken cancellationToken) =>
+        {
+            if (string.IsNullOrWhiteSpace(memberIdentity))
+                return Results.BadRequest(new { code = "missing_parameter", message = "Provide memberIdentity." });
+
+            var rows = await repository.ListSubscriptionsByMemberAsync(
+                memberIdentity, purpose, projectId, channelId, limit ?? 100, cancellationToken);
+            return Results.Ok(new { memberIdentity = memberIdentity.Trim(), subscriptions = rows });
+        });
+
+        api.MapPut("/channels/{channelId:long}/subscriptions", async (ChannelsRepository repository, long channelId,
+            UpsertChannelSubscriptionRequest request, CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                var subscription = await repository.UpsertSubscriptionAsync(channelId, request, cancellationToken);
+                return Results.Ok(subscription);
+            }
+            catch (SqliteException ex) when (IsConstraintFailure(ex))
+            {
+                return Results.Conflict(new ProblemDetailsDto("subscription_constraint_failed", ex.SqliteErrorCode, ex.Message));
+            }
+        });
+
+        api.MapPut("/channel-subscriptions/{subscriptionId:long}/cursors/{streamKind}", async (
+            ChannelsRepository repository, long subscriptionId, string streamKind,
+            UpsertSubscriptionCursorRequest request, CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                var cursorRequest = request with { StreamKind = streamKind };
+                var cursor = await repository.UpsertSubscriptionCursorAsync(subscriptionId, cursorRequest, cancellationToken);
+                return Results.Ok(cursor);
+            }
+            catch (SqliteException ex) when (IsConstraintFailure(ex))
+            {
+                return Results.Conflict(new ProblemDetailsDto("subscription_cursor_constraint_failed", ex.SqliteErrorCode, ex.Message));
+            }
+        });
+
+        api.MapGet("/channel-subscriptions/{subscriptionId:long}/cursors", async (
+            ChannelsRepository repository, long subscriptionId, CancellationToken cancellationToken) =>
+            Results.Ok(await repository.ListSubscriptionCursorsAsync(subscriptionId, cancellationToken)));
+
+        // -----------------------------------------------------------------------
         // GET /api/assignments/{assignmentId}/transcript
         // Assignment-scoped readback: visible messages + non-waking activity/checkpoint events.
         // Den Web #1729 consumer: given assignmentId, return bounded visible messages

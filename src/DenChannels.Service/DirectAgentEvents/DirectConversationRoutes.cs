@@ -133,22 +133,22 @@ public static class DirectConversationRoutes
                 return Results.NotFound(new DirectConversationErrorDto("channel_not_found",
                     $"No default channel found for project '{projectId}'."));
 
-            var member = await DirectAgentEventShared.FindActiveAgentMemberAsync(
-                repository, channel.Id, conversation.AgentIdentity, cancellationToken);
-            if (member is null)
-                return Results.NotFound(new DirectConversationErrorDto("member_not_active_agent",
-                    $"Active agent member '{conversation.AgentIdentity}' is not joined to channel {channel.Id}."));
+            var targetMemberIdentity = conversation.AgentIdentity.Trim();
+            var subscriptionState = await DirectAgentEventShared.ResolveSubscriptionStateAsync(
+                repository, channel.Id, targetMemberIdentity, cancellationToken);
+            const string targetMemberType = "agent";
+            const string wakePolicy = "subscription";
 
-            var requestId = $"direct-agent-message:{channel.Id}:{Uri.EscapeDataString(member.MemberIdentity)}:{Guid.NewGuid():N}";
+            var requestId = $"direct-agent-message:{channel.Id}:{Uri.EscapeDataString(targetMemberIdentity)}:{Guid.NewGuid():N}";
             var gatewayEventsUrl = $"/api/direct-agent-events?channelId={channel.Id}&afterId=0&limit=50";
 
             var metadataPayload = DirectAgentEventShared.BuildWakeMetadata(
-                requestId, member, projectId,
+                requestId, targetMemberIdentity, targetMemberType, wakePolicy, projectId,
                 request.SourceProjectId, projectId, request.TargetTaskId,
                 assignmentId: null, request.WorkerRunId, request.WorkerRole,
                 request.ProfileIdentity, request.PoolMemberId,
                 request.AgentInstanceId, request.SessionOwnerId, request.SessionId,
-                gatewayEventsUrl);
+                gatewayEventsUrl, subscriptionState);
 
             // Add DM transcript linking metadata
             metadataPayload["directConversationId"] = conversationId;
@@ -164,7 +164,7 @@ public static class DirectConversationRoutes
                 request.ProfileIdentity, request.PoolMemberId,
                 request.AgentInstanceId, request.SessionOwnerId, request.SessionId,
                 assignmentId: null, checkpointType: null, checkpointHandle: null,
-                member.MemberIdentity, metadataJson, cancellationToken);
+                targetMemberIdentity, metadataJson, cancellationToken);
 
             // Link the canonical channel message into the DM conversation
             var bodyPreview = request.Body.Length <= 200 ? request.Body : request.Body[..197] + "...";
@@ -188,7 +188,7 @@ public static class DirectConversationRoutes
                 ConversationId: conversationId,
                 EntryId: entry.Id,
                 RequestId: requestId,
-                MemberIdentity: member.MemberIdentity));
+                MemberIdentity: targetMemberIdentity));
         });
 
         // ---------------------------------------------------------------

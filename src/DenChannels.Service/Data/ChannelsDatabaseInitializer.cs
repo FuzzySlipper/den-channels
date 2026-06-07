@@ -7,7 +7,7 @@ namespace DenChannels.Service.Data;
 
 public sealed class ChannelsDatabaseInitializer
 {
-    public const int CurrentSchemaVersion = 7;
+    public const int CurrentSchemaVersion = 8;
 
     private readonly IOptions<DenChannelsOptions> _options;
     private readonly ILogger<ChannelsDatabaseInitializer> _logger;
@@ -89,6 +89,72 @@ public sealed class ChannelsDatabaseInitializer
             await SetSchemaVersionAsync(connection, 7, "channel_messages_fts5", cancellationToken);
         }
 
+        if (currentVersion < 8)
+        {
+            // Ensure columns needed for v8 rebuild exist before migration.
+            // These are normally added by post-migration Ensure*Compat methods
+            // but the v8 rebuild reads from these columns.
+            await EnsureColumnAsync(connection, "channel_memberships", "membership_purpose", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_messages", "assignment_id", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_messages", "checkpoint_type", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_messages", "checkpoint_handle", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_messages", "agent_instance_id", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_messages", "pool_member_id", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_messages", "session_owner_id", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_messages", "session_id", "TEXT", cancellationToken);
+            // Compatibility columns added by EnsureChannelMessageCompatibilityColumnsAsync,
+            // but that runs before v1 creates the table on fresh DBs.
+            await EnsureColumnAsync(connection, "channel_messages", "target_project_id", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_messages", "target_task_id", "INTEGER", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_messages", "worker_run_id", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_messages", "worker_role", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_messages", "profile_identity", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "agent_instance_id", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "pool_member_id", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "assignment_id", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "checkpoint_type", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "checkpoint_handle", "TEXT", cancellationToken);
+            // Activity events compatibility columns needed for v8 COALESCE reads.
+            await EnsureColumnAsync(connection, "channel_activity_events", "delivery_stage", "TEXT NOT NULL DEFAULT 'progress'", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "terminal", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "final_channel_message_id", "INTEGER", cancellationToken);
+            // Runtime-neutral session columns needed for hermes value migration.
+            await EnsureColumnAsync(connection, "channel_activity_events", "session_key", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "parent_session_key", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "display_block_id", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "parent_agent_identity", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "worker_run_id", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "worker_role", "TEXT", cancellationToken);
+            // Ensure channel_memberships exists for backfill (may not on very old legacy DBs).
+            if (!await TableExistsAsync(connection, "channel_memberships", cancellationToken))
+            {
+                await ExecuteNonQueryAsync(connection, ChannelMembershipsMinimalSchemaSql, cancellationToken);
+            }
+            // These tables are needed for v8 migration backfills (may not exist on very old legacy DBs).
+            await ExecuteNonQueryAsync(connection, ChannelActivityEventsSchemaSql, cancellationToken);
+            // ChannelActivityEventsSchemaSql is CREATE IF NOT EXISTS and very old legacy databases
+            // may create or retain a pre-agent-work-lifecycle shape here. Migration v8 reads these
+            // columns during the rebuild, so ensure them after the table definitely exists.
+            await EnsureColumnAsync(connection, "channel_activity_events", "agent_instance_id", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "pool_member_id", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "assignment_id", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "checkpoint_type", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "checkpoint_handle", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "update_version", "INTEGER NOT NULL DEFAULT 1", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "title", "TEXT", cancellationToken);
+            if (!await TableExistsAsync(connection, "channel_read_cursors", cancellationToken))
+            {
+                await ExecuteNonQueryAsync(connection, MigrationV2Sql, cancellationToken);
+            }
+            await EnsureColumnAsync(connection, "channel_read_cursors", "instance_id", "TEXT", cancellationToken);
+            // Legacy hermes columns needed for COALESCE during rebuild; dropped by migration.
+            await EnsureColumnAsync(connection, "channel_activity_events", "hermes_session_key", "TEXT", cancellationToken);
+            await EnsureColumnAsync(connection, "channel_activity_events", "parent_hermes_session_key", "TEXT", cancellationToken);
+            logger?.LogInformation("Applying Den Channels database migration 8: membership/subscription split, Hermes column purge, gateway_delivery quarantine");
+            await ExecuteNonQueryAsync(connection, MigrationV8Sql, cancellationToken);
+            await SetSchemaVersionAsync(connection, 8, "membership_subscription_split", cancellationToken);
+        }
+
         await EnsureChannelsCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureChannelMessageCompatibilityColumnsAsync(connection, cancellationToken);
         await EnsureChannelMessagesSourceKindConstraintAsync(connection, cancellationToken);
@@ -104,6 +170,7 @@ public sealed class ChannelsDatabaseInitializer
         await EnsureDenSystemChannelSeedAsync(connection, cancellationToken);
         await EnsureWorkerPoolLobbyPresenceConcreteConstraintAsync(connection, logger, cancellationToken);
         await EnsureChannelMessagesFts5Async(connection, cancellationToken);
+        await EnsureChannelMembershipsV8ColumnsAsync(connection, cancellationToken);
         await ExecuteNonQueryAsync(connection, PostCreateIndexesSql, cancellationToken);
     }
 
@@ -114,6 +181,8 @@ public sealed class ChannelsDatabaseInitializer
             return;
 
         var createSql = await GetTableCreateSqlAsync(connection, "channel_messages", cancellationToken);
+        // gateway_delivery is quarantined as historical/tombstone in v8.
+        // Kept in CHECK for backward compatibility but not used in green-path code.
         if (createSql?.Contains("'gateway_delivery'", StringComparison.OrdinalIgnoreCase) == true)
             return;
 
@@ -126,12 +195,10 @@ public sealed class ChannelsDatabaseInitializer
         await ExecuteNonQueryAsync(connection, ChannelActivityEventsSchemaSql, cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "display_block_id", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "session_key", "TEXT", cancellationToken);
-        await EnsureColumnAsync(connection, "channel_activity_events", "hermes_session_key", "TEXT", cancellationToken);
+        // hermes_session_key / parent_hermes_session_key: REMOVED in v8 migration.
+        // These columns are no longer added or maintained; v8 rebuild drops them.
+        // Pre-v8 databases will have them dropped by the migration rebuild.
         await EnsureColumnAsync(connection, "channel_activity_events", "parent_session_key", "TEXT", cancellationToken);
-        // DEPRECATED legacy columns (task #1967): kept for DB compatibility with pre-migration producers.
-        // New producers write to session_key/parent_session_key; old hermes_session_key/parent_hermes_session_key
-        // are no longer read by green-path queries.
-        await EnsureColumnAsync(connection, "channel_activity_events", "parent_hermes_session_key", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "parent_agent_identity", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "worker_run_id", "TEXT", cancellationToken);
         await EnsureColumnAsync(connection, "channel_activity_events", "worker_role", "TEXT", cancellationToken);
@@ -610,6 +677,33 @@ public sealed class ChannelsDatabaseInitializer
         );
         """;
 
+    /// <summary>
+    /// Minimal channel_memberships schema for v8 migration backfill resilience.
+    /// Used when channel_memberships doesn't exist on very old legacy DBs.
+    /// </summary>
+    private const string ChannelMembershipsMinimalSchemaSql = """
+        CREATE TABLE IF NOT EXISTS channel_memberships (
+            id                            INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id                    INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+            member_type                   TEXT NOT NULL
+                                          CHECK (member_type IN ('user', 'agent', 'role', 'group')),
+            member_identity               TEXT NOT NULL,
+            membership_status             TEXT NOT NULL DEFAULT 'active'
+                                          CHECK (membership_status IN ('active', 'muted', 'left', 'banned')),
+            wake_policy                   TEXT NOT NULL DEFAULT 'mentions_only',
+            can_send                      INTEGER NOT NULL DEFAULT 1,
+            can_react                     INTEGER NOT NULL DEFAULT 1,
+            can_invite                    INTEGER NOT NULL DEFAULT 0,
+            cooldown_seconds              INTEGER NOT NULL DEFAULT 60,
+            max_auto_replies_per_window   INTEGER NOT NULL DEFAULT 1,
+            settings_json                 TEXT,
+            membership_purpose            TEXT,
+            created_at                    TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at                    TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(channel_id, member_type, member_identity)
+        );
+        """;
+
     private const string ChannelActivityEventsSchemaSql = """
         CREATE TABLE IF NOT EXISTS channel_activity_events (
             id                    INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -617,15 +711,9 @@ public sealed class ChannelsDatabaseInitializer
             project_id            TEXT,
             agent_identity        TEXT NOT NULL,
             delivery_request_id   TEXT,
-            -- session_key: runtime-neutral session ownership (was hermes_session_key).
-            -- parent_session_key: runtime-neutral parent session (was parent_hermes_session_key).
-            -- hermes_session_key / parent_hermes_session_key: DEPRECATED legacy columns kept
-            -- for DB compatibility only; not used by active green-path queries (task #1967).
             session_key           TEXT,
-            hermes_session_key    TEXT,
             display_block_id      TEXT,
             parent_session_key    TEXT,
-            parent_hermes_session_key TEXT,
             parent_agent_identity TEXT,
             worker_run_id         TEXT,
             worker_role           TEXT,
@@ -697,10 +785,8 @@ public sealed class ChannelsDatabaseInitializer
             agent_identity        TEXT NOT NULL,
             delivery_request_id   TEXT,
             session_key           TEXT,
-            hermes_session_key    TEXT,
             display_block_id      TEXT,
             parent_session_key    TEXT,
-            parent_hermes_session_key TEXT,
             parent_agent_identity TEXT,
             worker_run_id         TEXT,
             worker_role           TEXT,
@@ -732,8 +818,8 @@ public sealed class ChannelsDatabaseInitializer
 
         INSERT INTO channel_activity_events__new(
             id, channel_id, project_id, agent_identity, delivery_request_id,
-            session_key, hermes_session_key, display_block_id, parent_session_key,
-            parent_hermes_session_key, parent_agent_identity, worker_run_id, worker_role,
+            session_key, display_block_id, parent_session_key,
+            parent_agent_identity, worker_run_id, worker_role,
             agent_instance_id, pool_member_id, task_id, thread_id, anchor_message_id,
             assignment_id, checkpoint_type, checkpoint_handle, event_type, status,
             delivery_stage, terminal, final_channel_message_id, sequence, update_version,
@@ -744,11 +830,9 @@ public sealed class ChannelsDatabaseInitializer
             project_id,
             agent_identity,
             delivery_request_id,
-            session_key,
-            hermes_session_key,
+            COALESCE(session_key, hermes_session_key),
             display_block_id,
-            parent_session_key,
-            parent_hermes_session_key,
+            COALESCE(parent_session_key, parent_hermes_session_key),
             parent_agent_identity,
             worker_run_id,
             worker_role,
@@ -899,6 +983,11 @@ public sealed class ChannelsDatabaseInitializer
                                    CHECK (source_kind IS NULL OR source_kind IN ('task_message', 'agent_stream_entry', 'notification', 'worker_run', 'review_round', 'review_finding', 'wake_event', 'gateway_delivery', 'external_adapter_message')),
             source_id              TEXT,
             source_project_id      TEXT,
+            target_project_id      TEXT,
+            target_task_id         INTEGER,
+            worker_run_id          TEXT,
+            worker_role            TEXT,
+            profile_identity       TEXT,
             summary                TEXT,
             deep_link              TEXT,
             thread_root_message_id INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
@@ -906,6 +995,13 @@ public sealed class ChannelsDatabaseInitializer
             metadata_json          TEXT,
             delivery_request_id    TEXT,
             dedupe_key             TEXT,
+            assignment_id          TEXT,
+            checkpoint_type        TEXT,
+            checkpoint_handle      TEXT,
+            agent_instance_id      TEXT,
+            pool_member_id         TEXT,
+            session_owner_id       TEXT,
+            session_id             TEXT,
             created_at             TEXT NOT NULL DEFAULT (datetime('now')),
             edited_at              TEXT,
             deleted_at             TEXT
@@ -913,8 +1009,12 @@ public sealed class ChannelsDatabaseInitializer
 
         INSERT INTO channel_messages__new(
             id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id,
-            source_project_id, summary, deep_link, thread_root_message_id, reply_to_message_id,
-            metadata_json, delivery_request_id, dedupe_key, created_at, edited_at, deleted_at)
+            source_project_id, target_project_id, target_task_id, worker_run_id, worker_role,
+            profile_identity, summary, deep_link, thread_root_message_id, reply_to_message_id,
+            metadata_json, delivery_request_id, dedupe_key,
+            assignment_id, checkpoint_type, checkpoint_handle,
+            agent_instance_id, pool_member_id, session_owner_id, session_id,
+            created_at, edited_at, deleted_at)
         SELECT
             id,
             channel_id,
@@ -922,9 +1022,14 @@ public sealed class ChannelsDatabaseInitializer
             sender_identity,
             body,
             COALESCE(message_kind, CASE WHEN sender_type = 'agent' THEN 'agent_text' ELSE 'human_text' END),
-            source_kind,
+            CASE WHEN source_kind = 'gateway_delivery' THEN 'external_adapter_message' ELSE source_kind END,
             source_id,
             source_project_id,
+            target_project_id,
+            target_task_id,
+            worker_run_id,
+            worker_role,
+            profile_identity,
             summary,
             deep_link,
             thread_root_message_id,
@@ -932,6 +1037,13 @@ public sealed class ChannelsDatabaseInitializer
             metadata_json,
             delivery_request_id,
             dedupe_key,
+            assignment_id,
+            checkpoint_type,
+            checkpoint_handle,
+            agent_instance_id,
+            pool_member_id,
+            session_owner_id,
+            session_id,
             COALESCE(created_at, datetime('now')),
             edited_at,
             deleted_at
@@ -1126,6 +1238,21 @@ public sealed class ChannelsDatabaseInitializer
     }
 
     /// <summary>
+    /// Ensures v8 membership columns (profile_identity, member_role, left_at)
+    /// exist on channel_memberships. Safe for pre-v8 databases.
+    /// </summary>
+    private static async Task EnsureChannelMembershipsV8ColumnsAsync(SqliteConnection connection,
+        CancellationToken cancellationToken = default)
+    {
+        if (!await TableExistsAsync(connection, "channel_memberships", cancellationToken))
+            return;
+
+        await EnsureColumnAsync(connection, "channel_memberships", "profile_identity", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_memberships", "member_role", "TEXT", cancellationToken);
+        await EnsureColumnAsync(connection, "channel_memberships", "left_at", "TEXT", cancellationToken);
+    }
+
+    /// <summary>
     /// Migration v5: Channel-project links table.
     /// Allows many projects to share one operations channel (e.g., den-system)
     /// while each project retains its own default channel.
@@ -1244,6 +1371,299 @@ public sealed class ChannelsDatabaseInitializer
         -- Backfill existing non-deleted messages into the FTS index
         INSERT INTO channel_messages_fts(rowid, body)
         SELECT id, body FROM channel_messages WHERE deleted_at IS NULL;
+        """;
+
+    /// <summary>
+    /// Migration v8: membership/subscription split, Hermes column purge,
+    /// gateway_delivery quarantine.
+    ///
+    /// Adds first-class channel_subscriptions and channel_subscription_cursors tables.
+    /// Backfills subscriptions from existing membership_purpose membership rows.
+    /// Rebuilds channel_activity_events without hermes_session_key / parent_hermes_session_key.
+    /// Migrates gateway_delivery source_kind rows to external_adapter_message and removes
+    /// gateway_delivery from the green-path CHECK constraint.
+    /// </summary>
+    private const string MigrationV8Sql = """
+        -- =====================================================================
+        -- PART 1: Create channel_subscriptions table
+        -- =====================================================================
+        CREATE TABLE IF NOT EXISTS channel_subscriptions (
+            id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id              INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+            membership_id           INTEGER REFERENCES channel_memberships(id) ON DELETE SET NULL,
+
+            member_type             TEXT NOT NULL,
+            member_identity         TEXT NOT NULL,
+            profile_identity        TEXT,
+            agent_instance_id       TEXT,
+            pool_member_id          TEXT,
+
+            subscription_identity   TEXT NOT NULL,
+            subscription_purpose    TEXT NOT NULL,
+            subscription_status     TEXT NOT NULL DEFAULT 'active'
+                                    CHECK (subscription_status IN ('active','idle','busy','degraded','offline','left','released','quarantined','needs_rebind')),
+
+            source_project_id       TEXT,
+            target_project_id       TEXT,
+            target_task_id          INTEGER,
+            assignment_id           TEXT,
+            worker_run_id           TEXT,
+            worker_role             TEXT,
+
+            session_owner_id        TEXT,
+            session_id              TEXT,
+
+            wake_policy_override    TEXT,
+            last_seen_at            TEXT,
+            last_claimed_at         TEXT,
+            degraded_reason         TEXT,
+            settings_json           TEXT,
+            created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
+
+            UNIQUE(channel_id, subscription_identity)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_channel_subscriptions_channel
+            ON channel_subscriptions(channel_id, subscription_status);
+        CREATE INDEX IF NOT EXISTS idx_channel_subscriptions_member
+            ON channel_subscriptions(member_type, member_identity, subscription_status);
+        CREATE INDEX IF NOT EXISTS idx_channel_subscriptions_instance
+            ON channel_subscriptions(agent_instance_id)
+            WHERE agent_instance_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_subscriptions_pool
+            ON channel_subscriptions(pool_member_id)
+            WHERE pool_member_id IS NOT NULL;
+
+        -- =====================================================================
+        -- PART 2: Create channel_subscription_cursors table
+        -- =====================================================================
+        CREATE TABLE IF NOT EXISTS channel_subscription_cursors (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            subscription_id     INTEGER NOT NULL REFERENCES channel_subscriptions(id) ON DELETE CASCADE,
+            stream_kind         TEXT NOT NULL
+                                CHECK (stream_kind IN ('channel_messages','direct_agent_events','activity_events','agent_work_lifecycle')),
+            last_seen_id        INTEGER NOT NULL DEFAULT 0,
+            last_seen_at        TEXT,
+            cursor_json         TEXT,
+            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(subscription_id, stream_kind)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_channel_subscription_cursors_subscription
+            ON channel_subscription_cursors(subscription_id);
+
+        -- =====================================================================
+        -- PART 3: Add membership v8 columns (profile_identity, member_role, left_at)
+        -- =====================================================================
+        -- These are additive; ALTER TABLE ADD COLUMN is safe for existing rows.
+        -- Use idempotent column checks via the helper pattern.
+
+        -- =====================================================================
+        -- PART 4: Backfill subscriptions from existing membership rows
+        -- The backfill is idempotent: ON CONFLICT(channel_id, subscription_identity) DO NOTHING.
+        -- subscription_identity is derived from member + purpose for backfill safety.
+        -- =====================================================================
+        INSERT OR IGNORE INTO channel_subscriptions(
+            channel_id, membership_id,
+            member_type, member_identity, profile_identity,
+            subscription_identity, subscription_purpose, subscription_status,
+            settings_json)
+        SELECT
+            m.channel_id,
+            m.id,
+            m.member_type,
+            m.member_identity,
+            COALESCE(
+                json_extract(m.settings_json, '$.profile'),
+                CASE WHEN m.member_type = 'agent' THEN m.member_identity ELSE NULL END
+            ),
+            CASE
+                WHEN m.membership_purpose IS NOT NULL AND m.membership_purpose != ''
+                    THEN m.member_type || ':' || m.member_identity || ':' || m.membership_purpose
+                ELSE m.member_type || ':' || m.member_identity || ':ordinary_channel'
+            END,
+            CASE
+                WHEN m.membership_purpose IS NULL OR m.membership_purpose = '' THEN 'ordinary_channel'
+                ELSE m.membership_purpose
+            END,
+            CASE m.membership_status
+                WHEN 'active' THEN 'active'
+                WHEN 'muted' THEN 'idle'
+                WHEN 'left' THEN 'left'
+                WHEN 'banned' THEN 'quarantined'
+                ELSE 'active'
+            END,
+            m.settings_json
+        FROM channel_memberships m
+        WHERE m.membership_status = 'active'
+          AND NOT EXISTS (
+              SELECT 1 FROM channel_subscriptions cs
+              WHERE cs.channel_id = m.channel_id
+                AND cs.subscription_identity = (
+                    CASE
+                        WHEN m.membership_purpose IS NOT NULL AND m.membership_purpose != ''
+                            THEN m.member_type || ':' || m.member_identity || ':' || m.membership_purpose
+                        ELSE m.member_type || ':' || m.member_identity || ':ordinary_channel'
+                    END
+                )
+          );
+
+        -- =====================================================================
+        -- PART 5: Backfill subscription cursors from active read cursors
+        -- Only for agent instance-scoped cursors (instance_id is non-empty).
+        -- Human/UI read cursors stay in channel_read_cursors.
+        -- =====================================================================
+        INSERT OR IGNORE INTO channel_subscription_cursors(
+            subscription_id, stream_kind, last_seen_id, last_seen_at)
+        SELECT
+            cs.id,
+            'channel_messages',
+            COALESCE(crc.last_read_channel_message_id, 0),
+            crc.last_read_at
+        FROM channel_read_cursors crc
+        JOIN channel_subscriptions cs
+            ON cs.channel_id = crc.channel_id
+           AND cs.member_type = crc.reader_type
+           AND cs.member_identity = crc.reader_identity
+        WHERE crc.instance_id IS NOT NULL
+          AND crc.instance_id != ''
+          AND crc.last_read_channel_message_id IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM channel_subscription_cursors csc
+              WHERE csc.subscription_id = cs.id
+                AND csc.stream_kind = 'channel_messages'
+          );
+
+        -- =====================================================================
+        -- PART 6: Rebuild channel_activity_events without Hermes-named columns
+        -- Preserve hermes_session_key values into session_key,
+        -- parent_hermes_session_key into parent_session_key,
+        -- then drop the legacy columns.
+        -- =====================================================================
+        -- First, migrate values from hermes_session_key to session_key and
+        -- from parent_hermes_session_key to parent_session_key where the
+        -- runtime-neutral column is empty.
+        UPDATE channel_activity_events
+        SET session_key = hermes_session_key
+        WHERE (session_key IS NULL OR session_key = '')
+          AND hermes_session_key IS NOT NULL
+          AND hermes_session_key != '';
+
+        UPDATE channel_activity_events
+        SET parent_session_key = parent_hermes_session_key
+        WHERE (parent_session_key IS NULL OR parent_session_key = '')
+          AND parent_hermes_session_key IS NOT NULL
+          AND parent_hermes_session_key != '';
+
+        -- Now rebuild the table without hermes_session_key and parent_hermes_session_key.
+        -- Use the same rebuild pattern as prior migrations.
+        PRAGMA foreign_keys = OFF;
+
+        CREATE TABLE channel_activity_events__v8 (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id            INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+            project_id            TEXT,
+            agent_identity        TEXT NOT NULL,
+            delivery_request_id   TEXT,
+            session_key           TEXT,
+            display_block_id      TEXT,
+            parent_session_key    TEXT,
+            parent_agent_identity TEXT,
+            worker_run_id         TEXT,
+            worker_role           TEXT,
+            agent_instance_id     TEXT,
+            pool_member_id        TEXT,
+            task_id               INTEGER,
+            thread_id             INTEGER,
+            anchor_message_id     INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
+            assignment_id         TEXT,
+            checkpoint_type       TEXT,
+            checkpoint_handle     TEXT,
+            event_type            TEXT NOT NULL
+                                  CHECK (event_type IN ('tool_call_started','tool_call_completed','tool_call_failed','lifecycle_status','aggregation_snapshot','run_summary','agent_work_lifecycle')),
+            status                TEXT NOT NULL DEFAULT 'completed'
+                                  CHECK (status IN ('started','completed','failed','interim','blocked')),
+            delivery_stage        TEXT NOT NULL DEFAULT 'progress',
+            terminal              INTEGER NOT NULL DEFAULT 0 CHECK (terminal IN (0, 1)),
+            final_channel_message_id INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
+            sequence              INTEGER NOT NULL DEFAULT 0 CHECK (sequence >= 0),
+            update_version        INTEGER NOT NULL DEFAULT 1 CHECK (update_version >= 1),
+            title                 TEXT,
+            summary               TEXT,
+            preview_json          TEXT,
+            metadata_json         TEXT,
+            dedupe_key            TEXT,
+            created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        INSERT INTO channel_activity_events__v8(
+            id, channel_id, project_id, agent_identity, delivery_request_id,
+            session_key, display_block_id, parent_session_key,
+            parent_agent_identity, worker_run_id, worker_role,
+            agent_instance_id, pool_member_id, task_id, thread_id, anchor_message_id,
+            assignment_id, checkpoint_type, checkpoint_handle, event_type, status,
+            delivery_stage, terminal, final_channel_message_id, sequence, update_version,
+            title, summary, preview_json, metadata_json, dedupe_key, created_at, updated_at)
+        SELECT
+            id, channel_id, project_id, agent_identity, delivery_request_id,
+            COALESCE(session_key, hermes_session_key),
+            display_block_id,
+            COALESCE(parent_session_key, parent_hermes_session_key),
+            parent_agent_identity, worker_run_id, worker_role,
+            agent_instance_id, pool_member_id, task_id, thread_id, anchor_message_id,
+            assignment_id, checkpoint_type, checkpoint_handle, event_type,
+            COALESCE(status, 'completed'),
+            COALESCE(delivery_stage, 'progress'),
+            COALESCE(terminal, 0),
+            final_channel_message_id,
+            COALESCE(sequence, 0),
+            COALESCE(update_version, 1),
+            title, summary, preview_json, metadata_json, dedupe_key,
+            COALESCE(created_at, datetime('now')),
+            COALESCE(updated_at, datetime('now'))
+        FROM channel_activity_events
+        ORDER BY id;
+
+        DROP TABLE channel_activity_events;
+        ALTER TABLE channel_activity_events__v8 RENAME TO channel_activity_events;
+
+        -- Recreate indexes on the rebuilt table
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_channel_created
+            ON channel_activity_events(channel_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_delivery
+            ON channel_activity_events(delivery_request_id, sequence, id)
+            WHERE delivery_request_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_session
+            ON channel_activity_events(session_key, sequence, id)
+            WHERE session_key IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_channel_activity_events_dedupe
+            ON channel_activity_events(channel_id, dedupe_key)
+            WHERE dedupe_key IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_display_block
+            ON channel_activity_events(display_block_id, sequence, id)
+            WHERE display_block_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_worker_run
+            ON channel_activity_events(worker_run_id, sequence, id)
+            WHERE worker_run_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_assignment
+            ON channel_activity_events(assignment_id, channel_id, id)
+            WHERE assignment_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_channel_activity_events_agent_instance
+            ON channel_activity_events(agent_instance_id, channel_id, id)
+            WHERE agent_instance_id IS NOT NULL;
+
+        -- =====================================================================
+        -- PART 7: gateway_delivery quarantined as historical/tombstone.
+        -- Rows are migrated to external_adapter_message but gateway_delivery
+        -- is kept in the CHECK constraint for backward compatibility.
+        -- New green-path code must not write gateway_delivery.
+        -- =====================================================================
+        UPDATE channel_messages
+        SET source_kind = 'external_adapter_message'
+        WHERE source_kind = 'gateway_delivery';
         """;
 
     /// <summary>

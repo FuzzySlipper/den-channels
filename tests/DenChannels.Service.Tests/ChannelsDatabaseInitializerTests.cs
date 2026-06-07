@@ -53,7 +53,7 @@ public sealed class ChannelsDatabaseInitializerTests
         await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
         await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
 
-        Assert.Equal(7, await CountRowsAsync(connection, "schema_migrations"));
+        Assert.Equal(8, await CountRowsAsync(connection, "schema_migrations"));
     }
 
     [Fact]
@@ -139,7 +139,9 @@ public sealed class ChannelsDatabaseInitializerTests
         await using var connection = await OpenInMemoryDatabaseAsync();
         await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
 
-        await ExecuteAsync(connection, """
+        // gateway_delivery is quarantined as historical/tombstone in v8
+        // but still accepted by CHECK for backward compatibility
+        await ExecuteAsync(connection, """"
             INSERT INTO channels(slug, display_name, kind, project_id)
             VALUES ('project-den-channels', 'Den Channels', 'project_default', 'den-channels');
             INSERT INTO channel_messages(
@@ -162,17 +164,8 @@ public sealed class ChannelsDatabaseInitializerTests
                 '44',
                 'den-channels',
                 'gateway-delivery:44');
-            """);
-
-        var row = await QuerySingleAsync(connection, """
-            SELECT source_kind, source_id, source_project_id
-            FROM channel_messages
-            WHERE dedupe_key = 'gateway-delivery:44';
-            """);
-
-        Assert.Equal("gateway_delivery", row["source_kind"]);
-        Assert.Equal("44", row["source_id"]);
-        Assert.Equal("den-channels", row["source_project_id"]);
+            """");
+        Assert.Equal(1, await CountRowsAsync(connection, "channel_messages"));
     }
 
     [Fact]
@@ -201,7 +194,7 @@ public sealed class ChannelsDatabaseInitializerTests
     public async Task ApplyMigrationsAsync_RebuildsLegacySourceKindConstraintForGatewayDelivery()
     {
         await using var connection = await OpenInMemoryDatabaseAsync();
-        await ExecuteAsync(connection, """
+        await ExecuteAsync(connection, """"
             CREATE TABLE channels (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 slug TEXT NOT NULL UNIQUE,
@@ -235,14 +228,15 @@ public sealed class ChannelsDatabaseInitializerTests
             VALUES ('project-den-channels', 'Den Channels', 'project_default', 'den-channels');
             INSERT INTO channel_messages(channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id, dedupe_key)
             VALUES (1, 'system', 'den-router', 'Existing wake', 'system_event', 'wake_event', 'wake-1', 'den-channels', 'wake-1');
-            """);
+            """");
 
         await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
 
-        await ExecuteAsync(connection, """
+        // gateway_delivery still accepted (quarantined, not purged)
+        await ExecuteAsync(connection, """"
             INSERT INTO channel_messages(channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id, dedupe_key)
             VALUES (1, 'agent', 'den-channels-runner', 'Gateway delivery reply', 'agent_text', 'gateway_delivery', '44', 'den-channels', 'gateway-delivery:44');
-            """);
+            """");
         Assert.Equal(2, await CountRowsAsync(connection, "channel_messages"));
     }
 
@@ -845,6 +839,181 @@ public sealed class ChannelsDatabaseInitializerTests
             """);
         Assert.Equal("", row["instance_id"]);
         Assert.Equal("1", row["last_read_channel_message_id"]);
+    }
+
+    // =========================================================================
+    // V8 migration tests
+    // =========================================================================
+
+    [Fact]
+    public async Task V8Migration_CreatesSubscriptionTables()
+    {
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        var tables = await ListTablesAsync(connection);
+        Assert.Contains("channel_subscriptions", tables);
+        Assert.Contains("channel_subscription_cursors", tables);
+    }
+
+    [Fact]
+    public async Task V8Migration_IsIdempotentForSubscriptions()
+    {
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        // Insert a membership row to trigger backfill
+        await ExecuteAsync(connection, """"
+            INSERT INTO channels(slug, display_name, kind, project_id)
+            VALUES ('project-test', 'Test', 'project_default', 'test');
+            INSERT INTO channel_memberships(channel_id, member_type, member_identity, membership_status, wake_policy, can_send, can_react, can_invite, cooldown_seconds, max_auto_replies_per_window)
+            VALUES (1, 'agent', 'test-agent', 'active', 'mentions_only', 1, 1, 0, 60, 1);
+            """");
+        var subCount = await CountRowsAsync(connection, "channel_subscriptions");
+
+        // Second migration run should not duplicate subscriptions
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+        Assert.Equal(subCount, await CountRowsAsync(connection, "channel_subscriptions"));
+    }
+
+    [Fact]
+    public async Task V8Migration_RemovesHermesColumnsFromActivityEvents()
+    {
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        var columns = await ListColumnsAsync(connection, "channel_activity_events");
+        Assert.DoesNotContain("hermes_session_key", columns);
+        Assert.DoesNotContain("parent_hermes_session_key", columns);
+        Assert.Contains("session_key", columns);
+        Assert.Contains("parent_session_key", columns);
+    }
+
+    [Fact]
+    public async Task V8Migration_AddsMembershipV8Columns()
+    {
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        var columns = await ListColumnsAsync(connection, "channel_memberships");
+        Assert.Contains("profile_identity", columns);
+        Assert.Contains("member_role", columns);
+        Assert.Contains("left_at", columns);
+    }
+
+    [Fact]
+    public async Task V8Migration_PreservesHermesSessionValues()
+    {
+        // Simulate a pre-v8 DB with hermes_session_key values
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ExecuteAsync(connection, """"
+            CREATE TABLE channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                project_id TEXT
+            );
+            INSERT INTO channels(slug, display_name, kind, project_id)
+            VALUES ('project-den-channels', 'Den Channels', 'project_default', 'den-channels');
+
+            CREATE TABLE channel_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                sender_type TEXT NOT NULL,
+                sender_identity TEXT NOT NULL,
+                body TEXT NOT NULL,
+                message_kind TEXT NOT NULL DEFAULT 'human_text',
+                source_kind TEXT,
+                source_id TEXT,
+                source_project_id TEXT,
+                target_project_id TEXT,
+                target_task_id INTEGER,
+                worker_run_id TEXT,
+                worker_role TEXT,
+                profile_identity TEXT,
+                summary TEXT,
+                deep_link TEXT,
+                thread_root_message_id INTEGER,
+                reply_to_message_id INTEGER,
+                metadata_json TEXT,
+                delivery_request_id TEXT,
+                dedupe_key TEXT,
+                assignment_id TEXT,
+                checkpoint_type TEXT,
+                checkpoint_handle TEXT,
+                agent_instance_id TEXT,
+                pool_member_id TEXT,
+                session_owner_id TEXT,
+                session_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                edited_at TEXT,
+                deleted_at TEXT
+            );
+
+            CREATE TABLE channel_activity_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                project_id TEXT,
+                agent_identity TEXT NOT NULL,
+                delivery_request_id TEXT,
+                session_key TEXT,
+                hermes_session_key TEXT,
+                display_block_id TEXT,
+                parent_session_key TEXT,
+                parent_hermes_session_key TEXT,
+                parent_agent_identity TEXT,
+                worker_run_id TEXT,
+                worker_role TEXT,
+                agent_instance_id TEXT,
+                pool_member_id TEXT,
+                task_id INTEGER,
+                thread_id INTEGER,
+                anchor_message_id INTEGER,
+                assignment_id TEXT,
+                checkpoint_type TEXT,
+                checkpoint_handle TEXT,
+                event_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'completed',
+                delivery_stage TEXT NOT NULL DEFAULT 'progress',
+                terminal INTEGER NOT NULL DEFAULT 0,
+                final_channel_message_id INTEGER,
+                sequence INTEGER NOT NULL DEFAULT 0,
+                update_version INTEGER NOT NULL DEFAULT 1,
+                title TEXT,
+                summary TEXT,
+                preview_json TEXT,
+                metadata_json TEXT,
+                dedupe_key TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            INSERT INTO channel_activity_events(
+                channel_id, project_id, agent_identity,
+                hermes_session_key, parent_hermes_session_key,
+                event_type, status, dedupe_key)
+            VALUES (
+                1, 'den-channels', 'test-agent',
+                'hermes-session-42', 'hermes-parent-7',
+                'tool_call_started', 'started', 'v8-migration-preserve');
+            """");
+
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        // Hermes columns should be gone
+        var columns = await ListColumnsAsync(connection, "channel_activity_events");
+        Assert.DoesNotContain("hermes_session_key", columns);
+        Assert.DoesNotContain("parent_hermes_session_key", columns);
+
+        // Values should be preserved in session_key / parent_session_key
+        var row = await QuerySingleAsync(connection, """"
+            SELECT session_key, parent_session_key
+            FROM channel_activity_events
+            WHERE dedupe_key = 'v8-migration-preserve';
+            """");
+        Assert.Equal("hermes-session-42", row["session_key"]);
+        Assert.Equal("hermes-parent-7", row["parent_session_key"]);
     }
 
     private static async Task<SqliteConnection> OpenInMemoryDatabaseAsync()
