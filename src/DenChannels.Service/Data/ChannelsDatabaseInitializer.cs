@@ -1359,18 +1359,40 @@ public sealed class ChannelsDatabaseInitializer
 
         CREATE TRIGGER IF NOT EXISTS channel_messages_fts_delete AFTER DELETE ON channel_messages
         BEGIN
-            INSERT INTO channel_messages_fts(channel_messages_fts, rowid, body) VALUES('delete', old.id, old.body);
+            DELETE FROM channel_messages_fts WHERE rowid = old.id;
         END;
 
         CREATE TRIGGER IF NOT EXISTS channel_messages_fts_update AFTER UPDATE ON channel_messages
         BEGIN
-            INSERT INTO channel_messages_fts(channel_messages_fts, rowid, body) VALUES('delete', old.id, old.body);
+            DELETE FROM channel_messages_fts WHERE rowid = old.id;
             INSERT INTO channel_messages_fts(rowid, body) VALUES (new.id, new.body);
         END;
 
         -- Backfill existing non-deleted messages into the FTS index
         INSERT INTO channel_messages_fts(rowid, body)
         SELECT id, body FROM channel_messages WHERE deleted_at IS NULL;
+        """;
+
+    private const string ChannelMessagesFts5TriggerMaintenanceSql = """
+        DROP TRIGGER IF EXISTS channel_messages_fts_insert;
+        DROP TRIGGER IF EXISTS channel_messages_fts_delete;
+        DROP TRIGGER IF EXISTS channel_messages_fts_update;
+
+        CREATE TRIGGER channel_messages_fts_insert AFTER INSERT ON channel_messages
+        BEGIN
+            INSERT INTO channel_messages_fts(rowid, body) VALUES (new.id, new.body);
+        END;
+
+        CREATE TRIGGER channel_messages_fts_delete AFTER DELETE ON channel_messages
+        BEGIN
+            DELETE FROM channel_messages_fts WHERE rowid = old.id;
+        END;
+
+        CREATE TRIGGER channel_messages_fts_update AFTER UPDATE ON channel_messages
+        BEGIN
+            DELETE FROM channel_messages_fts WHERE rowid = old.id;
+            INSERT INTO channel_messages_fts(rowid, body) VALUES (new.id, new.body);
+        END;
         """;
 
     /// <summary>
@@ -1693,6 +1715,12 @@ public sealed class ChannelsDatabaseInitializer
         -- is kept in the CHECK constraint for backward compatibility.
         -- New green-path code must not write gateway_delivery.
         -- =====================================================================
+        -- Existing live v7 DBs may have an invalid FTS5 update trigger that uses
+        -- the FTS5 'delete' control row on a normal fts5(body) table. Drop it
+        -- before this source_kind-only bulk update; EnsureChannelMessagesFts5Async
+        -- recreates the repaired triggers after migration.
+        DROP TRIGGER IF EXISTS channel_messages_fts_update;
+
         UPDATE channel_messages
         SET source_kind = 'external_adapter_message'
         WHERE source_kind = 'gateway_delivery';
@@ -1728,6 +1756,10 @@ public sealed class ChannelsDatabaseInitializer
         if (!await TableExistsAsync(connection, "channel_messages_fts", cancellationToken))
         {
             await ExecuteNonQueryAsync(connection, MigrationV7Sql, cancellationToken);
+        }
+        else
+        {
+            await ExecuteNonQueryAsync(connection, ChannelMessagesFts5TriggerMaintenanceSql, cancellationToken);
         }
     }
 
