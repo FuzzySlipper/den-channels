@@ -96,7 +96,9 @@ scripts/deploy-live-server.sh --remote
 
 The script publishes `DenChannels.Service` for `linux-x64`, uploads to `den-srv`,
 swaps `/data/services/den-channels/app` atomically through `/data/services/den-channels/app.new`,
-restarts `den-channels.service`, and smoke-tests the backend on its internal URL:
+restarts `den-channels.service`, and smoke-tests the backend on its internal URL. In
+`--remote` mode the smoke commands run over SSH on `SSH_TARGET`, so the default
+`http://127.0.0.1:18081` means the remote host's loopback interface, not the caller's:
 
 - `/health/live`
 - `/health/ready`
@@ -105,7 +107,8 @@ restarts `den-channels.service`, and smoke-tests the backend on its internal URL
 - `/api/not-a-route` as non-HTML 404
 
 The default `SMOKE_BASE_URL=http://127.0.0.1:18081` targets the den-channels backend
-directly on the loopback interface. For smoke through the den-web reverse proxy,
+directly on the loopback interface used by the smoke executor (`SSH_TARGET` in remote
+mode, the local process in local mode). For smoke through the den-web reverse proxy,
 set `SMOKE_BASE_URL=http://192.168.1.10:18080`. Den Web (den-web.service) owns the
 public 0.0.0.0:18080 listener; this script does not rebuild or deploy the frontend.
 
@@ -119,7 +122,8 @@ scripts/deploy-live-server.sh --skip-smoke
 ```
 
 Live defaults are `/data/services/den-channels`, `den-channels.service`, and
-`SMOKE_BASE_URL=http://127.0.0.1:18081` (pointing at the backend, not the public URL).
+`SMOKE_BASE_URL=http://127.0.0.1:18081` (pointing at the backend from the configured
+smoke execution host, not the public URL).
 
 ## Run locally
 

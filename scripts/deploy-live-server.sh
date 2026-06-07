@@ -31,7 +31,8 @@ retired in task #1708; Den Web (den-web.service) owns the public UI at :18080.
 
 Modes:
   local   Run on den-srv from /data/dev/den-channels and install directly.
-  remote  Run from a workstation/agent host and upload to SSH_TARGET first.
+  remote  Run from a workstation/agent host, upload to SSH_TARGET first,
+          then run smoke checks over SSH on SSH_TARGET.
 
 DEPLOY_MODE defaults to auto. Auto selects local when this repo appears to be
 running from /data/dev/den-channels on den-srv, otherwise remote.
@@ -58,7 +59,7 @@ Live defaults:
   REMOTE_SERVICE_ROOT=/data/services/den-channels
   REMOTE_APP_DIR=/data/services/den-channels/app
   SERVICE_NAME=den-channels.service
-  SMOKE_BASE_URL=http://127.0.0.1:18081 (override for remote smoke via den-web proxy)
+  SMOKE_BASE_URL=http://127.0.0.1:18081 (local mode curls locally; remote mode curls from SSH_TARGET)
 EOF_USAGE
 }
 
@@ -137,9 +138,18 @@ Resolved deploy configuration:
   REMOTE_SERVICE_USER=$REMOTE_SERVICE_USER
   REMOTE_SERVICE_GROUP=$REMOTE_SERVICE_GROUP
   SMOKE_BASE_URL=$SMOKE_BASE_URL
+  SMOKE_EXECUTION=$(smoke_execution_description)
   SKIP_RESTART=$SKIP_RESTART
   SKIP_SMOKE=$SKIP_SMOKE
 EOF_CONFIG
+}
+
+smoke_execution_description() {
+  if [[ "$DEPLOY_MODE" == "remote" ]]; then
+    printf 'remote ssh: %s curls %s' "$SSH_TARGET" "$SMOKE_BASE_URL"
+  else
+    printf 'local process curls %s' "$SMOKE_BASE_URL"
+  fi
 }
 
 preflight_tools() {
@@ -346,19 +356,7 @@ sync_server_tree() {
   fi
 }
 
-smoke_http() {
-  if [[ "$SKIP_SMOKE" -eq 1 ]]; then
-    echo "Skipping smoke checks."
-    return
-  fi
-
-  if [[ "$SKIP_RESTART" -eq 1 ]]; then
-    echo "Skipping smoke checks because --skip-restart was used."
-    return
-  fi
-
-  echo "Running smoke checks against $SMOKE_BASE_URL ..."
-
+run_smoke_checks() {
   local tmpdir projects api_miss
   tmpdir="$(mktemp -d /tmp/den-channels-smoke.XXXXXX)"
 
@@ -383,6 +381,36 @@ smoke_http() {
 
   rm -rf "$tmpdir"
   echo "Smoke checks passed."
+}
+
+smoke_http() {
+  if [[ "$SKIP_SMOKE" -eq 1 ]]; then
+    echo "Skipping smoke checks."
+    return
+  fi
+
+  if [[ "$SKIP_RESTART" -eq 1 ]]; then
+    echo "Skipping smoke checks because --skip-restart was used."
+    return
+  fi
+
+  if [[ "$DEPLOY_MODE" == "remote" ]]; then
+    echo "Running smoke checks on $SSH_TARGET against $SMOKE_BASE_URL ..."
+    if ! ssh "$SSH_TARGET" 'command -v curl >/dev/null && command -v python3 >/dev/null'; then
+      echo "Remote smoke checks require curl and python3 on $SSH_TARGET." >&2
+      exit 1
+    fi
+
+    {
+      printf 'set -euo pipefail\n'
+      declare -f run_smoke_checks
+      printf 'SMOKE_BASE_URL=%q run_smoke_checks\n' "$SMOKE_BASE_URL"
+    } | ssh "$SSH_TARGET" 'bash -s'
+    return
+  fi
+
+  echo "Running smoke checks locally against $SMOKE_BASE_URL ..."
+  run_smoke_checks
 }
 
 main() {
