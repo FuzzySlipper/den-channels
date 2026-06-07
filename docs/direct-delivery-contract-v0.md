@@ -2,11 +2,11 @@
 
 Status: **frozen v0** (task #1848)
 
-This document supersedes the earlier `gateway-contract-drift-analysis` and `channels-operations-hub-interface-review` framing. The v0 contract is a Direct Delivery / Channels operations contract. Gateway compatibility is transitional. Core remains workflow truth.
+This document supersedes the earlier `gateway-contract-drift-analysis` and `channels-operations-hub-interface-review` framing. The v0 contract is a Direct Delivery / Channels operations contract. Gateway compatibility alias routes were retired in task #2022 and now return 410 Gone; Core remains workflow truth.
 
 ## Contract owner
 
-Den Channels owns direct-agent event creation, delivery status observation, assignment trace aggregation, and the cross-boundary vocabulary published in this document. Gateway* DTO names remain as transitional compatibility aliases; the semantics are Direct Delivery / Channels operations, not Gateway-owned.
+Den Channels owns direct-agent event creation, delivery status observation, assignment trace aggregation, and the cross-boundary vocabulary published in this document. Gateway* DTO names are retained only for historical/diagnostic compatibility reference; semantics are Direct Delivery / Channels operations, not Gateway-owned.
 
 ## Vocabulary authority
 
