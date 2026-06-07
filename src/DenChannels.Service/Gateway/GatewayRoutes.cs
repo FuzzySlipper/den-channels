@@ -55,7 +55,9 @@ public static class GatewayRoutes
         // GET /api/gateway/memberships
         // -----------------------------------------------------------------------
         gw.MapGet("/memberships", async (
-            ChannelsRepository repository,
+            ChannelRepository channelRepository,
+            MembershipRepository membershipRepository,
+            ChannelProjectLinkRepository projectLinks,
             long? channelId,
             string? projectId,
             bool? includeLeft,
@@ -69,7 +71,7 @@ public static class GatewayRoutes
             ChannelDto? channel;
             if (channelId is not null)
             {
-                channel = await repository.GetChannelAsync(channelId.Value, cancellationToken);
+                channel = await channelRepository.GetChannelAsync(channelId.Value, cancellationToken);
                 if (channel is null)
                     return Results.NotFound(new GatewayErrorDto("channel_not_found",
                         $"Channel {channelId} not found."));
@@ -77,13 +79,13 @@ public static class GatewayRoutes
             else
             {
                 channel = await DirectAgentEventShared.ResolveChannelAsync(
-                    repository, null, projectId, cancellationToken);
+                    channelRepository, projectLinks, null, projectId, cancellationToken);
                 if (channel is null)
                     return Results.NotFound(new GatewayErrorDto("channel_not_found",
                         $"No default channel found for project '{projectId}'."));
             }
 
-            var memberships = await repository.ListMembershipsAsync(
+            var memberships = await membershipRepository.ListMembershipsAsync(
                 channel.Id,
                 200,
                 cancellationToken,
@@ -103,7 +105,7 @@ public static class GatewayRoutes
         // GET /api/gateway/messages/{messageId}
         // -----------------------------------------------------------------------
         gw.MapGet("/messages/{messageId:long}", async (
-            ChannelsRepository repository,
+            ChannelRepository repository,
             long messageId,
             CancellationToken cancellationToken) =>
         {
@@ -119,7 +121,7 @@ public static class GatewayRoutes
         // GET /api/gateway/sources/{sourceKind}/{sourceId}
         // -----------------------------------------------------------------------
         gw.MapGet("/sources/{sourceKind}/{sourceId}", async (
-            ChannelsRepository repository,
+            ChannelRepository repository,
             string sourceKind,
             string sourceId,
             string? sourceProjectId,
@@ -157,7 +159,7 @@ public static class GatewayRoutes
         // in channel-activity-events.
         // -----------------------------------------------------------------------
         gw.MapPost("/system-messages", async (
-            ChannelsRepository repository,
+            ChannelRepository repository,
             PostGatewaySystemMessageRequest request,
             CancellationToken cancellationToken) =>
         {
@@ -248,7 +250,8 @@ public static class GatewayRoutes
         // messages/activity, and Gateway delivery evidence for Den Web #1729/#1737.
         // -----------------------------------------------------------------------
         gw.MapGet("/assignments/{assignmentId}/trace", (
-            ChannelsRepository repository,
+            ChannelRepository repository,
+            ChannelProjectLinkRepository projectLinks,
             IWorkerPoolStateClient workerPoolClient,
             string assignmentId,
             string? projectId,
@@ -256,7 +259,7 @@ public static class GatewayRoutes
             CancellationToken cancellationToken) =>
         {
             return HandleAssignmentTraceAsync(
-                repository, workerPoolClient, assignmentId, projectId, channelId, cancellationToken);
+                repository, projectLinks, workerPoolClient, assignmentId, projectId, channelId, cancellationToken);
         });
 
         return gw;
@@ -546,7 +549,8 @@ public static class GatewayRoutes
     /// Gateway delivery evidence into a single trace response.
     /// </summary>
     public static async Task<IResult> HandleAssignmentTraceAsync(
-        ChannelsRepository repository,
+        ChannelRepository repository,
+        ChannelProjectLinkRepository projectLinks,
         IWorkerPoolStateClient workerPoolClient,
         string assignmentId,
         string? projectId,
@@ -559,7 +563,7 @@ public static class GatewayRoutes
 
         // Resolve channel for scoped database queries.
         var channel = await DirectAgentEventShared.ResolveChannelAsync(
-            repository, channelId, projectId, cancellationToken);
+            repository, projectLinks, channelId, projectId, cancellationToken);
         if (channel is null)
             return Results.NotFound(new GatewayErrorDto("channel_not_found",
                 "No channel found for the given projectId/channelId."));

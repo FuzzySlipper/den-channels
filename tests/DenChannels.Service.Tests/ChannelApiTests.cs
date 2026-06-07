@@ -341,7 +341,7 @@ public sealed class ChannelApiTests : IDisposable
     }
 
     [Fact]
-    public async Task ChannelMembershipDiscovery_IncludeOrdinaryMembershipsReturnsRuntimeChannelsWithoutAgentCommons()
+    public async Task ChannelMembershipDiscovery_ReturnsRuntimeChannelsByDefaultAndAcceptsLegacyFlag()
     {
         using var client = _factory.CreateClient();
         var systemChannel = await PostJsonAsync<ChannelPayload>(client, "/api/channels", new
@@ -1705,6 +1705,73 @@ public sealed class ChannelApiTests : IDisposable
             Assert.Contains(discovered.Subscriptions, s => s.SubscriptionPurpose == purpose);
     }
 
+    [Fact]
+    public async Task PresenceEndpoint_ReturnsMembershipAndSubscriptionProjection()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels-presence/default-channel", new
+        {
+            displayName = "Den Channels Presence"
+        });
+
+        await PutJsonAsync<MembershipPayload>(client, $"/api/channels/{channel.Id}/memberships", new
+        {
+            memberType = "agent",
+            memberIdentity = "presence-coder",
+            wakePolicy = "all_messages_except_self",
+            profileIdentity = "spawned-coder",
+            memberRole = "coder"
+        });
+        await PutJsonAsync<ChannelSubscriptionDto>(client, $"/api/channels/{channel.Id}/subscriptions", new
+        {
+            memberType = "agent",
+            memberIdentity = "presence-coder",
+            subscriptionIdentity = "sub:presence-coder:2106",
+            subscriptionPurpose = "target_work",
+            subscriptionStatus = "busy",
+            targetProjectId = "den-channels",
+            targetTaskId = 2106,
+            assignmentId = "presence-asn-2106",
+            workerRunId = "presence-run-2106",
+            workerRole = "coder"
+        });
+
+        await PutJsonAsync<MembershipPayload>(client, $"/api/channels/{channel.Id}/memberships", new
+        {
+            memberType = "agent",
+            memberIdentity = "presence-reviewer",
+            wakePolicy = "mentions_only"
+        });
+
+        var presence = await client.GetFromJsonAsync<ChannelPresencePayload>(
+            $"/api/channels/{channel.Id}/presence");
+
+        Assert.NotNull(presence);
+        Assert.Equal(channel.Id, presence.ChannelId);
+        Assert.Equal(channel.Slug, presence.ChannelSlug);
+        Assert.Equal(2, presence.Members.Count);
+
+        var coder = Assert.Single(presence.Members, m => m.MemberIdentity == "presence-coder");
+        Assert.Equal("active", coder.MembershipStatus);
+        Assert.Equal("all_messages_except_self", coder.WakePolicy);
+        Assert.Equal("spawned-coder", coder.ProfileIdentity);
+        Assert.Equal("coder", coder.MemberRole);
+        Assert.Equal(1, coder.SubscriptionCount);
+        Assert.Equal(1, coder.ActiveSubscriptionCount);
+        Assert.Contains("busy", coder.SubscriptionStatuses);
+        Assert.Equal("busy", coder.PresenceStatus);
+        Assert.Equal("den-channels", coder.TargetProjectId);
+        Assert.Equal(2106, coder.TargetTaskId);
+        Assert.Equal("presence-asn-2106", coder.AssignmentId);
+        Assert.Equal("presence-run-2106", coder.WorkerRunId);
+        Assert.Equal("coder", coder.WorkerRole);
+
+        var reviewer = Assert.Single(presence.Members, m => m.MemberIdentity == "presence-reviewer");
+        Assert.Equal(0, reviewer.SubscriptionCount);
+        Assert.Equal("no_subscription", reviewer.PresenceStatus);
+        Assert.Empty(reviewer.SubscriptionStatuses);
+    }
+
     public void Dispose()
     {
         _factory.Dispose();
@@ -1880,4 +1947,30 @@ public sealed class ChannelApiTests : IDisposable
         string SubscriptionIdentity, string SubscriptionPurpose, string SubscriptionStatus,
         string? TargetProjectId, long? TargetTaskId, string? AssignmentId, string? WorkerRunId, string? WorkerRole,
         string CreatedAt, string UpdatedAt);
+
+    private sealed record ChannelPresencePayload(
+        long ChannelId,
+        string ChannelSlug,
+        IReadOnlyList<PresenceEntryPayload> Members);
+
+    private sealed record PresenceEntryPayload(
+        long ChannelId,
+        string MemberType,
+        string MemberIdentity,
+        string MembershipStatus,
+        string WakePolicy,
+        string? ProfileIdentity,
+        string? MemberRole,
+        int SubscriptionCount,
+        int ActiveSubscriptionCount,
+        IReadOnlyList<string> SubscriptionStatuses,
+        string? LastSeenAt,
+        string? LastClaimedAt,
+        string? TargetProjectId,
+        long? TargetTaskId,
+        string? AssignmentId,
+        string? WorkerRunId,
+        string? WorkerRole,
+        string PresenceStatus,
+        string SourceSummary);
 }

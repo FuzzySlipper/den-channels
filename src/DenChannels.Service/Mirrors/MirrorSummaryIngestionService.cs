@@ -38,9 +38,9 @@ public sealed class MirrorSummaryIngestionService
     };
 
     private readonly ProjectChannelSyncService _projectChannelSync;
-    private readonly ChannelsRepository _repository;
+    private readonly ChannelRepository _repository;
 
-    public MirrorSummaryIngestionService(ProjectChannelSyncService projectChannelSync, ChannelsRepository repository)
+    public MirrorSummaryIngestionService(ProjectChannelSyncService projectChannelSync, ChannelRepository repository)
     {
         _projectChannelSync = projectChannelSync;
         _repository = repository;

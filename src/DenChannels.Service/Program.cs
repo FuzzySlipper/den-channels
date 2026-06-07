@@ -24,7 +24,12 @@ builder.Services.AddOptions<DenChannelsOptions>()
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSingleton<ChannelsDatabaseInitializer>();
-builder.Services.AddSingleton<ChannelsRepository>();
+builder.Services.AddSingleton<ChannelRepository>();
+builder.Services.AddSingleton<MembershipRepository>();
+builder.Services.AddSingleton<WorkerPoolMembershipRepository>();
+builder.Services.AddSingleton<DirectConversationRepository>();
+builder.Services.AddSingleton<ChannelProjectLinkRepository>();
+builder.Services.AddSingleton<ChannelOverviewRepository>();
 builder.Services.AddSingleton<SubscriptionRepository>();
 builder.Services.AddHttpClient<IDenCoreProjectClient, DenCoreProjectClient>();
 builder.Services.AddSingleton<ProjectChannelSyncService>();

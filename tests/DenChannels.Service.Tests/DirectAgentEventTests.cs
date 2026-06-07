@@ -71,6 +71,34 @@ public sealed class DirectAgentEventTests : IDisposable
         Assert.Contains("recorded", payload.EvidenceSummary);
     }
 
+    [Fact]
+    public async Task PostDirectAgentEvent_WithCoordinationMetadata_SurfacesReadbackFields()
+    {
+        var channel = await EnsureDefaultChannelAsync("dae-coordination-proj");
+        await UpsertMembershipAsync(channel.Id, new
+        {
+            memberType = "agent",
+            memberIdentity = "coordination-agent",
+            wakePolicy = "all_messages_except_self"
+        });
+
+        using var response = await _client.PostAsJsonAsync("/api/direct-agent-events", new
+        {
+            channelId = channel.Id,
+            memberIdentity = "coordination-agent",
+            senderIdentity = "orchestrator",
+            body = "Run a coordination call.",
+            metadataJson = "{\"coordinationCallId\":\"coord-2106\",\"requestKind\":\"tool_call\",\"resultDestinationJson\":\"{\\\"projectId\\\":\\\"den-channels\\\"}\"}"
+        });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var payload = await response.Content.ReadFromJsonAsync<DirectAgentEventPayload>();
+        Assert.NotNull(payload);
+        Assert.Equal("coord-2106", payload.CoordinationCallId);
+        Assert.Equal("tool_call", payload.RequestKind);
+        Assert.Equal("{\"projectId\":\"den-channels\"}", payload.ResultDestinationJson);
+    }
+
     // -------------------------------------------------------------------------
     // No Gateway dependency — the endpoint works without Gateway being available
     // -------------------------------------------------------------------------
@@ -677,7 +705,10 @@ public sealed class DirectAgentEventTests : IDisposable
         string? CompletionStatus,
         int ActiveSubscriptionCount,
         IReadOnlyList<string>? SubscriptionStatuses,
-        IReadOnlyList<string>? SubscriptionIdentities);
+        IReadOnlyList<string>? SubscriptionIdentities,
+        string? CoordinationCallId,
+        string? RequestKind,
+        string? ResultDestinationJson);
 
     private sealed record DirectAgentEventReadbackPayload(
         long EventId,

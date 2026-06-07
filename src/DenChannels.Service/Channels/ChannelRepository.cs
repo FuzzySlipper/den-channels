@@ -1,0 +1,837 @@
+using DenChannels.Service.Configuration;
+using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Options;
+
+namespace DenChannels.Service.Channels;
+
+public sealed class ChannelRepository : ChannelsRepositoryBase
+{
+    public ChannelRepository(IOptions<DenChannelsOptions> options) : base(options)
+    {
+    }
+
+    public async Task<ChannelDto> CreateChannelAsync(CreateChannelRequest request, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO channels(slug, display_name, kind, project_id, space_id, created_by, visibility, settings_json)
+            VALUES ($slug, $displayName, $kind, $projectId, $spaceId, $createdBy, $visibility, $settingsJson)
+            RETURNING id, slug, display_name, kind, project_id, space_id, created_by, visibility, settings_json, created_at, updated_at, archived_at;
+            """;
+        AddChannelParameters(command, request);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        return ReadChannel(reader);
+    }
+
+    public async Task<ChannelDto> EnsureProjectDefaultChannelAsync(string projectId,
+        EnsureProjectDefaultChannelRequest? request = null, CancellationToken cancellationToken = default)
+    {
+        var slug = $"project-{projectId}";
+        var displayName = request?.DisplayName ?? projectId;
+        var createdBy = request?.CreatedBy ?? "system";
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO channels(slug, display_name, kind, project_id, created_by, visibility, settings_json)
+            VALUES ($slug, $displayName, 'project_default', $projectId, $createdBy, 'normal', $settingsJson)
+            ON CONFLICT(project_id) WHERE project_id IS NOT NULL AND kind = 'project_default'
+            DO UPDATE SET
+                display_name = excluded.display_name,
+                settings_json = COALESCE(excluded.settings_json, channels.settings_json),
+                updated_at = datetime('now')
+            RETURNING id, slug, display_name, kind, project_id, space_id, created_by, visibility, settings_json, created_at, updated_at, archived_at;
+            """;
+        command.Parameters.AddWithValue("$slug", slug);
+        command.Parameters.AddWithValue("$displayName", displayName);
+        command.Parameters.AddWithValue("$projectId", projectId);
+        command.Parameters.AddWithValue("$createdBy", createdBy);
+        command.Parameters.AddWithValue("$settingsJson", (object?)request?.SettingsJson ?? DBNull.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        return ReadChannel(reader);
+    }
+
+    public async Task<ChannelDto> EnsureAgentCommonsChannelAsync(CancellationToken cancellationToken = default)
+    {
+        const string settingsJson = "{\"systemManaged\":true,\"channelRole\":\"agent_commons\",\"defaultWakePolicy\":\"mentions_only\"}";
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO channels(slug, display_name, kind, created_by, visibility, settings_json)
+            VALUES ('agent-commons', 'Agent Commons', 'system', 'system', 'normal', $settingsJson)
+            ON CONFLICT(slug) DO UPDATE SET
+                display_name = 'Agent Commons',
+                kind = 'system',
+                visibility = 'normal',
+                settings_json = COALESCE(channels.settings_json, excluded.settings_json),
+                updated_at = datetime('now')
+            RETURNING id, slug, display_name, kind, project_id, space_id, created_by, visibility, settings_json, created_at, updated_at, archived_at;
+            """;
+        command.Parameters.AddWithValue("$settingsJson", settingsJson);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        return ReadChannel(reader);
+    }
+
+    public async Task<IReadOnlyList<ChannelDto>> ListChannelsAsync(string? projectId = null, string? kind = null,
+        int limit = 100, CancellationToken cancellationToken = default)
+    {
+        limit = Math.Clamp(limit, 1, 500);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, slug, display_name, kind, project_id, space_id, created_by, visibility, settings_json, created_at, updated_at, archived_at
+            FROM channels
+            WHERE ($projectId IS NULL OR project_id = $projectId)
+              AND ($kind IS NULL OR kind = $kind)
+            ORDER BY updated_at DESC, id DESC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$projectId", (object?)projectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$kind", (object?)kind ?? DBNull.Value);
+        command.Parameters.AddWithValue("$limit", limit);
+        var rows = new List<ChannelDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadChannel(reader));
+        return rows;
+    }
+
+    public async Task<ChannelDto?> GetChannelAsync(long channelId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, slug, display_name, kind, project_id, space_id, created_by, visibility, settings_json, created_at, updated_at, archived_at
+            FROM channels
+            WHERE id = $id;
+            """;
+        command.Parameters.AddWithValue("$id", channelId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadChannel(reader) : null;
+    }
+
+    public async Task<ChannelMessageDto> PostMessageAsync(long channelId, PostChannelMessageRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO channel_messages(
+                channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
+                target_project_id, target_task_id, worker_run_id, worker_role, profile_identity,
+                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key,
+                assignment_id, checkpoint_type, checkpoint_handle,
+                agent_instance_id, pool_member_id,
+                session_owner_id, session_id)
+            VALUES (
+                $channelId, $senderType, $senderIdentity, $body, $messageKind, $sourceKind, $sourceId, $sourceProjectId,
+                $targetProjectId, $targetTaskId, $workerRunId, $workerRole, $profileIdentity,
+                $summary, $deepLink, $threadRootMessageId, $replyToMessageId, $metadataJson, $deliveryRequestId, $dedupeKey,
+                $assignmentId, $checkpointType, $checkpointHandle,
+                $agentInstanceId, $poolMemberId,
+                $sessionOwnerId, $sessionId)
+            RETURNING id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
+                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key,
+                assignment_id, checkpoint_type, checkpoint_handle,
+                agent_instance_id, pool_member_id,
+                session_owner_id, session_id,
+                target_project_id, target_task_id, worker_run_id, worker_role, profile_identity,
+                created_at, edited_at, deleted_at;
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$senderType", request.SenderType);
+        command.Parameters.AddWithValue("$senderIdentity", request.SenderIdentity);
+        command.Parameters.AddWithValue("$body", request.Body);
+        command.Parameters.AddWithValue("$messageKind", request.MessageKind ?? DefaultMessageKind(request.SenderType));
+        command.Parameters.AddWithValue("$sourceKind", (object?)request.SourceKind ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sourceId", (object?)request.SourceId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sourceProjectId", (object?)request.SourceProjectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$summary", (object?)request.Summary ?? DBNull.Value);
+        command.Parameters.AddWithValue("$deepLink", (object?)request.DeepLink ?? DBNull.Value);
+        command.Parameters.AddWithValue("$threadRootMessageId", (object?)request.ThreadRootMessageId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$replyToMessageId", (object?)request.ReplyToMessageId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$metadataJson", (object?)request.MetadataJson ?? DBNull.Value);
+        command.Parameters.AddWithValue("$deliveryRequestId", (object?)DeriveMessageDeliveryRequestId(request) ?? DBNull.Value);
+        command.Parameters.AddWithValue("$dedupeKey", (object?)request.DedupeKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$assignmentId", (object?)request.AssignmentId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$checkpointType", (object?)request.CheckpointType ?? DBNull.Value);
+        command.Parameters.AddWithValue("$checkpointHandle", (object?)request.CheckpointHandle ?? DBNull.Value);
+        command.Parameters.AddWithValue("$agentInstanceId", (object?)request.AgentInstanceId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$poolMemberId", (object?)request.PoolMemberId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sessionOwnerId", (object?)request.SessionOwnerId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sessionId", (object?)request.SessionId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$targetProjectId", (object?)request.TargetProjectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$targetTaskId", (object?)request.TargetTaskId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workerRunId", (object?)request.WorkerRunId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workerRole", (object?)request.WorkerRole ?? DBNull.Value);
+        command.Parameters.AddWithValue("$profileIdentity", (object?)request.ProfileIdentity ?? DBNull.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        return ReadMessage(reader);
+    }
+
+    public async Task<IReadOnlyList<ChannelMessageDto>> ListMessagesAsync(long channelId, long? afterId = null,
+        string? assignmentId = null, int limit = 100, CancellationToken cancellationToken = default)
+    {
+        limit = Math.Clamp(limit, 1, 500);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+
+        // Build SQL with optional assignment filter
+        var selectColumns = """"
+            SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
+                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key,
+                assignment_id, checkpoint_type, checkpoint_handle, agent_instance_id, pool_member_id,
+                session_owner_id, session_id,
+                target_project_id, target_task_id, worker_run_id, worker_role, profile_identity, created_at, edited_at, deleted_at
+            """";
+
+        if (afterId is null)
+        {
+            command.CommandText = $"""
+                {selectColumns}
+                FROM (
+                    {selectColumns}
+                    FROM channel_messages
+                    WHERE channel_id = $channelId
+                      AND deleted_at IS NULL
+                      AND ($assignmentId IS NULL OR assignment_id = $assignmentId)
+                    ORDER BY id DESC
+                    LIMIT $limit
+                ) AS latest_messages
+                ORDER BY id ASC;
+                """;
+        }
+        else
+        {
+            command.CommandText = $"""
+                {selectColumns}
+                FROM channel_messages
+                WHERE channel_id = $channelId
+                  AND id > $afterId
+                  AND deleted_at IS NULL
+                  AND ($assignmentId IS NULL OR assignment_id = $assignmentId)
+                ORDER BY id ASC
+                LIMIT $limit;
+                """;
+        }
+
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$assignmentId", (object?)assignmentId ?? DBNull.Value);
+        if (afterId is not null)
+            command.Parameters.AddWithValue("$afterId", afterId.Value);
+        command.Parameters.AddWithValue("$limit", limit);
+        var rows = new List<ChannelMessageDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadMessage(reader));
+        return rows;
+    }
+
+    public async Task<ChannelMessageDto?> GetMessageAsync(long messageId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
+                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key,
+                assignment_id, checkpoint_type, checkpoint_handle, agent_instance_id, pool_member_id,
+                session_owner_id, session_id,
+                target_project_id, target_task_id, worker_run_id, worker_role, profile_identity, created_at, edited_at, deleted_at
+            FROM channel_messages
+            WHERE id = $messageId
+              AND deleted_at IS NULL;
+            """;
+        command.Parameters.AddWithValue("$messageId", messageId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadMessage(reader) : null;
+    }
+
+    public async Task<IReadOnlyList<ChannelMessageDto>> ListMessagesBySourceAsync(string sourceKind, string sourceId,
+        string? sourceProjectId = null, int limit = 50, CancellationToken cancellationToken = default)
+    {
+        limit = Math.Clamp(limit, 1, 200);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
+                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key,
+                assignment_id, checkpoint_type, checkpoint_handle, agent_instance_id, pool_member_id,
+                session_owner_id, session_id,
+                target_project_id, target_task_id, worker_run_id, worker_role, profile_identity, created_at, edited_at, deleted_at
+            FROM channel_messages
+            WHERE source_kind = $sourceKind
+              AND source_id = $sourceId
+              AND ($sourceProjectId IS NULL OR source_project_id = $sourceProjectId)
+              AND deleted_at IS NULL
+            ORDER BY id ASC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$sourceKind", sourceKind);
+        command.Parameters.AddWithValue("$sourceId", sourceId);
+        command.Parameters.AddWithValue("$sourceProjectId", (object?)sourceProjectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$limit", limit);
+        var rows = new List<ChannelMessageDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadMessage(reader));
+        return rows;
+    }
+
+    /// <summary>
+    /// Search channel messages across all channels using FTS5 full-text search.
+    /// Supports filters for channel, sender, project, time range, and message kind.
+    /// Results ordered by FTS5 relevance (rank) or creation recency.
+    /// </summary>
+    public async Task<SearchMessagesResponse> SearchMessagesAsync(
+        string? query = null,
+        long? channelId = null,
+        string? senderIdentity = null,
+        string? projectId = null,
+        bool nonProjectOnly = false,
+        string? messageKind = null,
+        DateTime? createdAfter = null,
+        DateTime? createdBefore = null,
+        string? orderBy = null,
+        int offset = 0,
+        int limit = 20,
+        CancellationToken cancellationToken = default)
+    {
+        limit = Math.Clamp(limit, 1, 200);
+        offset = Math.Max(0, offset);
+        var useRelevance = !string.Equals(orderBy, "recency", StringComparison.OrdinalIgnoreCase);
+        var hasFtsQuery = !string.IsNullOrWhiteSpace(query);
+        var safeQuery = hasFtsQuery ? SanitizeFts5Query(query!) : null;
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+
+        // Build the search query
+        var fromClause = hasFtsQuery
+            ? "FROM channel_messages_fts JOIN channel_messages ON channel_messages.id = channel_messages_fts.rowid"
+            : "FROM channel_messages";
+        var joinChannels = " JOIN channels ON channels.id = channel_messages.channel_id";
+
+        var conditions = new List<string>();
+        var cmd = connection.CreateCommand();
+
+        conditions.Add("channel_messages.deleted_at IS NULL");
+
+        if (hasFtsQuery)
+        {
+            conditions.Add("channel_messages_fts MATCH $query");
+            cmd.Parameters.AddWithValue("$query", safeQuery);
+        }
+
+        if (channelId.HasValue)
+        {
+            conditions.Add("channel_messages.channel_id = $channelId");
+            cmd.Parameters.AddWithValue("$channelId", channelId.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(senderIdentity))
+        {
+            conditions.Add("channel_messages.sender_identity = $senderIdentity");
+            cmd.Parameters.AddWithValue("$senderIdentity", senderIdentity.Trim());
+        }
+
+        if (nonProjectOnly)
+        {
+            conditions.Add("channels.project_id IS NULL");
+        }
+        else if (!string.IsNullOrWhiteSpace(projectId))
+        {
+            conditions.Add("channels.project_id = $projectId");
+            cmd.Parameters.AddWithValue("$projectId", projectId.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(messageKind))
+        {
+            conditions.Add("channel_messages.message_kind = $messageKind");
+            cmd.Parameters.AddWithValue("$messageKind", messageKind.Trim());
+        }
+
+        if (createdAfter.HasValue)
+        {
+            conditions.Add("channel_messages.created_at >= $createdAfter");
+            cmd.Parameters.AddWithValue("$createdAfter", createdAfter.Value.ToString("o"));
+        }
+
+        if (createdBefore.HasValue)
+        {
+            conditions.Add("channel_messages.created_at <= $createdBefore");
+            cmd.Parameters.AddWithValue("$createdBefore", createdBefore.Value.ToString("o"));
+        }
+
+        var whereClause = string.Join(" AND ", conditions);
+
+        // Count total matching rows
+        await using var countCmd = connection.CreateCommand();
+        countCmd.CommandText = $"SELECT COUNT(*) {fromClause} {joinChannels} WHERE {whereClause};";
+        foreach (SqliteParameter p in cmd.Parameters)
+            countCmd.Parameters.AddWithValue(p.ParameterName, p.Value);
+        var totalCount = (long)(await countCmd.ExecuteScalarAsync(cancellationToken))!;
+
+        // Build the main query with ordering and pagination
+        const string messageColumns = """
+            channel_messages.id,
+            channel_messages.channel_id,
+            channels.slug,
+            channels.display_name,
+            channels.project_id,
+            channel_messages.sender_type,
+            channel_messages.sender_identity,
+            channel_messages.body,
+            channel_messages.message_kind,
+            channel_messages.source_kind,
+            channel_messages.source_id,
+            channel_messages.source_project_id,
+            channel_messages.target_project_id,
+            channel_messages.target_task_id,
+            channel_messages.worker_run_id,
+            channel_messages.worker_role,
+            channel_messages.profile_identity,
+            channel_messages.summary,
+            channel_messages.deep_link,
+            channel_messages.thread_root_message_id,
+            channel_messages.reply_to_message_id,
+            channel_messages.metadata_json,
+            channel_messages.created_at,
+            channel_messages.edited_at,
+            channel_messages.deleted_at
+            """;
+
+        var orderClause = useRelevance && hasFtsQuery
+            ? "ORDER BY rank"
+            : "ORDER BY channel_messages.created_at DESC, channel_messages.id DESC";
+
+        cmd.CommandText = $"""
+            SELECT {messageColumns}
+            {fromClause}
+            {joinChannels}
+            WHERE {whereClause}
+            {orderClause}
+            LIMIT $limit OFFSET $offset;
+            """;
+
+        cmd.Parameters.AddWithValue("$limit", limit);
+        cmd.Parameters.AddWithValue("$offset", offset);
+
+        var items = new List<SearchableChannelMessageDto>();
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            items.Add(ReadSearchableMessage(reader));
+
+        return new SearchMessagesResponse(
+            Items: items,
+            TotalCount: (int)totalCount,
+            Offset: offset,
+            Limit: limit,
+            Query: hasFtsQuery ? query : null);
+    }
+
+    /// <summary>
+    /// Sanitize user input for safe FTS5 MATCH usage. Removes query-breaking syntax
+    /// while preserving meaningful search terms. Escapes double-quote characters.
+    /// </summary>
+    internal static string SanitizeFts5Query(string rawQuery)
+    {
+        // Strip FTS5 special characters that aren't part of a user search
+        var cleaned = System.Text.RegularExpressions.Regex.Replace(rawQuery, @"[*^]", "");
+        // Escape double-quotes (used for phrase queries in FTS5)
+        cleaned = cleaned.Replace("\"", "\"\"");
+        // Trim whitespace and ensure non-empty
+        var trimmed = cleaned.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) ? "\"\"" : trimmed;
+    }
+
+    private static SearchableChannelMessageDto ReadSearchableMessage(SqliteDataReader reader) => new(
+        reader.GetInt64(0),
+        reader.GetInt64(1),
+        reader.GetString(2),
+        reader.GetString(3),
+        reader.IsDBNull(4) ? null : reader.GetString(4),
+        reader.GetString(5),
+        reader.GetString(6),
+        reader.GetString(7),
+        reader.GetString(8),
+        GetNullableString(reader, 9),
+        GetNullableString(reader, 10),
+        GetNullableString(reader, 11),
+        GetNullableString(reader, 12),
+        GetNullableInt64(reader, 13),
+        GetNullableString(reader, 14),
+        GetNullableString(reader, 15),
+        GetNullableString(reader, 16),
+        GetNullableString(reader, 17),
+        GetNullableString(reader, 18),
+        GetNullableInt64(reader, 19),
+        GetNullableInt64(reader, 20),
+        GetNullableString(reader, 21),
+        reader.GetString(22),
+        GetNullableString(reader, 23),
+        GetNullableString(reader, 24));
+
+
+    public async Task<ChannelMessageDto?> GetMessageByDedupeKeyAsync(long channelId, string dedupeKey,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, channel_id, sender_type, sender_identity, body, message_kind, source_kind, source_id, source_project_id,
+                summary, deep_link, thread_root_message_id, reply_to_message_id, metadata_json, delivery_request_id, dedupe_key,
+                assignment_id, checkpoint_type, checkpoint_handle, agent_instance_id, pool_member_id,
+                session_owner_id, session_id,
+                target_project_id, target_task_id, worker_run_id, worker_role, profile_identity, created_at, edited_at, deleted_at
+            FROM channel_messages
+            WHERE channel_id = $channelId
+              AND dedupe_key = $dedupeKey
+              AND deleted_at IS NULL;
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$dedupeKey", dedupeKey);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadMessage(reader) : null;
+    }
+
+
+    public async Task<IReadOnlyList<ChannelReactionSummaryDto>> ListReactionSummariesAsync(long channelId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT r.channel_message_id, r.reaction_key, r.reactor_type, r.reactor_identity
+            FROM channel_reactions r
+            JOIN channel_messages m ON m.id = r.channel_message_id
+            WHERE m.channel_id = $channelId
+            ORDER BY r.channel_message_id, r.reaction_key, r.created_at, r.id;
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var grouped = new Dictionary<(long MessageId, string ReactionKey), List<string>>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var key = (reader.GetInt64(0), reader.GetString(1));
+            if (!grouped.TryGetValue(key, out var reactors))
+            {
+                reactors = [];
+                grouped[key] = reactors;
+            }
+            reactors.Add($"{reader.GetString(2)}:{reader.GetString(3)}");
+        }
+        return grouped
+            .Select(item => new ChannelReactionSummaryDto(
+                item.Key.MessageId,
+                item.Key.ReactionKey,
+                item.Value.Count,
+                item.Value))
+            .ToList();
+    }
+
+    public async Task<ChannelReactionDto> AddReactionAsync(long messageId, AddChannelReactionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO channel_reactions(channel_message_id, reactor_type, reactor_identity, reaction_key)
+            VALUES ($messageId, $reactorType, $reactorIdentity, $reactionKey)
+            ON CONFLICT(channel_message_id, reactor_type, reactor_identity, reaction_key) DO NOTHING;
+
+            SELECT id, channel_message_id, reactor_type, reactor_identity, reaction_key, created_at
+            FROM channel_reactions
+            WHERE channel_message_id = $messageId
+              AND reactor_type = $reactorType
+              AND reactor_identity = $reactorIdentity
+              AND reaction_key = $reactionKey;
+            """;
+        command.Parameters.AddWithValue("$messageId", messageId);
+        command.Parameters.AddWithValue("$reactorType", request.ReactorType);
+        command.Parameters.AddWithValue("$reactorIdentity", request.ReactorIdentity);
+        command.Parameters.AddWithValue("$reactionKey", request.ReactionKey);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (!reader.HasRows && await reader.NextResultAsync(cancellationToken))
+        {
+        }
+        await reader.ReadAsync(cancellationToken);
+        return ReadReaction(reader);
+    }
+
+    public async Task<ChannelActivityEventDto> AppendActivityEventAsync(long channelId,
+        AppendChannelActivityEventRequest request, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO channel_activity_events(
+                channel_id, project_id, agent_identity, delivery_request_id, session_key,
+                display_block_id, parent_session_key, parent_agent_identity, worker_run_id, worker_role,
+                agent_instance_id, pool_member_id,
+                task_id, thread_id, anchor_message_id,
+                assignment_id, checkpoint_type, checkpoint_handle,
+                event_type, status, delivery_stage, terminal, sequence,
+                title, summary, preview_json, metadata_json, dedupe_key, final_channel_message_id)
+            VALUES (
+                $channelId, $projectId, $agentIdentity, $deliveryRequestId, $sessionKey,
+                $displayBlockId, $parentSessionKey, $parentAgentIdentity, $workerRunId, $workerRole,
+                $agentInstanceId, $poolMemberId,
+                $taskId, $threadId, $anchorMessageId,
+                $assignmentId, $checkpointType, $checkpointHandle,
+                $eventType, $status, $deliveryStage, $terminal, $sequence,
+                $title, $summary, $previewJson, $metadataJson, $dedupeKey, $finalChannelMessageId)
+            ON CONFLICT(channel_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE SET
+                project_id = COALESCE(excluded.project_id, channel_activity_events.project_id),
+                agent_identity = excluded.agent_identity,
+                delivery_request_id = COALESCE(excluded.delivery_request_id, channel_activity_events.delivery_request_id),
+                session_key = COALESCE(excluded.session_key, channel_activity_events.session_key),
+                display_block_id = COALESCE(excluded.display_block_id, channel_activity_events.display_block_id),
+                parent_session_key = COALESCE(excluded.parent_session_key, channel_activity_events.parent_session_key),
+                parent_agent_identity = COALESCE(excluded.parent_agent_identity, channel_activity_events.parent_agent_identity),
+                worker_run_id = COALESCE(excluded.worker_run_id, channel_activity_events.worker_run_id),
+                worker_role = COALESCE(excluded.worker_role, channel_activity_events.worker_role),
+                task_id = COALESCE(excluded.task_id, channel_activity_events.task_id),
+                thread_id = COALESCE(excluded.thread_id, channel_activity_events.thread_id),
+                anchor_message_id = COALESCE(excluded.anchor_message_id, channel_activity_events.anchor_message_id),
+                assignment_id = COALESCE(excluded.assignment_id, channel_activity_events.assignment_id),
+                checkpoint_type = COALESCE(excluded.checkpoint_type, channel_activity_events.checkpoint_type),
+                checkpoint_handle = COALESCE(excluded.checkpoint_handle, channel_activity_events.checkpoint_handle),
+                event_type = excluded.event_type,
+                status = excluded.status,
+                delivery_stage = excluded.delivery_stage,
+                terminal = excluded.terminal,
+                sequence = excluded.sequence,
+                title = COALESCE(excluded.title, channel_activity_events.title),
+                summary = COALESCE(excluded.summary, channel_activity_events.summary),
+                preview_json = COALESCE(excluded.preview_json, channel_activity_events.preview_json),
+                metadata_json = COALESCE(excluded.metadata_json, channel_activity_events.metadata_json),
+                final_channel_message_id = COALESCE(excluded.final_channel_message_id, channel_activity_events.final_channel_message_id),
+                update_version = channel_activity_events.update_version + 1,
+                updated_at = datetime('now')
+            RETURNING id, channel_id, project_id, agent_identity, delivery_request_id, session_key,
+                display_block_id, parent_session_key, parent_agent_identity, worker_run_id, worker_role,
+                agent_instance_id, pool_member_id,
+                task_id, thread_id, anchor_message_id,
+                assignment_id, checkpoint_type, checkpoint_handle,
+                event_type, status, delivery_stage, terminal, sequence,
+                update_version, title, summary, preview_json, metadata_json, dedupe_key, final_channel_message_id,
+                created_at, updated_at;
+            """;
+        AddActivityParameters(command, channelId, request);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        return ReadActivityEvent(reader);
+    }
+
+    public async Task<ChannelActivityEventDto?> UpdateActivityEventAsync(long activityEventId,
+        UpdateChannelActivityEventRequest request, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE channel_activity_events
+            SET status = COALESCE($status, status),
+                delivery_stage = COALESCE($deliveryStage, delivery_stage),
+                terminal = COALESCE($terminal, terminal),
+                title = COALESCE($title, title),
+                summary = COALESCE($summary, summary),
+                preview_json = COALESCE($previewJson, preview_json),
+                metadata_json = COALESCE($metadataJson, metadata_json),
+                final_channel_message_id = COALESCE($finalChannelMessageId, final_channel_message_id),
+                update_version = update_version + 1,
+                updated_at = datetime('now')
+            WHERE id = $id
+            RETURNING id, channel_id, project_id, agent_identity, delivery_request_id, session_key,
+                display_block_id, parent_session_key, parent_agent_identity, worker_run_id, worker_role,
+                agent_instance_id, pool_member_id,
+                task_id, thread_id, anchor_message_id,
+                assignment_id, checkpoint_type, checkpoint_handle,
+                event_type, status, delivery_stage, terminal, sequence,
+                update_version, title, summary, preview_json, metadata_json, dedupe_key, final_channel_message_id,
+                created_at, updated_at;
+            """;
+        command.Parameters.AddWithValue("$id", activityEventId);
+        command.Parameters.AddWithValue("$status", (object?)request.Status ?? DBNull.Value);
+        command.Parameters.AddWithValue("$deliveryStage", NormalizeDeliveryStage(request.DeliveryStage));
+        command.Parameters.AddWithValue("$terminal", request.Terminal.HasValue ? request.Terminal.Value ? 1 : 0 : DBNull.Value);
+        command.Parameters.AddWithValue("$title", NormalizeActivityText(request.Title, 200));
+        command.Parameters.AddWithValue("$summary", NormalizeActivityText(request.Summary, 1000));
+        command.Parameters.AddWithValue("$previewJson", NormalizeActivityText(request.PreviewJson, 4000));
+        command.Parameters.AddWithValue("$metadataJson", NormalizeActivityText(request.MetadataJson, 4000));
+        command.Parameters.AddWithValue("$finalChannelMessageId", (object?)request.FinalChannelMessageId ?? DBNull.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadActivityEvent(reader) : null;
+    }
+
+    public async Task<IReadOnlyList<ChannelActivityEventDto>> ListActivityEventsAsync(long channelId,
+        string? deliveryRequestId = null, string? sessionKey = null, string? displayBlockId = null,
+        string? workerRunId = null, string? agentInstanceId = null, long? anchorMessageId = null, long? taskId = null,
+        string? assignmentId = null, long? afterId = null,
+        int limit = 100, CancellationToken cancellationToken = default)
+    {
+        limit = Math.Clamp(limit, 1, 500);
+        var hasScopedFilter = deliveryRequestId is not null
+                              || sessionKey is not null
+                              || displayBlockId is not null
+                              || workerRunId is not null
+                              || agentInstanceId is not null
+                              || anchorMessageId is not null
+                              || taskId is not null
+                              || assignmentId is not null;
+        var useLatestChannelWindow = !hasScopedFilter && afterId is null;
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        const string selectColumns = """
+            id, channel_id, project_id, agent_identity, delivery_request_id, session_key,
+                display_block_id, parent_session_key, parent_agent_identity, worker_run_id, worker_role,
+                agent_instance_id, pool_member_id,
+                task_id, thread_id, anchor_message_id,
+                assignment_id, checkpoint_type, checkpoint_handle,
+                event_type, status, delivery_stage, terminal, sequence,
+                update_version, title, summary, preview_json, metadata_json, dedupe_key, final_channel_message_id,
+                created_at, updated_at
+            """;
+        command.CommandText = useLatestChannelWindow
+            ? $""""
+              SELECT {selectColumns}
+              FROM (
+                  SELECT {selectColumns}
+                  FROM channel_activity_events
+                  WHERE channel_id = $channelId
+                  ORDER BY id DESC
+                  LIMIT $limit
+              ) recent_activity_events
+              ORDER BY id ASC;
+              """"
+            : $""""
+              SELECT {selectColumns}
+              FROM channel_activity_events
+              WHERE channel_id = $channelId
+                AND ($deliveryRequestId IS NULL OR delivery_request_id = $deliveryRequestId)
+                AND ($sessionKey IS NULL OR session_key = $sessionKey)
+                AND ($displayBlockId IS NULL OR display_block_id = $displayBlockId)
+                AND ($workerRunId IS NULL OR worker_run_id = $workerRunId)
+                AND ($agentInstanceId IS NULL OR agent_instance_id = $agentInstanceId)
+                AND ($anchorMessageId IS NULL OR anchor_message_id = $anchorMessageId)
+                AND ($taskId IS NULL OR task_id = $taskId)
+                AND ($assignmentId IS NULL OR assignment_id = $assignmentId)
+                AND ($afterId IS NULL OR id > $afterId)
+              ORDER BY sequence ASC, id ASC
+              LIMIT $limit;
+              """";
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$deliveryRequestId", (object?)deliveryRequestId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sessionKey", (object?)sessionKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$displayBlockId", (object?)displayBlockId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workerRunId", (object?)workerRunId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$agentInstanceId", (object?)agentInstanceId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$anchorMessageId", (object?)anchorMessageId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$taskId", (object?)taskId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$assignmentId", (object?)assignmentId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$afterId", (object?)afterId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$limit", limit);
+        var rows = new List<ChannelActivityEventDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadActivityEvent(reader));
+        return rows;
+    }
+
+
+    public async Task<ChannelReadCursorDto?> GetReadCursorAsync(long channelId, string readerType, string readerIdentity,
+        string? instanceId = null, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        // Normalize: null/empty instanceId matches profile-level cursor (instance_id = '')
+        var instanceFilter = string.IsNullOrEmpty(instanceId) ? "" : instanceId;
+        command.CommandText = """
+            SELECT id, channel_id, reader_type, reader_identity, instance_id,
+                   last_read_channel_message_id, last_read_at, created_at, updated_at
+            FROM channel_read_cursors
+            WHERE channel_id = $channelId
+              AND reader_type = $readerType
+              AND reader_identity = $readerIdentity
+              AND instance_id = $instanceId;
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$readerType", readerType);
+        command.Parameters.AddWithValue("$readerIdentity", readerIdentity);
+        command.Parameters.AddWithValue("$instanceId", instanceFilter);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadReadCursor(reader) : null;
+    }
+
+    /// <summary>
+    /// Upsert a read cursor for profile-level or instance-level scoping.
+    /// Two instances sharing the same profile identity maintain independent read positions.
+    /// Profile-level cursors use instance_id = '' for proper SQLite UNIQUE enforcement.
+    /// </summary>
+    public async Task<ChannelReadCursorDto> UpsertReadCursorAsync(long channelId, UpsertChannelReadCursorRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        // Normalize: null/empty instanceId -> '' (profile-level cursor with proper uniqueness)
+        var normalizedInstanceId = string.IsNullOrEmpty(request.InstanceId) ? "" : request.InstanceId;
+        command.CommandText = """
+            INSERT INTO channel_read_cursors(channel_id, reader_type, reader_identity, instance_id, last_read_channel_message_id)
+            VALUES ($channelId, $readerType, $readerIdentity, $instanceId, $lastReadMessageId)
+            ON CONFLICT(channel_id, reader_type, reader_identity, instance_id)
+            DO UPDATE SET
+                last_read_channel_message_id = COALESCE($lastReadMessageId, channel_read_cursors.last_read_channel_message_id),
+                last_read_at = datetime('now'),
+                updated_at = datetime('now')
+            RETURNING id, channel_id, reader_type, reader_identity, instance_id,
+                last_read_channel_message_id, last_read_at, created_at, updated_at;
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$readerType", request.ReaderType);
+        command.Parameters.AddWithValue("$readerIdentity", request.ReaderIdentity);
+        command.Parameters.AddWithValue("$instanceId", normalizedInstanceId);
+        command.Parameters.AddWithValue("$lastReadMessageId", (object?)request.LastReadChannelMessageId ?? DBNull.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        return ReadReadCursor(reader);
+    }
+
+    /// <summary>
+    /// List read cursors for a channel, optionally filtered by reader identity or instance.
+    /// Profile-level cursors use instance_id = '' internally.
+    /// When instanceId is null/omitted, returns ALL cursors (both profile and instance).
+    /// When instanceId is provided, filters to that specific instance ('' for profile-level).
+    /// </summary>
+    public async Task<IReadOnlyList<ChannelReadCursorDto>> ListReadCursorsAsync(long channelId,
+        string? readerType = null, string? readerIdentity = null, string? instanceId = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, channel_id, reader_type, reader_identity, instance_id,
+                   last_read_channel_message_id, last_read_at, created_at, updated_at
+            FROM channel_read_cursors
+            WHERE channel_id = $channelId
+              AND ($readerType IS NULL OR reader_type = $readerType)
+              AND ($readerIdentity IS NULL OR reader_identity = $readerIdentity)
+              AND ($instanceId IS NULL OR instance_id = $instanceId)
+            ORDER BY reader_type, reader_identity, instance_id, id ASC;
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$readerType", (object?)readerType ?? DBNull.Value);
+        command.Parameters.AddWithValue("$readerIdentity", (object?)readerIdentity ?? DBNull.Value);
+        // When instanceId is explicitly provided (including ''), normalize and filter;
+        // when null, the $instanceId IS NULL condition matches all rows.
+        command.Parameters.AddWithValue("$instanceId", instanceId is null ? DBNull.Value : (object)(string.IsNullOrEmpty(instanceId) ? "" : instanceId));
+        var rows = new List<ChannelReadCursorDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadReadCursor(reader));
+        return rows;
+    }
+
+}

@@ -79,9 +79,9 @@ public sealed class DenCoreProjectClient : IDenCoreProjectClient
 public sealed class ProjectChannelSyncService
 {
     private readonly IDenCoreProjectClient _projectClient;
-    private readonly ChannelsRepository _repository;
+    private readonly ChannelRepository _repository;
 
-    public ProjectChannelSyncService(IDenCoreProjectClient projectClient, ChannelsRepository repository)
+    public ProjectChannelSyncService(IDenCoreProjectClient projectClient, ChannelRepository repository)
     {
         _projectClient = projectClient;
         _repository = repository;

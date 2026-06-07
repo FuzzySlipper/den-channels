@@ -21,7 +21,8 @@ public static class DirectAgentEventRoutes
         // den-host's EventsListPath should reference this path.
         // -----------------------------------------------------------------------
         group.MapGet("/", async (
-            ChannelsRepository repository,
+            ChannelRepository repository,
+            ChannelProjectLinkRepository projectLinks,
             long? channelId,
             string? projectId,
             long? afterId,
@@ -33,7 +34,7 @@ public static class DirectAgentEventRoutes
                     "Provide channelId or projectId."));
 
             var channel = await DirectAgentEventShared.ResolveChannelAsync(
-                repository, channelId, projectId, cancellationToken);
+                repository, projectLinks, channelId, projectId, cancellationToken);
             if (channel is null)
                 return Results.NotFound(new DirectAgentEventErrorDto("channel_not_found",
                     channelId is not null
@@ -66,7 +67,8 @@ public static class DirectAgentEventRoutes
         // Returns immediately with durable evidence. No Gateway dependency.
         // -----------------------------------------------------------------------
         group.MapPost("/", async (
-            ChannelsRepository repository,
+            ChannelRepository repository,
+            ChannelProjectLinkRepository projectLinks,
             SubscriptionRepository subscriptionRepo,
             RecordDirectAgentEventRequest request,
             CancellationToken cancellationToken) =>
@@ -88,7 +90,7 @@ public static class DirectAgentEventRoutes
                     "Provide body for the direct message request."));
 
             var channel = await DirectAgentEventShared.ResolveChannelAsync(
-                repository, request.ChannelId, request.ProjectId, cancellationToken);
+                repository, projectLinks, request.ChannelId, request.ProjectId, cancellationToken);
             if (channel is null)
                 return Results.NotFound(new DirectAgentEventErrorDto("channel_not_found",
                     request.ChannelId is not null
@@ -198,7 +200,8 @@ public static class DirectAgentEventRoutes
         // Works without Gateway; uses only Channels data.
         // -----------------------------------------------------------------------
         group.MapGet("/{eventId:long}", async (
-            ChannelsRepository repository,
+            ChannelRepository repository,
+            ChannelProjectLinkRepository projectLinks,
             SubscriptionRepository subscriptionRepo,
             long eventId,
             CancellationToken cancellationToken) =>

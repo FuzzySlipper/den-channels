@@ -17,7 +17,8 @@ public static class ChannelRoutes
         // the canonical implementation lives in GatewayRoutes under /api/gateway.
         // -----------------------------------------------------------------------
         api.MapGet("/assignments/{assignmentId}/trace", async (
-            ChannelsRepository repository,
+            ChannelRepository repository,
+            ChannelProjectLinkRepository projectLinks,
             AgentsOverview.IWorkerPoolStateClient workerPoolClient,
             string assignmentId,
             string? projectId,
@@ -26,10 +27,10 @@ public static class ChannelRoutes
         {
             // Delegate to the same handler
             return await Gateway.GatewayRoutes.HandleAssignmentTraceAsync(
-                repository, workerPoolClient, assignmentId, projectId, channelId, cancellationToken);
+                repository, projectLinks, workerPoolClient, assignmentId, projectId, channelId, cancellationToken);
         });
 
-        api.MapGet("/channels", async (ChannelsRepository repository, string? projectId, string? kind, int? limit,
+        api.MapGet("/channels", async (ChannelRepository repository, string? projectId, string? kind, int? limit,
             CancellationToken cancellationToken) => Results.Ok(await repository.ListChannelsAsync(
                 projectId, kind, limit ?? 100, cancellationToken)));
 
@@ -45,7 +46,7 @@ public static class ChannelRoutes
         //   offset, limit
         // -----------------------------------------------------------------------
         api.MapGet("/channels/search", async (
-            ChannelsRepository repository,
+            ChannelRepository repository,
             HttpContext httpContext,
             string? q,
             long? channelId = null,
@@ -162,7 +163,7 @@ public static class ChannelRoutes
             return Results.Ok(result);
         });
 
-        api.MapPost("/channels", async (ChannelsRepository repository, CreateChannelRequest request,
+        api.MapPost("/channels", async (ChannelRepository repository, CreateChannelRequest request,
             CancellationToken cancellationToken) =>
         {
             try
@@ -176,34 +177,34 @@ public static class ChannelRoutes
             }
         });
 
-        api.MapGet("/channels/{channelId:long}", async (ChannelsRepository repository, long channelId,
+        api.MapGet("/channels/{channelId:long}", async (ChannelRepository repository, long channelId,
             CancellationToken cancellationToken) =>
         {
             var channel = await repository.GetChannelAsync(channelId, cancellationToken);
             return channel is null ? Results.NotFound() : Results.Ok(channel);
         });
 
-        api.MapPut("/projects/{projectId}/default-channel", async (ChannelsRepository repository, string projectId,
+        api.MapPut("/projects/{projectId}/default-channel", async (ChannelRepository repository, string projectId,
             EnsureProjectDefaultChannelRequest request, CancellationToken cancellationToken) =>
         {
             var channel = await repository.EnsureProjectDefaultChannelAsync(projectId, request, cancellationToken);
             return Results.Ok(channel);
         });
 
-        api.MapPut("/agent-commons", async (ChannelsRepository repository, CancellationToken cancellationToken) =>
+        api.MapPut("/agent-commons", async (ChannelRepository repository, CancellationToken cancellationToken) =>
         {
             var channel = await repository.EnsureAgentCommonsChannelAsync(cancellationToken);
             return Results.Ok(channel);
         });
 
-        api.MapPut("/agent-commons/memberships/{agentIdentity}", async (ChannelsRepository repository, string agentIdentity,
+        api.MapPut("/agent-commons/memberships/{agentIdentity}", async (MembershipRepository repository, string agentIdentity,
             CancellationToken cancellationToken) =>
         {
             var membership = await repository.EnsureAgentCommonsMembershipAsync(agentIdentity, null, cancellationToken);
             return Results.Ok(membership);
         });
 
-        api.MapPost("/agent-commons/brake", async (ChannelsRepository repository, AgentCommonsBrakeRequest request,
+        api.MapPost("/agent-commons/brake", async (MembershipRepository repository, AgentCommonsBrakeRequest request,
             CancellationToken cancellationToken) =>
         {
             var membershipStatus = string.IsNullOrWhiteSpace(request.MembershipStatus) ? "muted" : request.MembershipStatus.Trim();
@@ -222,7 +223,7 @@ public static class ChannelRoutes
             return Results.Ok(result);
         });
 
-        api.MapPost("/channels/{channelId:long}/messages", async (ChannelsRepository repository, long channelId,
+        api.MapPost("/channels/{channelId:long}/messages", async (ChannelRepository repository, long channelId,
             PostChannelMessageRequest request, CancellationToken cancellationToken) =>
         {
             try
@@ -236,15 +237,15 @@ public static class ChannelRoutes
             }
         });
 
-        api.MapGet("/channels/{channelId:long}/messages", async (ChannelsRepository repository, long channelId,
+        api.MapGet("/channels/{channelId:long}/messages", async (ChannelRepository repository, long channelId,
             long? afterId, string? assignmentId, int? limit, CancellationToken cancellationToken) => Results.Ok(
                 await repository.ListMessagesAsync(channelId, afterId, assignmentId, limit ?? 100, cancellationToken)));
 
-        api.MapGet("/channels/{channelId:long}/reactions", async (ChannelsRepository repository, long channelId,
+        api.MapGet("/channels/{channelId:long}/reactions", async (ChannelRepository repository, long channelId,
             CancellationToken cancellationToken) => Results.Ok(
                 await repository.ListReactionSummariesAsync(channelId, cancellationToken)));
 
-        api.MapPost("/channels/{channelId:long}/activity-events", async (ChannelsRepository repository, long channelId,
+        api.MapPost("/channels/{channelId:long}/activity-events", async (ChannelRepository repository, long channelId,
             AppendChannelActivityEventRequest request, CancellationToken cancellationToken) =>
         {
             try
@@ -258,13 +259,13 @@ public static class ChannelRoutes
             }
         });
 
-        api.MapGet("/channels/{channelId:long}/activity-events", async (ChannelsRepository repository, long channelId,
+        api.MapGet("/channels/{channelId:long}/activity-events", async (ChannelRepository repository, long channelId,
             string? deliveryRequestId, string? sessionKey, string? displayBlockId, string? workerRunId,
             string? agentInstanceId, long? anchorMessageId, long? taskId, string? assignmentId, long? afterId, int? limit, CancellationToken cancellationToken) => Results.Ok(
                 await repository.ListActivityEventsAsync(channelId, deliveryRequestId, sessionKey, displayBlockId,
                     workerRunId, agentInstanceId, anchorMessageId, taskId, assignmentId, afterId, limit ?? 100, cancellationToken)));
 
-        api.MapPatch("/channel-activity-events/{activityEventId:long}", async (ChannelsRepository repository, long activityEventId,
+        api.MapPatch("/channel-activity-events/{activityEventId:long}", async (ChannelRepository repository, long activityEventId,
             UpdateChannelActivityEventRequest request, CancellationToken cancellationToken) =>
         {
             try
@@ -300,11 +301,11 @@ public static class ChannelRoutes
         // Read cursor endpoints (task #1769 shared-profile instance support)
         // -----------------------------------------------------------------------
 
-        api.MapGet("/channels/{channelId:long}/read-cursors", async (ChannelsRepository repository, long channelId,
+        api.MapGet("/channels/{channelId:long}/read-cursors", async (ChannelRepository repository, long channelId,
             string? readerType, string? readerIdentity, string? instanceId, CancellationToken cancellationToken) =>
             Results.Ok(await repository.ListReadCursorsAsync(channelId, readerType, readerIdentity, instanceId, cancellationToken)));
 
-        api.MapPut("/channels/{channelId:long}/read-cursors", async (ChannelsRepository repository, long channelId,
+        api.MapPut("/channels/{channelId:long}/read-cursors", async (ChannelRepository repository, long channelId,
             UpsertChannelReadCursorRequest request, CancellationToken cancellationToken) =>
         {
             try
@@ -324,7 +325,7 @@ public static class ChannelRoutes
         // Den Web #1729 consumer: given assignmentId, return bounded visible messages
         // plus non-waking activity/checkpoint events with channel/message/delivery handles.
         // -----------------------------------------------------------------------
-        api.MapGet("/assignments/{assignmentId}/transcript", async (ChannelsRepository repository,
+        api.MapGet("/assignments/{assignmentId}/transcript", async (ChannelRepository repository,
             string assignmentId, long? channelId, string? projectId, int? messageLimit, int? activityLimit,
             CancellationToken cancellationToken) =>
         {
@@ -360,7 +361,7 @@ public static class ChannelRoutes
                 ActivityEvents: activityEvents));
         });
 
-        api.MapPut("/channels/{channelId:long}/memberships", async (ChannelsRepository repository, long channelId,
+        api.MapPut("/channels/{channelId:long}/memberships", async (MembershipRepository repository, long channelId,
             UpsertChannelMembershipRequest request, CancellationToken cancellationToken) =>
         {
             try
@@ -374,7 +375,7 @@ public static class ChannelRoutes
             }
         });
 
-        api.MapGet("/channel-memberships", async Task<IResult> (ChannelsRepository repository,
+        api.MapGet("/channel-memberships", async Task<IResult> (MembershipRepository repository,
             string? memberIdentity, string? membershipPurpose, string? projectId, long? channelId, bool? includeLeft,
             bool? includeOrdinaryMemberships,
             int? limit, CancellationToken cancellationToken) =>
@@ -401,14 +402,14 @@ public static class ChannelRoutes
         // Worker-pool lobby endpoints (task #1771)
         // -----------------------------------------------------------------------
 
-        api.MapPut("/worker-pool/lobby", async (ChannelsRepository repository,
+        api.MapPut("/worker-pool/lobby", async (WorkerPoolMembershipRepository repository,
             CancellationToken cancellationToken) =>
         {
             var channel = await repository.EnsureWorkerPoolLobbyChannelAsync(cancellationToken);
             return Results.Ok(channel);
         });
 
-        api.MapPut("/worker-pool/lobby/presence", async (ChannelsRepository repository,
+        api.MapPut("/worker-pool/lobby/presence", async (WorkerPoolMembershipRepository repository,
             UpsertWorkerPoolLobbyPresenceRequest request, CancellationToken cancellationToken) =>
         {
             var lobby = await repository.EnsureWorkerPoolLobbyChannelAsync(cancellationToken);
@@ -417,7 +418,7 @@ public static class ChannelRoutes
         });
 
         api.MapPost("/worker-pool/lobby/presence/{memberIdentity}/acknowledge-release", async (
-            ChannelsRepository repository, string memberIdentity,
+            WorkerPoolMembershipRepository repository, string memberIdentity,
             string? agentInstanceId, string? poolMemberId,
             CancellationToken cancellationToken) =>
         {
@@ -429,7 +430,7 @@ public static class ChannelRoutes
                 : Results.Ok(presence);
         });
 
-        api.MapGet("/worker-pool/lobby/presence", async (ChannelsRepository repository,
+        api.MapGet("/worker-pool/lobby/presence", async (WorkerPoolMembershipRepository repository,
             CancellationToken cancellationToken) =>
         {
             var lobby = await repository.EnsureWorkerPoolLobbyChannelAsync(cancellationToken);
@@ -457,7 +458,7 @@ public static class ChannelRoutes
                 Members: members.ToList()));
         });
 
-        api.MapPost("/channel-messages/{messageId:long}/reactions", async (ChannelsRepository repository, long messageId,
+        api.MapPost("/channel-messages/{messageId:long}/reactions", async (ChannelRepository repository, long messageId,
             AddChannelReactionRequest request, CancellationToken cancellationToken) =>
         {
             try
@@ -478,7 +479,7 @@ public static class ChannelRoutes
         /// Returns per-run identities with routing handles for supervisor dispatch.
         /// </summary>
         api.MapGet("/worker-pool/lobby/presence/by-instance", async (
-            ChannelsRepository repository,
+            WorkerPoolMembershipRepository repository,
             string? agentInstanceId,
             CancellationToken cancellationToken) =>
         {
@@ -498,7 +499,7 @@ public static class ChannelRoutes
         /// Channels-only — does not claim to release Core capacity or Gateway delivery.
         /// </summary>
         api.MapPost("/worker-pool/lobby/presence/release-child-run", async (
-            ChannelsRepository repository,
+            WorkerPoolMembershipRepository repository,
             string memberIdentity,
             string? agentInstanceId,
             string? poolMemberId,
@@ -521,7 +522,7 @@ public static class ChannelRoutes
         /// Returns active child runs with routing handles for supervisor dispatch.
         /// </summary>
         api.MapGet("/agents/{agentIdentity}/child-runs", async (
-            ChannelsRepository repository,
+            WorkerPoolMembershipRepository repository,
             string agentIdentity,
             CancellationToken cancellationToken) =>
         {
@@ -559,7 +560,7 @@ public static class ChannelRoutes
         /// Task #1880.
         /// </summary>
         api.MapPut("/worker-pool/control/membership", async (
-            ChannelsRepository repository,
+            WorkerPoolMembershipRepository repository,
             string agentIdentity,
             CancellationToken cancellationToken) =>
         {
@@ -583,7 +584,7 @@ public static class ChannelRoutes
         /// Task #1880.
         /// </summary>
         api.MapPost("/channels/{channelId:long}/memberships/{agentIdentity}/release-target-work", async (
-            ChannelsRepository repository,
+            WorkerPoolMembershipRepository repository,
             long channelId,
             string agentIdentity,
             CancellationToken cancellationToken) =>
@@ -606,9 +607,9 @@ public static class ChannelRoutes
         // -----------------------------------------------------------------------
 
         api.MapGet("/channels/{channelId:long}/linked-projects", async (
-            ChannelsRepository repository, long channelId, CancellationToken cancellationToken) =>
+            ChannelRepository channelRepository, ChannelProjectLinkRepository repository, long channelId, CancellationToken cancellationToken) =>
         {
-            var channel = await repository.GetChannelAsync(channelId, cancellationToken);
+            var channel = await channelRepository.GetChannelAsync(channelId, cancellationToken);
             if (channel is null)
                 return Results.NotFound();
             var links = await repository.GetChannelProjectLinksAsync(channelId, cancellationToken);
@@ -616,19 +617,19 @@ public static class ChannelRoutes
         });
 
         api.MapGet("/projects/{projectId}/linked-channels", async (
-            ChannelsRepository repository, string projectId, CancellationToken cancellationToken) =>
+            ChannelProjectLinkRepository repository, string projectId, CancellationToken cancellationToken) =>
         {
             var channels = await repository.GetLinkedChannelsForProjectAsync(projectId, cancellationToken);
             return Results.Ok(channels);
         });
 
         api.MapPost("/channel-project-links", async (
-            ChannelsRepository repository, UpsertChannelProjectLinkRequest request,
+            ChannelRepository channelRepository, ChannelProjectLinkRepository repository, UpsertChannelProjectLinkRequest request,
             CancellationToken cancellationToken) =>
         {
             try
             {
-                var channel = await repository.GetChannelAsync(request.ChannelId, cancellationToken);
+                var channel = await channelRepository.GetChannelAsync(request.ChannelId, cancellationToken);
                 if (channel is null)
                     return Results.NotFound(new { code = "channel_not_found", message = $"Channel {request.ChannelId} not found." });
 
@@ -642,7 +643,7 @@ public static class ChannelRoutes
         });
 
         api.MapDelete("/channel-project-links", async (
-            ChannelsRepository repository, long channelId, string projectId,
+            ChannelProjectLinkRepository repository, long channelId, string projectId,
             CancellationToken cancellationToken) =>
         {
             await repository.RemoveChannelProjectLinkAsync(channelId, projectId, cancellationToken);

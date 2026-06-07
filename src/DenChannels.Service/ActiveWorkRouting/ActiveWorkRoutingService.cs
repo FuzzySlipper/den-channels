@@ -14,7 +14,7 @@ namespace DenChannels.Service.ActiveWorkRouting;
 /// </summary>
 public sealed class ActiveWorkRoutingService
 {
-    private readonly ChannelsRepository _repository;
+    private readonly WorkerPoolMembershipRepository _repository;
     private readonly IWorkerPoolStateClient _workerPoolClient;
     private readonly IOptions<DenChannelsOptions> _options;
     private readonly ILogger<ActiveWorkRoutingService> _logger;
@@ -23,7 +23,7 @@ public sealed class ActiveWorkRoutingService
     private static readonly TimeSpan StaleThreshold = TimeSpan.FromMinutes(30);
 
     public ActiveWorkRoutingService(
-        ChannelsRepository repository,
+        WorkerPoolMembershipRepository repository,
         IWorkerPoolStateClient workerPoolClient,
         IOptions<DenChannelsOptions> options,
         ILogger<ActiveWorkRoutingService> logger)

@@ -18,12 +18,12 @@ public sealed class ChannelActivityEventRoutingService
     private const string DefaultEventType = "lifecycle_status";
     private const string DefaultStatus = "interim";
 
-    private readonly ChannelsRepository _repository;
+    private readonly ChannelRepository _repository;
     private readonly ILogger<ChannelActivityEventRoutingService> _logger;
     private readonly Queue<ChannelActivityDiagnosticDto> _recentDiagnostics = new();
     private readonly object _sync = new();
 
-    public ChannelActivityEventRoutingService(ChannelsRepository repository, ILogger<ChannelActivityEventRoutingService> logger)
+    public ChannelActivityEventRoutingService(ChannelRepository repository, ILogger<ChannelActivityEventRoutingService> logger)
     {
         _repository = repository;
         _logger = logger;

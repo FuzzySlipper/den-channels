@@ -61,7 +61,7 @@ public static class AgentWorkLifecycleRoutes
     /// </summary>
     private static async Task<IResult> WriteLifecycleEventAsync(
         AgentWorkLifecycleWriteRequest request,
-        ChannelsRepository repository,
+        ChannelRepository repository,
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
@@ -140,7 +140,7 @@ public static class AgentWorkLifecycleRoutes
     /// ordered by id descending (newest first).
     /// </summary>
     private static async Task<IResult> QueryLifecycleEventsAsync(
-        ChannelsRepository repository,
+        ChannelRepository repository,
         long? channelId,
         string? projectId,
         long? taskId,
@@ -232,7 +232,7 @@ public static class AgentWorkLifecycleRoutes
     /// right now, when was it last seen, and what evidence backs that state?"
     /// </summary>
     private static async Task<IResult> GetCurrentWorkProjectionAsync(
-        ChannelsRepository repository,
+        ChannelRepository repository,
         long? channelId,
         CancellationToken cancellationToken)
     {

@@ -26,7 +26,7 @@ This repo currently contains the service skeleton for Den task #1320:
 - `/api/channels/{channelId}/activity-events` — append/query non-waking agent/tool-call breadcrumbs.
 - `/api/channel-activity-events` and `/api/channel-activity-events/status` — Channels-owned Gateway-shaped breadcrumb compatibility writer plus recent failure diagnostics; new callers should prefer the per-channel route.
 - `/api/gateway/memberships?channelId={id}|projectId={projectId}` — participant/wake-policy snapshot for channel routing.
-- `/api/channel-memberships?memberIdentity={identity}` — member-identity channel membership discovery for spawned worker polling; `includeOrdinaryMemberships=true` lets long-lived runtime agents discover ordinary null-purpose memberships without widening the worker default. See `docs/worker-pool-discovery.md`.
+- `/api/channel-memberships?memberIdentity={identity}` — member-identity channel membership discovery for spawned worker polling. v8 returns all non-left memberships by default unless `membershipPurpose` is supplied; legacy `includeOrdinaryMemberships` is accepted for compatibility but no longer changes the SQL filter. See `docs/worker-pool-discovery.md`.
 - `POST /api/direct-agent-events` — canonical direct-agent wake event creation with target metadata. The retired Gateway alias `POST /api/gateway/direct-agent-messages` now returns 410 Gone pointing here (task #2022).
 - `GET /api/direct-agent-events` — cursor-paged direct-agent event listing. The retired alias `GET /api/gateway/events` now returns 410 Gone (task #2022).
 

@@ -17,7 +17,7 @@ public static class DirectConversationRoutes
         // List conversations for a human reader
         // ---------------------------------------------------------------
         group.MapGet("/", async (
-            ChannelsRepository repository,
+            DirectConversationRepository repository,
             string humanIdentity,
             int? limit,
             long? afterId,
@@ -43,7 +43,7 @@ public static class DirectConversationRoutes
         // Get or create a conversation for humanIdentity + agentIdentity
         // ---------------------------------------------------------------
         group.MapPost("/", async (
-            ChannelsRepository repository,
+            DirectConversationRepository repository,
             CreateDirectConversationRequest request,
             CancellationToken cancellationToken) =>
         {
@@ -62,7 +62,7 @@ public static class DirectConversationRoutes
         // GET /api/direct-conversations/{conversationId}
         // ---------------------------------------------------------------
         group.MapGet("/{conversationId:long}", async (
-            ChannelsRepository repository,
+            DirectConversationRepository repository,
             long conversationId,
             CancellationToken cancellationToken) =>
         {
@@ -78,7 +78,7 @@ public static class DirectConversationRoutes
         // List transcript entries with pagination
         // ---------------------------------------------------------------
         group.MapGet("/{conversationId:long}/entries", async (
-            ChannelsRepository repository,
+            DirectConversationRepository repository,
             long conversationId,
             int? limit,
             long? afterId,
@@ -105,7 +105,9 @@ public static class DirectConversationRoutes
         // Send a DM through the existing direct-agent wake-event path
         // ---------------------------------------------------------------
         group.MapPost("/{conversationId:long}/send", async (
-            ChannelsRepository repository,
+            DirectConversationRepository repository,
+            ChannelRepository channelRepository,
+            ChannelProjectLinkRepository projectLinks,
             SubscriptionRepository subscriptionRepo,
             long conversationId,
             SendDirectMessageRequest request,
@@ -130,7 +132,7 @@ public static class DirectConversationRoutes
                     "Provide sourceProjectId or ensure conversation has scope_project_id."));
 
             var channel = await DirectAgentEventShared.ResolveChannelAsync(
-                repository, channelId: null, projectId, cancellationToken);
+                channelRepository, projectLinks, channelId: null, projectId: projectId, cancellationToken: cancellationToken);
             if (channel is null)
                 return Results.NotFound(new DirectConversationErrorDto("channel_not_found",
                     $"No default channel found for project '{projectId}'."));
@@ -159,7 +161,7 @@ public static class DirectConversationRoutes
             var metadataJson = System.Text.Json.JsonSerializer.Serialize(metadataPayload);
 
             var msg = await DirectAgentEventShared.PostWakeMessageAsync(
-                repository, channel.Id,
+                channelRepository, channel.Id,
                 request.SenderIdentity, request.Body, requestId,
                 projectId, projectId, request.TargetTaskId,
                 request.WorkerRunId, request.WorkerRole,
@@ -198,7 +200,7 @@ public static class DirectConversationRoutes
         // Update the read cursor for a conversation
         // ---------------------------------------------------------------
         group.MapPut("/{conversationId:long}/read-cursor", async (
-            ChannelsRepository repository,
+            DirectConversationRepository repository,
             long conversationId,
             UpsertDirectReadCursorRequest request,
             CancellationToken cancellationToken) =>
@@ -220,7 +222,7 @@ public static class DirectConversationRoutes
         // GET /api/direct-conversations/{conversationId}/read-cursor?readerIdentity=xxx
         // ---------------------------------------------------------------
         group.MapGet("/{conversationId:long}/read-cursor", async (
-            ChannelsRepository repository,
+            DirectConversationRepository repository,
             long conversationId,
             string readerIdentity,
             CancellationToken cancellationToken) =>
@@ -245,7 +247,7 @@ public static class DirectConversationRoutes
         // from direct_conversation_id.
         // ---------------------------------------------------------------
         group.MapPost("/{conversationId:long}/link-message", async (
-            ChannelsRepository repository,
+            DirectConversationRepository repository,
             long conversationId,
             LinkDirectMessageRequest request,
             CancellationToken cancellationToken) =>

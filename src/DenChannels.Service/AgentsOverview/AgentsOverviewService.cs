@@ -11,15 +11,22 @@ namespace DenChannels.Service.AgentsOverview;
 /// </summary>
 public sealed class AgentsOverviewService
 {
-    private readonly ChannelsRepository _repository;
+    private readonly ChannelProjectLinkRepository _channels;
+    private readonly MembershipRepository _memberships;
+    private readonly ChannelOverviewRepository _overview;
     private readonly IWorkerPoolStateClient _workerPoolClient;
     private readonly ILogger<AgentsOverviewService> _logger;
 
-    public AgentsOverviewService(ChannelsRepository repository,
+    public AgentsOverviewService(
+        ChannelProjectLinkRepository channels,
+        MembershipRepository memberships,
+        ChannelOverviewRepository overview,
         IWorkerPoolStateClient workerPoolClient,
         ILogger<AgentsOverviewService> logger)
     {
-        _repository = repository;
+        _channels = channels;
+        _memberships = memberships;
+        _overview = overview;
         _workerPoolClient = workerPoolClient;
         _logger = logger;
     }
@@ -48,7 +55,7 @@ public sealed class AgentsOverviewService
         // 2. Channel scope has already been resolved above for Channels queries.
 
         // 3. Fetch channels (if channelId specified, filter to that channel)
-        var channels = await _repository.ListChannelsForOverviewAsync(effectiveProjectId, channelId, cancellationToken);
+        var channels = await _channels.ListChannelsForOverviewAsync(effectiveProjectId, channelId, cancellationToken);
 
         // If a specific channelId was provided, verify it exists
         if (channelId.HasValue && channels.Count == 0)
@@ -57,11 +64,11 @@ public sealed class AgentsOverviewService
         }
 
         // 4. Fetch memberships across all matching channels
-        var allMemberships = await _repository.ListMembershipsForOverviewAsync(
+        var allMemberships = await _memberships.ListMembershipsForOverviewAsync(
             effectiveProjectId, channelId, agentIdentity, includeLeft, cancellationToken);
 
         // 5. Fetch recent activity
-        var allActivity = await _repository.ListRecentActivityForOverviewAsync(
+        var allActivity = await _overview.ListRecentActivityForOverviewAsync(
             effectiveProjectId, channelId, agentIdentity, activityLimit, cancellationToken);
 
         // 6. Build channel lookup
@@ -222,19 +229,19 @@ public sealed class AgentsOverviewService
             : new SourceServiceStatusDto("unavailable", "Core worker-pool endpoint did not respond.");
 
         // 2. Fetch memberships for this agent
-        var memberships = await _repository.ListMembershipsForOverviewAsync(
+        var memberships = await _memberships.ListMembershipsForOverviewAsync(
             projectId, channelId, agentIdentity, true, cancellationToken);
 
         // 3. Fetch channels for membership resolution
-        var channels = await _repository.ListChannelsForOverviewAsync(projectId, channelId, cancellationToken);
+        var channels = await _channels.ListChannelsForOverviewAsync(projectId, channelId, cancellationToken);
         var channelLookup = channels.ToDictionary(c => c.Id);
 
         // 4. Fetch activity events for this agent
-        var activityEvents = await _repository.ListRecentActivityForDetailAsync(
+        var activityEvents = await _overview.ListRecentActivityForDetailAsync(
             agentIdentity, projectId, channelId, activityLimit, cancellationToken);
 
         // 5. Fetch task associations
-        var taskEvents = await _repository.ListTaskActivityForDetailAsync(
+        var taskEvents = await _overview.ListTaskActivityForDetailAsync(
             agentIdentity, projectId, channelId, cancellationToken);
 
         // 6. Build flags

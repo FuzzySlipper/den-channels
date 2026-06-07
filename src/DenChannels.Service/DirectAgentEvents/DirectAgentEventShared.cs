@@ -25,7 +25,8 @@ internal static class DirectAgentEventShared
     /// with linked-channels fallback).
     /// </summary>
     internal static async Task<ChannelDto?> ResolveChannelAsync(
-        ChannelsRepository repository,
+        ChannelRepository repository,
+        ChannelProjectLinkRepository projectLinks,
         long? channelId,
         string? projectId,
         CancellationToken cancellationToken)
@@ -40,7 +41,7 @@ internal static class DirectAgentEventShared
         // Fallback: check channel-project links for shared operations channels
         if (!string.IsNullOrWhiteSpace(projectId))
         {
-            var linkedChannels = await repository.GetLinkedChannelsForProjectAsync(projectId, cancellationToken);
+            var linkedChannels = await projectLinks.GetLinkedChannelsForProjectAsync(projectId, cancellationToken);
             if (linkedChannels.Count > 0)
                 return linkedChannels[0];
         }
@@ -188,7 +189,7 @@ internal static class DirectAgentEventShared
     /// Returns the created ChannelMessageDto.
     /// </summary>
     internal static async Task<ChannelMessageDto> PostWakeMessageAsync(
-        ChannelsRepository repository,
+        ChannelRepository repository,
         long channelId,
         string senderIdentity,
         string body,
