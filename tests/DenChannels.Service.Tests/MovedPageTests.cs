@@ -37,6 +37,35 @@ public sealed class MovedPageTests : IDisposable
     }
 
     [Fact]
+    public async Task Root_ServesBuiltInMovedPage_WhenIndexFileMissing()
+    {
+        var emptyWebRoot = Path.Combine(Path.GetTempPath(), $"den-channels-empty-webroot-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(emptyWebRoot);
+        try
+        {
+            using var factory = new WebApplicationFactory<Program>()
+                .WithWebHostBuilder(builder => builder.UseWebRoot(emptyWebRoot));
+            using var client = factory.CreateClient();
+
+            using var response = await client.GetAsync("/");
+            var body = await response.Content.ReadAsStringAsync();
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Contains("text/html", response.Content.Headers.ContentType?.ToString());
+            Assert.Contains("Den Channels", body);
+            Assert.Contains("Den Web", body);
+            Assert.Contains("192.168.1.10:18080", body);
+        }
+        finally
+        {
+            if (Directory.Exists(emptyWebRoot))
+            {
+                Directory.Delete(emptyWebRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task ApiMiss_ReturnsJson404_NotHtml()
     {
         using var client = _factory.CreateClient();
