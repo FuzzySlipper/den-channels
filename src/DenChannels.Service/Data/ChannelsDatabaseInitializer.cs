@@ -1551,7 +1551,7 @@ public sealed class ChannelsDatabaseInitializer
             subscription_id, stream_kind, last_seen_id, last_seen_at)
         SELECT
             cs.id,
-            'channel_messages',
+            'subscription_messages',
             COALESCE(crc.last_read_channel_message_id, 0),
             crc.last_read_at
         FROM channel_read_cursors crc
@@ -1565,7 +1565,7 @@ public sealed class ChannelsDatabaseInitializer
           AND NOT EXISTS (
               SELECT 1 FROM channel_subscription_cursors csc
               WHERE csc.subscription_id = cs.id
-                AND csc.stream_kind = 'channel_messages'
+                AND csc.stream_kind = 'subscription_messages'
           );
 
         -- =====================================================================

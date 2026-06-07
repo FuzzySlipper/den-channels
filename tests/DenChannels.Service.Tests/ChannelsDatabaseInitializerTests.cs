@@ -1016,6 +1016,180 @@ public sealed class ChannelsDatabaseInitializerTests
         Assert.Equal("hermes-parent-7", row["parent_session_key"]);
     }
 
+    [Fact]
+    public async Task V8Migration_BackfillsSubscriptionCursors_WithSubscriptionMessagesStreamKind()
+    {
+        // Simulate a pre-v8 DB with channel_read_cursors that have instance-scoped
+        // agent read cursors. The V8 migration PART 5 should backfill them into
+        // channel_subscription_cursors with stream_kind='subscription_messages'.
+        await using var connection = await OpenInMemoryDatabaseAsync();
+        await ExecuteAsync(connection, """"
+            CREATE TABLE channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                project_id TEXT
+            );
+            INSERT INTO channels(slug, display_name, kind, project_id)
+            VALUES ('project-den-channels', 'Den Channels', 'project_default', 'den-channels');
+
+            CREATE TABLE channel_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                sender_type TEXT NOT NULL,
+                sender_identity TEXT NOT NULL,
+                body TEXT NOT NULL,
+                message_kind TEXT NOT NULL DEFAULT 'human_text',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO channel_messages(id, channel_id, sender_type, sender_identity, body)
+            VALUES (42, 1, 'agent', 'backfill-test-agent', 'test message');
+
+            CREATE TABLE channel_memberships (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                member_type TEXT NOT NULL,
+                member_identity TEXT NOT NULL,
+                membership_purpose TEXT,
+                membership_status TEXT NOT NULL DEFAULT 'active',
+                wake_policy TEXT NOT NULL DEFAULT 'mentions_only',
+                can_send INTEGER NOT NULL DEFAULT 1,
+                can_react INTEGER NOT NULL DEFAULT 1,
+                can_invite INTEGER NOT NULL DEFAULT 0,
+                cooldown_seconds INTEGER NOT NULL DEFAULT 60,
+                max_auto_replies_per_window INTEGER NOT NULL DEFAULT 1,
+                settings_json TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(channel_id, member_type, member_identity)
+            );
+            INSERT INTO channel_memberships(
+                channel_id, member_type, member_identity,
+                membership_purpose, membership_status, wake_policy,
+                can_send, can_react, can_invite,
+                cooldown_seconds, max_auto_replies_per_window)
+            VALUES (
+                1, 'agent', 'backfill-test-agent',
+                'ordinary_channel', 'active', 'mentions_only',
+                1, 1, 0, 60, 1
+            );
+
+            CREATE TABLE channel_read_cursors (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                reader_type TEXT NOT NULL CHECK (reader_type IN ('user','agent','role','group')),
+                reader_identity TEXT NOT NULL,
+                instance_id TEXT,
+                last_read_channel_message_id INTEGER REFERENCES channel_messages(id) ON DELETE SET NULL,
+                last_read_at TEXT NOT NULL DEFAULT (datetime('now')),
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(channel_id, reader_type, reader_identity, instance_id)
+            );
+            INSERT INTO channel_read_cursors(
+                channel_id, reader_type, reader_identity,
+                instance_id, last_read_channel_message_id, last_read_at)
+            VALUES (
+                1, 'agent', 'backfill-test-agent',
+                'instance-abc', 42, datetime('now')
+            );
+
+            CREATE TABLE channel_activity_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                project_id TEXT,
+                agent_identity TEXT NOT NULL,
+                delivery_request_id TEXT,
+                session_key TEXT,
+                hermes_session_key TEXT,
+                display_block_id TEXT,
+                parent_session_key TEXT,
+                parent_hermes_session_key TEXT,
+                parent_agent_identity TEXT,
+                worker_run_id TEXT,
+                worker_role TEXT,
+                agent_instance_id TEXT,
+                pool_member_id TEXT,
+                task_id INTEGER,
+                thread_id INTEGER,
+                anchor_message_id INTEGER,
+                assignment_id TEXT,
+                checkpoint_type TEXT,
+                checkpoint_handle TEXT,
+                event_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'completed',
+                delivery_stage TEXT NOT NULL DEFAULT 'progress',
+                terminal INTEGER NOT NULL DEFAULT 0,
+                final_channel_message_id INTEGER,
+                sequence INTEGER NOT NULL DEFAULT 0,
+                update_version INTEGER NOT NULL DEFAULT 1,
+                title TEXT,
+                summary TEXT,
+                preview_json TEXT,
+                metadata_json TEXT,
+                dedupe_key TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            INSERT INTO channel_activity_events(
+                channel_id, project_id, agent_identity,
+                event_type, status, dedupe_key)
+            VALUES (
+                1, 'den-channels', 'backfill-test-agent',
+                'tool_call_started', 'completed', 'v8-cursor-backfill'
+            );
+
+            CREATE TABLE channel_project_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL REFERENCES channels(id),
+                project_id TEXT NOT NULL,
+                relation_kind TEXT NOT NULL DEFAULT 'linked',
+                is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                settings_json TEXT,
+                UNIQUE(channel_id, project_id)
+            );
+
+            CREATE TABLE channel_reactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL REFERENCES channel_messages(id) ON DELETE CASCADE,
+                reactor_type TEXT NOT NULL,
+                reactor_identity TEXT NOT NULL,
+                reaction_emoji TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(message_id, reactor_type, reactor_identity, reaction_emoji)
+            );
+
+            -- schema_migrations must exist so ApplyMigrationsAsync can track v8
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            -- Pretend all prior migrations (1-7) are applied
+            INSERT INTO schema_migrations(version, name) VALUES
+                (1,'initial'),(2,'read_cursors'),(3,'worker_pool_lobby'),
+                (4,'channel_project_links'),(5,'agent_work_lifecycle'),
+                (6,'instance_read_cursors'),(7,'delivery_audit');
+            """");
+
+        // Run migrations — should run v8 only
+        await ChannelsDatabaseInitializer.ApplyMigrationsAsync(connection, NullLogger.Instance);
+
+        // The backfill should have created a subscription cursor row
+        // with stream_kind = 'subscription_messages'
+        var cursorRow = await QuerySingleAsync(connection, """"
+            SELECT csc.subscription_id, csc.stream_kind, csc.last_seen_id
+            FROM channel_subscription_cursors csc
+            JOIN channel_subscriptions cs ON cs.id = csc.subscription_id
+            WHERE cs.member_type = 'agent'
+              AND cs.member_identity = 'backfill-test-agent';
+            """");
+        Assert.Equal("subscription_messages", cursorRow["stream_kind"]);
+        Assert.Equal("42", cursorRow["last_seen_id"]);
+    }
+
     private static async Task<SqliteConnection> OpenInMemoryDatabaseAsync()
     {
         var connection = new SqliteConnection("Data Source=:memory:");
