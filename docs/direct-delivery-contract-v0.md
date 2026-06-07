@@ -21,9 +21,7 @@ All status/kind/policy fields are pinned as named constants in `DirectDeliveryCo
 | `RecordedPendingClaim` | `recorded_pending_claim` | Channels recorded the wake_event and found an active subscription but no claim yet. |
 | `RecordedUnreachableSubscription` | `recorded_unreachable_subscription` | Channels recorded the wake_event but only unreachable/degraded subscriptions were found. |
 | `Enqueued` | `enqueued` | Gateway created a delivery request, not yet claimed. |
-| `Claimed` | `claimed` |
-| `NoSubscriber` | `no_subscriber` |
-| `SubscriptionUnreachable` | `subscription_unreachable` | Delivery request claimed by target runtime/adapter. |
+| `Claimed` | `claimed` | Delivery request claimed by target runtime/adapter. |
 | `Received` | `received` | Target adapter reported delivery as received. |
 | `Acknowledged` | `acknowledged` | Target runtime acknowledged accepting the prompt/wake. |
 | `Completed` | `completed` | Target runtime reported final delivery completion. |
