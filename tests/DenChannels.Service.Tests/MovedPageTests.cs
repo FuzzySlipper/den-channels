@@ -1,16 +1,25 @@
 using System.Net;
 using System.Net.Http.Json;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace DenChannels.Service.Tests;
 
-public sealed class MovedPageTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class MovedPageTests : IDisposable
 {
+    private readonly string _webRootPath;
     private readonly WebApplicationFactory<Program> _factory;
 
-    public MovedPageTests(WebApplicationFactory<Program> factory)
+    public MovedPageTests()
     {
-        _factory = factory;
+        _webRootPath = Path.Combine(Path.GetTempPath(), $"den-channels-moved-page-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_webRootPath);
+
+        var fixtureIndex = Path.Combine(AppContext.BaseDirectory, "Fixtures", "moved-page", "index.html");
+        File.Copy(fixtureIndex, Path.Combine(_webRootPath, "index.html"));
+
+        _factory = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder => builder.UseWebRoot(_webRootPath));
     }
 
     [Fact]
@@ -80,5 +89,14 @@ public sealed class MovedPageTests : IClassFixture<WebApplicationFactory<Program
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains("text/html", response.Content.Headers.ContentType?.ToString());
         Assert.Contains("Den Channels", body);
+    }
+
+    public void Dispose()
+    {
+        _factory.Dispose();
+        if (Directory.Exists(_webRootPath))
+        {
+            Directory.Delete(_webRootPath, recursive: true);
+        }
     }
 }

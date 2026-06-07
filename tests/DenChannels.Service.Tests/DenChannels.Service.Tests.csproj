@@ -23,4 +23,8 @@
     <ProjectReference Include="..\..\src\DenChannels.Service\DenChannels.Service.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="Fixtures\moved-page\index.html" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

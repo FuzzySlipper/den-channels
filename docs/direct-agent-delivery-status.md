@@ -31,27 +31,30 @@ The response includes stable handles for follow-up diagnostics:
 
 ## Status vocabulary
 
-`deliveryStatus` is the operator-facing summary:
+`deliveryStatus` is the operator-facing summary. The canonical vocabulary is the Direct Delivery / Channels Operations Contract v0 in `docs/direct-delivery-contract-v0.md`; this focused table mirrors its delivery status values for quick operator reference:
 
 | deliveryStatus | Meaning |
 | --- | --- |
-| `recorded_but_not_claimed_yet` | Channels recorded the wake_event, but no matching Gateway delivery/claim evidence was observed within the bounded wait, or Gateway was unavailable. |
-| `enqueued` | Gateway created a delivery request, but the target runtime has not claimed it yet. |
-| `claimed` | Gateway delivery request was claimed by the target runtime/adapter (`delivery_requests.status=delivering`). |
+| `recorded_but_not_claimed_yet` | Channels recorded the wake_event, but no matching delivery/claim evidence was observed. |
+| `recorded_no_subscriber` | Channels recorded the wake_event and found no active subscription for the target member. |
+| `recorded_pending_claim` | Channels recorded the wake_event and found an active subscription, but no runtime/adapter claim yet. |
+| `recorded_unreachable_subscription` | Channels recorded the wake_event, but only unreachable/degraded subscriptions were found. |
+| `enqueued` | A delivery request exists, but the target runtime has not claimed it yet. |
+| `claimed` | Delivery request was claimed by the target runtime/adapter. |
 | `received` | Target adapter/runtime reported the delivery as delivered/received. |
 | `acknowledged` | Target runtime/session acknowledged accepting the prompt/wake. |
 | `completed` | Target runtime reported final delivery completion. |
-| `suppressed` | Gateway recorded a suppression decision. |
-| `failed` / `expired` | Gateway recorded a terminal failure or expiry. |
+| `suppressed` | A suppression decision was recorded. |
+| `failed` / `expired` | A terminal failure or expiry was recorded. |
 
 Supplemental fields:
 
-- `claimStatus`: `unclaimed` or `claimed`.
+- `claimStatus`: `unclaimed`, `claimed`, `no_subscriber`, or `subscription_unreachable`.
 - `completionStatus`: `pending`, `completed`, `failed`, `expired`, or `suppressed`.
 - `suppressionStatus`: `not_suppressed` or `suppressed`.
-- `gatewayDeliveryState` / `gatewayAttemptStatus`: raw Gateway state observed, if any.
+- `gatewayDeliveryState` / `gatewayAttemptStatus`: raw historical/compatibility Gateway state observed, if any.
 - `timedOut`: true when the bounded wait ended before the requested target state.
-- `gatewayUnavailable`: true when the Gateway projection could not be read.
+- `gatewayUnavailable`: true when the historical/compatibility Gateway projection could not be read.
 
 ## Safety rules
 

@@ -64,13 +64,20 @@ public static class DeliveryStatus
 
 /// <summary>
 /// Claim status for a direct-agent delivery observation.
-/// Values: <c>unclaimed</c> or <c>claimed</c>.
+/// Values: <c>unclaimed</c>, <c>claimed</c>, <c>no_subscriber</c>, or <c>subscription_unreachable</c>.
 /// </summary>
 public static class ClaimStatus
 {
+    /// <summary>No runtime/adapter has claimed the direct-agent event yet.</summary>
     public const string Unclaimed = "unclaimed";
+
+    /// <summary>A target runtime/adapter claimed the direct-agent event.</summary>
     public const string Claimed = "claimed";
+
+    /// <summary>No active subscription exists for the target member.</summary>
     public const string NoSubscriber = "no_subscriber";
+
+    /// <summary>Only unreachable or degraded subscriptions exist for the target member.</summary>
     public const string SubscriptionUnreachable = "subscription_unreachable";
 
     public static readonly string[] All = [Unclaimed, Claimed, NoSubscriber, SubscriptionUnreachable];
