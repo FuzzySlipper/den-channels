@@ -102,6 +102,9 @@ public sealed record DirectAgentEventReadbackDto(
     int ActiveSubscriptionCount,
     IReadOnlyList<string> SubscriptionStatuses,
     IReadOnlyList<string> SubscriptionIdentities,
+    string? CoordinationCallId,
+    string? RequestKind,
+    string? ResultDestinationJson,
     string CreatedAt);
 
 // ── Events list (cursor-paged event subscription) ─────────────────────

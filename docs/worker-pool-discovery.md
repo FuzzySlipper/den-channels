@@ -14,7 +14,7 @@ Channel memberships use `membershipPurpose` to describe why the agent is present
 
 - `worker_pool_control` — the worker is idle or reachable through the neutral worker pool. This is the home/control membership and should remain active while the worker is part of the pool.
 - `target_work` — the worker is temporarily resident in a project channel for an assigned task. Assignment code creates or refreshes this membership before waking the worker for task work.
-- other or blank purposes — ordinary agent/channel membership. Runtime polling may include these only when explicitly configured or needed for compatibility.
+- other or blank purposes — ordinary agent/channel membership. Runtime polling includes these by default unless a caller narrows discovery with `membershipPurpose`.
 
 ## Discovery endpoint
 
@@ -24,9 +24,9 @@ Workers discover pollable channels with:
 GET /api/channel-memberships?memberIdentity=<agent>&membershipPurpose=<optional>&includeLeft=false
 ```
 
-The endpoint returns only memberships for the requested `memberIdentity`, with channel metadata and sanitized membership labels. Runtime adapters should treat active memberships as the source of truth for the set of channels to poll. When no `membershipPurpose` filter is supplied, the endpoint is intentionally bounded to pollable worker purposes: `worker_pool_control` and `target_work`. This keeps ordinary memberships such as `agent_commons` and long-lived conversational memberships out of spawned-worker direct-event polling.
+The endpoint returns memberships for the requested `memberIdentity`, with channel metadata and sanitized membership labels. Runtime adapters should treat active memberships as the source of truth for the set of channels to poll. In v8, when no `membershipPurpose` filter is supplied, discovery intentionally returns all non-left memberships so long-lived runtimes and worker-pool residents share one read model. Callers that need only worker-pool rows should pass an explicit `membershipPurpose` filter such as `worker_pool_control` or `target_work`.
 
-Long-lived runtime/orchestrator profiles that are ordinary channel members rather than worker-pool residents can opt into their null-purpose channel memberships with `includeOrdinaryMemberships=true`. This adds only blank/null `membershipPurpose` rows to the worker default set; it does **not** include explicit non-worker purposes such as `agent_commons`. Use this for profiles like `den-mcp-runner` and `pi-crew-runner` so a gateway restart can rediscover their normal channel memberships without pinning channel ids.
+The legacy `includeOrdinaryMemberships=true` query parameter is still accepted for compatibility with older adapters, but it is now a no-op: all non-left memberships are already included by default unless `membershipPurpose` narrows the result. Profiles like `den-mcp-runner` and `pi-crew-runner` no longer need a special opt-in to rediscover their normal channel memberships.
 
 Useful filters:
 

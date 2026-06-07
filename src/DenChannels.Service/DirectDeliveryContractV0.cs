@@ -21,6 +21,15 @@ public static class DeliveryStatus
     /// <summary>Channels recorded the wake_event, but no matching delivery/claim evidence was observed.</summary>
     public const string RecordedNotClaimedYet = "recorded_but_not_claimed_yet";
 
+    /// <summary>Channels recorded the wake_event and found no active subscription for the target member.</summary>
+    public const string RecordedNoSubscriber = "recorded_no_subscriber";
+
+    /// <summary>Channels recorded the wake_event and found an active subscription but no claim yet.</summary>
+    public const string RecordedPendingClaim = "recorded_pending_claim";
+
+    /// <summary>Channels recorded the wake_event but only unreachable/degraded subscriptions were found.</summary>
+    public const string RecordedUnreachableSubscription = "recorded_unreachable_subscription";
+
     /// <summary>Gateway created a delivery request, not yet claimed by target runtime.</summary>
     public const string Enqueued = "enqueued";
 
@@ -48,8 +57,8 @@ public static class DeliveryStatus
     /// <summary>All known delivery status values for contract validation.</summary>
     public static readonly string[] All =
     [
-        RecordedNotClaimedYet, Enqueued, Claimed, Received,
-        Acknowledged, Completed, Suppressed, Failed, Expired
+        RecordedNotClaimedYet, RecordedNoSubscriber, RecordedPendingClaim, RecordedUnreachableSubscription,
+        Enqueued, Claimed, Received, Acknowledged, Completed, Suppressed, Failed, Expired
     ];
 }
 
@@ -61,8 +70,10 @@ public static class ClaimStatus
 {
     public const string Unclaimed = "unclaimed";
     public const string Claimed = "claimed";
+    public const string NoSubscriber = "no_subscriber";
+    public const string SubscriptionUnreachable = "subscription_unreachable";
 
-    public static readonly string[] All = [Unclaimed, Claimed];
+    public static readonly string[] All = [Unclaimed, Claimed, NoSubscriber, SubscriptionUnreachable];
 }
 
 /// <summary>

@@ -232,6 +232,8 @@ public static class DirectAgentEventRoutes
             var deliveryStatus = subscriptionState?.DeliveryStatus ?? metadataDeliveryStatus;
             var claimStatus = subscriptionState?.ClaimStatus ?? metadataClaimStatus;
             var completionStatus = subscriptionState?.CompletionStatus ?? metadataCompletionStatus;
+            var (coordinationCallId, requestKind, resultDestinationJson) =
+                DirectAgentEventShared.ExtractCoordinationMetadata(msg.MetadataJson);
             var activeSubscriptionCount = subscriptionState?.ActiveSubscriptionCount ?? 0;
             var subscriptionStatuses = subscriptionState?.SubscriptionStatuses ?? Array.Empty<string>();
             var subscriptionIdentities = subscriptionState?.SubscriptionIdentities ?? Array.Empty<string>();
@@ -265,6 +267,9 @@ public static class DirectAgentEventRoutes
                 ActiveSubscriptionCount: activeSubscriptionCount,
                 SubscriptionStatuses: subscriptionStatuses,
                 SubscriptionIdentities: subscriptionIdentities,
+                CoordinationCallId: coordinationCallId,
+                RequestKind: requestKind,
+                ResultDestinationJson: resultDestinationJson,
                 CreatedAt: msg.CreatedAt));
         });
 

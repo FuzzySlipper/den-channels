@@ -278,6 +278,34 @@ internal static class DirectAgentEventShared
     /// <summary>
     /// Extract member identity from the sourceId pattern: direct-agent-message:{channelId}:{memberIdentity}:{guid}
     /// </summary>
+    internal static (string? coordinationCallId, string? requestKind, string? resultDestinationJson)
+        ExtractCoordinationMetadata(string? metadataJson)
+    {
+        if (string.IsNullOrWhiteSpace(metadataJson))
+            return (null, null, null);
+
+        try
+        {
+            using var document = JsonDocument.Parse(metadataJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("callerMetadata", out var callerMetadata)
+                || callerMetadata.ValueKind != JsonValueKind.Object)
+            {
+                return (null, null, null);
+            }
+
+            return (
+                TryGetString(callerMetadata, "coordinationCallId"),
+                TryGetString(callerMetadata, "requestKind"),
+                TryGetString(callerMetadata, "resultDestinationJson"));
+        }
+        catch (JsonException)
+        {
+            return (null, null, null);
+        }
+    }
+
     internal static string? ExtractMemberIdentity(string? sourceId)
     {
         if (string.IsNullOrWhiteSpace(sourceId) || !sourceId.StartsWith("direct-agent-message:", StringComparison.Ordinal))

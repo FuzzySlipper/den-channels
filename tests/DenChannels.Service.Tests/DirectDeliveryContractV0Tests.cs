@@ -17,6 +17,9 @@ public sealed class DirectDeliveryContractV0Tests
 
     [Theory]
     [InlineData(DeliveryStatus.RecordedNotClaimedYet, "recorded_but_not_claimed_yet")]
+    [InlineData(DeliveryStatus.RecordedNoSubscriber, "recorded_no_subscriber")]
+    [InlineData(DeliveryStatus.RecordedPendingClaim, "recorded_pending_claim")]
+    [InlineData(DeliveryStatus.RecordedUnreachableSubscription, "recorded_unreachable_subscription")]
     [InlineData(DeliveryStatus.Enqueued, "enqueued")]
     [InlineData(DeliveryStatus.Claimed, "claimed")]
     [InlineData(DeliveryStatus.Received, "received")]
@@ -31,9 +34,9 @@ public sealed class DirectDeliveryContractV0Tests
     }
 
     [Fact]
-    public void DeliveryStatus_All_ContainsExactlyNineValues()
+    public void DeliveryStatus_All_ContainsExactlyTwelveValues()
     {
-        Assert.Equal(9, DeliveryStatus.All.Length);
+        Assert.Equal(12, DeliveryStatus.All.Length);
         Assert.All(DeliveryStatus.All, Assert.NotEmpty);
         Assert.Equal(DeliveryStatus.All, DeliveryStatus.All.Distinct().ToArray());
     }
@@ -45,15 +48,17 @@ public sealed class DirectDeliveryContractV0Tests
     [Theory]
     [InlineData(ClaimStatus.Unclaimed, "unclaimed")]
     [InlineData(ClaimStatus.Claimed, "claimed")]
+    [InlineData(ClaimStatus.NoSubscriber, "no_subscriber")]
+    [InlineData(ClaimStatus.SubscriptionUnreachable, "subscription_unreachable")]
     public void ClaimStatus_Constants_MatchExpectedValues(string constant, string expected)
     {
         Assert.Equal(expected, constant);
     }
 
     [Fact]
-    public void ClaimStatus_All_ContainsExactlyTwoValues()
+    public void ClaimStatus_All_ContainsExactlyFourValues()
     {
-        Assert.Equal(2, ClaimStatus.All.Length);
+        Assert.Equal(4, ClaimStatus.All.Length);
     }
 
     // -------------------------------------------------------------------------

@@ -97,6 +97,13 @@ public sealed class DirectAgentEventTests : IDisposable
         Assert.Equal("coord-2106", payload.CoordinationCallId);
         Assert.Equal("tool_call", payload.RequestKind);
         Assert.Equal("{\"projectId\":\"den-channels\"}", payload.ResultDestinationJson);
+
+        var readback = await _client.GetFromJsonAsync<DirectAgentEventReadbackPayload>(
+            $"/api/direct-agent-events/{payload.EventId}");
+        Assert.NotNull(readback);
+        Assert.Equal("coord-2106", readback.CoordinationCallId);
+        Assert.Equal("tool_call", readback.RequestKind);
+        Assert.Equal("{\"projectId\":\"den-channels\"}", readback.ResultDestinationJson);
     }
 
     // -------------------------------------------------------------------------
@@ -739,6 +746,9 @@ public sealed class DirectAgentEventTests : IDisposable
         int ActiveSubscriptionCount,
         IReadOnlyList<string> SubscriptionStatuses,
         IReadOnlyList<string> SubscriptionIdentities,
+        string? CoordinationCallId,
+        string? RequestKind,
+        string? ResultDestinationJson,
         string CreatedAt);
 
     private sealed record GatewayDirectAgentMessagePayload(

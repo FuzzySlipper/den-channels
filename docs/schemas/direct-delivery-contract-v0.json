@@ -12,6 +12,9 @@
       "type": "string",
       "enum": [
         "recorded_but_not_claimed_yet",
+        "recorded_no_subscriber",
+        "recorded_pending_claim",
+        "recorded_unreachable_subscription",
         "enqueued",
         "claimed",
         "received",
@@ -26,7 +29,7 @@
 
     "claimStatus": {
       "type": "string",
-      "enum": ["unclaimed", "claimed"],
+      "enum": ["unclaimed", "claimed", "no_subscriber", "subscription_unreachable"],
       "description": "Whether the delivery has been claimed by target runtime."
     },
 
