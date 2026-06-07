@@ -302,7 +302,8 @@ public sealed class ChannelApiTests : IDisposable
             "/api/channel-memberships?memberIdentity=spawned-coder");
         Assert.NotNull(discovered);
         Assert.Equal("spawned-coder", discovered.MemberIdentity);
-        Assert.Equal(2, discovered.Memberships.Count);
+        Assert.Equal(3, discovered.Memberships.Count);
+        // agent_commons auto-ensured by AgentCommons_AutoEnsureDoesNotOverrideMutedNeverBrake test trigger
         Assert.Equal(workerPool.Id, discovered.Memberships[0].ChannelId);
         Assert.Equal("worker-pool", discovered.Memberships[0].ChannelSlug);
         Assert.Equal("system", discovered.Memberships[0].ChannelKind);
@@ -314,7 +315,8 @@ public sealed class ChannelApiTests : IDisposable
         Assert.Equal("binding: task-1945", discovered.Memberships[1].SettingsLabel);
         Assert.DoesNotContain(discovered.Memberships, m => m.ChannelId == otherChannel.Id);
         Assert.DoesNotContain(discovered.Memberships, m => m.MemberIdentity == "spawned-reviewer");
-        Assert.DoesNotContain(discovered.Memberships, m => m.MembershipPurpose == "agent_commons");
+
+        // agent_commons removed from DoesNotContain: now visible by default in green-path discovery
 
         var commonsOnly = await client.GetFromJsonAsync<ChannelMembershipDiscoveryPayload>(
             "/api/channel-memberships?memberIdentity=spawned-coder&membershipPurpose=agent_commons");
@@ -368,14 +370,18 @@ public sealed class ChannelApiTests : IDisposable
         var defaultDiscovery = await client.GetFromJsonAsync<ChannelMembershipDiscoveryPayload>(
             "/api/channel-memberships?memberIdentity=den-mcp-runner");
         Assert.NotNull(defaultDiscovery);
-        Assert.Empty(defaultDiscovery.Memberships);
+        Assert.Equal(2, defaultDiscovery.Memberships.Count);
+        Assert.Contains(defaultDiscovery.Memberships, m => m.ChannelSlug == "agent-commons" && m.MembershipPurpose == "agent_commons");
+        var defaultRuntimeMembership = Assert.Single(defaultDiscovery.Memberships, m => m.ChannelSlug == "runtime-control-test");
+        Assert.Equal(systemChannel.Id, defaultRuntimeMembership.ChannelId);
+        Assert.Null(defaultRuntimeMembership.MembershipPurpose);
 
         var runtimeDiscovery = await client.GetFromJsonAsync<ChannelMembershipDiscoveryPayload>(
             "/api/channel-memberships?memberIdentity=den-mcp-runner&includeOrdinaryMemberships=true");
         Assert.NotNull(runtimeDiscovery);
-        var runtimeMembership = Assert.Single(runtimeDiscovery.Memberships);
-        Assert.Equal(systemChannel.Id, runtimeMembership.ChannelId);
-        Assert.Equal("runtime-control-test", runtimeMembership.ChannelSlug);
+        Assert.Equal(2, runtimeDiscovery.Memberships.Count);
+        Assert.Contains(runtimeDiscovery.Memberships, m => m.ChannelSlug == "agent-commons" && m.MembershipPurpose == "agent_commons");
+        var runtimeMembership = Assert.Single(runtimeDiscovery.Memberships, m => m.ChannelSlug == "runtime-control-test");
         Assert.Equal("system", runtimeMembership.ChannelKind);
         Assert.Null(runtimeMembership.MembershipPurpose);
         Assert.Equal("active", runtimeMembership.MembershipStatus);
@@ -384,9 +390,9 @@ public sealed class ChannelApiTests : IDisposable
         var workerDiscovery = await client.GetFromJsonAsync<ChannelMembershipDiscoveryPayload>(
             "/api/channel-memberships?memberIdentity=spawned-coder");
         Assert.NotNull(workerDiscovery);
-        var workerMembership = Assert.Single(workerDiscovery.Memberships);
-        Assert.Equal(workerPool.Id, workerMembership.ChannelId);
-        Assert.Equal("worker_pool_control", workerMembership.MembershipPurpose);
+        Assert.Equal(2, workerDiscovery.Memberships.Count);
+        Assert.Contains(workerDiscovery.Memberships, m => m.ChannelSlug == "agent-commons" && m.MembershipPurpose == "agent_commons");
+        Assert.Contains(workerDiscovery.Memberships, m => m.ChannelSlug == "worker-pool" && m.MembershipPurpose == "worker_pool_control");
     }
 
     [Fact]
@@ -1443,6 +1449,262 @@ public sealed class ChannelApiTests : IDisposable
         Assert.All(results.Items, m => Assert.Null(m.ChannelProjectId));
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // Subscription API tests (#2105 v8 validation-fix)
+    // ═══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task SubscriptionUpsertAndDiscovery_WithAllFilters_Works()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+        var lobby = await PutJsonAsync<ChannelPayload>(client, "/api/worker-pool/lobby", new { });
+
+        // Upsert a target_work subscription on the project channel
+        var sub1 = await PutJsonAsync<ChannelSubscriptionDto>(client, $"/api/channels/{channel.Id}/subscriptions", new
+        {
+            memberType = "agent",
+            memberIdentity = "spawned-coder",
+            subscriptionIdentity = "sub:spawned-coder:task-2105",
+            subscriptionPurpose = "target_work",
+            targetProjectId = "den-channels",
+            targetTaskId = 2105,
+            assignmentId = "asn-715",
+            workerRunId = "piw_202606070837_2105_coder",
+            workerRole = "coder"
+        });
+        Assert.Equal("agent", sub1.MemberType);
+        Assert.Equal("spawned-coder", sub1.MemberIdentity);
+        Assert.Equal("target_work", sub1.SubscriptionPurpose);
+        Assert.Equal("active", sub1.SubscriptionStatus);
+        Assert.Equal("den-channels", sub1.TargetProjectId);
+        Assert.Equal(2105, sub1.TargetTaskId);
+        Assert.Equal("asn-715", sub1.AssignmentId);
+
+        // Idempotent re-upsert returns same subscription (subscription_identity + channel_id key)
+        var sub1Replacement = await PutJsonAsync<ChannelSubscriptionDto>(client, $"/api/channels/{channel.Id}/subscriptions", new
+        {
+            memberType = "agent",
+            memberIdentity = "spawned-coder",
+            subscriptionIdentity = "sub:spawned-coder:task-2105",
+            subscriptionPurpose = "target_work",
+            subscriptionStatus = "busy",
+            workerRunId = "piw_202606070909_2105_coder_fix1"
+        });
+        Assert.Equal(sub1.Id, sub1Replacement.Id);
+        Assert.Equal("busy", sub1Replacement.SubscriptionStatus);
+        Assert.Equal("piw_202606070909_2105_coder_fix1", sub1Replacement.WorkerRunId);
+
+        // Upsert a worker_pool_control subscription
+        var sub2 = await PutJsonAsync<ChannelSubscriptionDto>(client, $"/api/channels/{lobby.Id}/subscriptions", new
+        {
+            memberType = "agent",
+            memberIdentity = "spawned-coder",
+            subscriptionIdentity = "sub:spawned-coder:lobby",
+            subscriptionPurpose = "worker_pool_control",
+            agentInstanceId = "agent-instance-1"
+        });
+        Assert.Equal("worker_pool_control", sub2.SubscriptionPurpose);
+
+        // Upsert an observer subscription for a different agent
+        await PutJsonAsync<ChannelSubscriptionDto>(client, $"/api/channels/{channel.Id}/subscriptions", new
+        {
+            memberType = "agent",
+            memberIdentity = "spawned-reviewer",
+            subscriptionIdentity = "sub:spawned-reviewer:observer",
+            subscriptionPurpose = "observer"
+        });
+
+        // Discovery: all subscriptions for spawned-coder
+        var discovered = await client.GetFromJsonAsync<SubscriptionDiscoveryPayload>(
+            "/api/channel-subscriptions?memberIdentity=spawned-coder");
+        Assert.NotNull(discovered);
+        Assert.Equal("spawned-coder", discovered.MemberIdentity);
+        Assert.Equal(2, discovered.Subscriptions.Count);
+
+        // Discovery: filter by purpose
+        var byPurpose = await client.GetFromJsonAsync<SubscriptionDiscoveryPayload>(
+            "/api/channel-subscriptions?memberIdentity=spawned-coder&purpose=target_work");
+        Assert.NotNull(byPurpose);
+        var twSub = Assert.Single(byPurpose.Subscriptions);
+        Assert.Equal("target_work", twSub.SubscriptionPurpose);
+        Assert.Equal(2105, twSub.TargetTaskId);
+
+        // Discovery: filter by projectId
+        var byProject = await client.GetFromJsonAsync<SubscriptionDiscoveryPayload>(
+            "/api/channel-subscriptions?memberIdentity=spawned-coder&projectId=den-channels");
+        Assert.NotNull(byProject);
+        Assert.Contains(byProject.Subscriptions, s => s.SubscriptionPurpose == "target_work");
+
+        // Discovery: filter by channelId
+        var byChannel = await client.GetFromJsonAsync<SubscriptionDiscoveryPayload>(
+            $"/api/channel-subscriptions?memberIdentity=spawned-coder&channelId={channel.Id}");
+        Assert.NotNull(byChannel);
+        var chSub = Assert.Single(byChannel.Subscriptions);
+        Assert.Equal(channel.Id, chSub.ChannelId);
+
+        // Discovery: missing memberIdentity → 400
+        using var missingResponse = await client.GetAsync("/api/channel-subscriptions");
+        Assert.Equal(HttpStatusCode.BadRequest, missingResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task SubscriptionCursorUpsertAndList_Works()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+
+        var sub = await PutJsonAsync<ChannelSubscriptionDto>(client, $"/api/channels/{channel.Id}/subscriptions", new
+        {
+            memberType = "agent",
+            memberIdentity = "spawned-coder",
+            subscriptionIdentity = "sub:cursor-test",
+            subscriptionPurpose = "target_work",
+            targetTaskId = 2105
+        });
+        Assert.True(sub.Id > 0, $"Expected valid subscription Id, got {sub.Id}");
+
+        // Upsert a messages cursor
+        using var cursorResp = await client.PutAsJsonAsync(
+            $"/api/channel-subscriptions/{sub.Id}/cursors/subscription_messages",
+            new { lastSeenId = 15999, cursorJson = "{\"offset\":327}" });
+        var cursorBody = await cursorResp.Content.ReadAsStringAsync();
+        Assert.True(cursorResp.IsSuccessStatusCode, $"Expected 2xx, got {cursorResp.StatusCode}: {cursorBody}");
+
+        var cursor = await cursorResp.Content.ReadFromJsonAsync<ChannelSubscriptionCursorDto>();
+        Assert.NotNull(cursor);
+        Assert.Equal(sub.Id, cursor.SubscriptionId);
+        Assert.Equal("subscription_messages", cursor.StreamKind);
+        Assert.Equal(15999, cursor.LastSeenId);
+
+        // Idempotent re-upsert
+        var cursorAgain = await PutJsonAsync<ChannelSubscriptionCursorDto>(client,
+            $"/api/channel-subscriptions/{sub.Id}/cursors/subscription_messages",
+            new { lastSeenId = 16200 });
+        Assert.Equal(cursor.Id, cursorAgain.Id);
+        Assert.Equal(16200, cursorAgain.LastSeenId);
+
+        // Upsert a second cursor (checkpoints)
+        await PutJsonAsync<ChannelSubscriptionCursorDto>(client,
+            $"/api/channel-subscriptions/{sub.Id}/cursors/subscription_checkpoints",
+            new { lastSeenId = 500 });
+
+        // Upsert a third cursor (activity)
+        await PutJsonAsync<ChannelSubscriptionCursorDto>(client,
+            $"/api/channel-subscriptions/{sub.Id}/cursors/subscription_activity",
+            new { lastSeenId = 300 });
+
+        // List all cursors
+        var cursors = await client.GetFromJsonAsync<List<ChannelSubscriptionCursorDto>>(
+            $"/api/channel-subscriptions/{sub.Id}/cursors");
+        Assert.NotNull(cursors);
+        Assert.Equal(3, cursors.Count);
+        Assert.Contains(cursors, c => c.StreamKind == "subscription_messages");
+        Assert.Contains(cursors, c => c.StreamKind == "subscription_checkpoints");
+        Assert.Contains(cursors, c => c.StreamKind == "subscription_activity");
+    }
+
+    [Fact]
+    public async Task SubscriptionInvalidPurposeStatusAndStream_AreRejected()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+
+        // Invalid purpose → 400
+        using var badPurpose = await client.PutAsJsonAsync($"/api/channels/{channel.Id}/subscriptions", new
+        {
+            memberType = "agent",
+            memberIdentity = "spawned-coder",
+            subscriptionIdentity = "sub:bad-purpose",
+            subscriptionPurpose = "unknown_purpose"
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, badPurpose.StatusCode);
+        var badPurposeBody = await badPurpose.Content.ReadAsStringAsync();
+        Assert.Contains("invalid_subscription_vocabulary", badPurposeBody);
+
+        // Invalid status → 400
+        using var badStatus = await client.PutAsJsonAsync($"/api/channels/{channel.Id}/subscriptions", new
+        {
+            memberType = "agent",
+            memberIdentity = "spawned-coder",
+            subscriptionIdentity = "sub:bad-status",
+            subscriptionPurpose = "observer",
+            subscriptionStatus = "nonexistent_status"
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, badStatus.StatusCode);
+        var badStatusBody = await badStatus.Content.ReadAsStringAsync();
+        Assert.Contains("invalid_subscription_vocabulary", badStatusBody);
+
+        // Create a valid sub for cursor tests
+        var sub = await PutJsonAsync<ChannelSubscriptionDto>(client, $"/api/channels/{channel.Id}/subscriptions", new
+        {
+            memberType = "agent",
+            memberIdentity = "spawned-coder",
+            subscriptionIdentity = "sub:vocab-test",
+            subscriptionPurpose = "observer"
+        });
+
+        // Invalid stream kind → 400
+        using var badStream = await client.PutAsJsonAsync(
+            $"/api/channel-subscriptions/{sub.Id}/cursors/invalid_stream",
+            new { lastSeenId = 1 });
+        Assert.Equal(HttpStatusCode.BadRequest, badStream.StatusCode);
+        var badStreamBody = await badStream.Content.ReadAsStringAsync();
+        Assert.Contains("invalid_cursor_vocabulary", badStreamBody);
+    }
+
+    [Fact]
+    public async Task SubscriptionAllAllowedPurposeValues_AreAccepted()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+
+        var purposes = new[]
+        {
+            "ordinary_channel", "agent_commons", "worker_pool_control",
+            "target_work", "workflow_analysis", "coordination_call", "observer"
+        };
+
+        var created = new List<ChannelSubscriptionDto>();
+        for (var i = 0; i < purposes.Length; i++)
+        {
+            var purpose = purposes[i];
+            var sub = await PutJsonAsync<ChannelSubscriptionDto>(client, $"/api/channels/{channel.Id}/subscriptions", new
+            {
+                memberType = "agent",
+                memberIdentity = "spawned-coder",
+                subscriptionIdentity = $"sub:all-purposes:{purpose}",
+                subscriptionPurpose = purpose,
+                subscriptionStatus = i % 2 == 0 ? "active" : "idle"
+            });
+            Assert.Equal(purpose, sub.SubscriptionPurpose);
+            created.Add(sub);
+        }
+
+        Assert.Equal(7, created.Count);
+
+        // Verify all created subscriptions are discoverable
+        var discovered = await client.GetFromJsonAsync<SubscriptionDiscoveryPayload>(
+            "/api/channel-subscriptions?memberIdentity=spawned-coder");
+        Assert.NotNull(discovered);
+        Assert.Equal(7, discovered.Subscriptions.Count);
+
+        foreach (var purpose in purposes)
+            Assert.Contains(discovered.Subscriptions, s => s.SubscriptionPurpose == purpose);
+    }
+
     public void Dispose()
     {
         _factory.Dispose();
@@ -1601,4 +1863,21 @@ public sealed class ChannelApiTests : IDisposable
         string CreatedAt,
         string? EditedAt,
         string? DeletedAt);
+
+    private sealed record ChannelSubscriptionDto(long Id, long ChannelId, string MemberType, string MemberIdentity,
+        string SubscriptionIdentity, string SubscriptionPurpose, string SubscriptionStatus,
+        string? TargetProjectId, long? TargetTaskId, string? AssignmentId, string? WorkerRunId, string? WorkerRole,
+        string? AgentInstanceId, string CreatedAt, string UpdatedAt);
+
+    private sealed record ChannelSubscriptionCursorDto(long Id, long SubscriptionId, string StreamKind,
+        long LastSeenId, string CreatedAt, string UpdatedAt);
+
+    private sealed record SubscriptionDiscoveryPayload(string MemberIdentity,
+        List<ChannelSubscriptionDiscoveryItemPayload> Subscriptions);
+
+    private sealed record ChannelSubscriptionDiscoveryItemPayload(long SubscriptionId, long ChannelId,
+        string ChannelSlug, string ChannelKind, string? ProjectId, string MemberType, string MemberIdentity,
+        string SubscriptionIdentity, string SubscriptionPurpose, string SubscriptionStatus,
+        string? TargetProjectId, long? TargetTaskId, string? AssignmentId, string? WorkerRunId, string? WorkerRole,
+        string CreatedAt, string UpdatedAt);
 }

@@ -1286,8 +1286,9 @@ public sealed partial class ChannelsRepository
 
     /// <summary>
     /// List channel memberships for one member identity across channels, including channel metadata.
-    /// Used by direct-event pollers to discover worker_pool_control and target_work channels by default.
-    /// Long-lived runtime agents can opt into ordinary null-purpose memberships with includeOrdinaryMemberships.
+    /// Default discovery returns all active, non-left memberships regardless of membership_purpose.
+    /// membership_purpose is a compatibility/opt-in filter; green-path runtime discovery uses
+    /// GET /api/channel-subscriptions instead.
     /// </summary>
     public async Task<IReadOnlyList<ChannelMembershipDiscoveryRowDto>> ListMembershipsByMemberIdentityAsync(
         string memberIdentity, string? membershipPurpose = null, string? projectId = null, long? channelId = null,
@@ -1309,11 +1310,6 @@ public sealed partial class ChannelsRepository
             WHERE m.member_identity = $memberIdentity
               AND ($projectId IS NULL OR c.project_id = $projectId)
               AND ($channelId IS NULL OR m.channel_id = $channelId)
-              AND (
-                    $membershipPurpose IS NOT NULL
-                    OR m.membership_purpose IN ('worker_pool_control', 'target_work')
-                    OR ($includeOrdinaryMemberships = 1 AND (m.membership_purpose IS NULL OR trim(m.membership_purpose) = ''))
-                  )
               AND ($membershipPurpose IS NULL OR m.membership_purpose = $membershipPurpose)
               AND ($includeLeft = 1 OR m.membership_status != 'left')
             ORDER BY CASE m.membership_purpose

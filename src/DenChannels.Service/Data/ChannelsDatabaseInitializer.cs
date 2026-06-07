@@ -1448,7 +1448,7 @@ public sealed class ChannelsDatabaseInitializer
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
             subscription_id     INTEGER NOT NULL REFERENCES channel_subscriptions(id) ON DELETE CASCADE,
             stream_kind         TEXT NOT NULL
-                                CHECK (stream_kind IN ('channel_messages','direct_agent_events','activity_events','agent_work_lifecycle')),
+                                CHECK (stream_kind IN ('subscription_messages','subscription_checkpoints','subscription_activity')),
             last_seen_id        INTEGER NOT NULL DEFAULT 0,
             last_seen_at        TEXT,
             cursor_json         TEXT,
