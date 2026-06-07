@@ -374,6 +374,7 @@ public static class ChannelRoutes
 
         api.MapGet("/channel-memberships", async Task<IResult> (ChannelsRepository repository,
             string? memberIdentity, string? membershipPurpose, string? projectId, long? channelId, bool? includeLeft,
+            bool? includeOrdinaryMemberships,
             int? limit, CancellationToken cancellationToken) =>
         {
             if (string.IsNullOrWhiteSpace(memberIdentity))
@@ -385,6 +386,7 @@ public static class ChannelRoutes
                 projectId,
                 channelId,
                 includeLeft ?? false,
+                includeOrdinaryMemberships ?? false,
                 limit ?? 100,
                 cancellationToken);
 

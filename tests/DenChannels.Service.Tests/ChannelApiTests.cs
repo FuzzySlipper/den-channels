@@ -338,6 +338,57 @@ public sealed class ChannelApiTests : IDisposable
     }
 
     [Fact]
+    public async Task ChannelMembershipDiscovery_IncludeOrdinaryMembershipsReturnsRuntimeChannelsWithoutAgentCommons()
+    {
+        using var client = _factory.CreateClient();
+        var systemChannel = await PostJsonAsync<ChannelPayload>(client, "/api/channels", new
+        {
+            slug = "runtime-control-test",
+            displayName = "Runtime Control Test",
+            kind = "system",
+            createdBy = "test"
+        });
+        var workerPool = await PutJsonAsync<ChannelPayload>(client, "/api/worker-pool/lobby", new { });
+
+        await PutJsonAsync<MembershipPayload>(client, $"/api/channels/{systemChannel.Id}/memberships", new
+        {
+            memberType = "agent",
+            memberIdentity = "den-mcp-runner",
+            wakePolicy = "all_human_messages"
+        });
+        await PutJsonAsync<MembershipPayload>(client, $"/api/channels/{workerPool.Id}/memberships", new
+        {
+            memberType = "agent",
+            memberIdentity = "spawned-coder",
+            wakePolicy = "mentions_only",
+            membershipPurpose = "worker_pool_control"
+        });
+
+        var defaultDiscovery = await client.GetFromJsonAsync<ChannelMembershipDiscoveryPayload>(
+            "/api/channel-memberships?memberIdentity=den-mcp-runner");
+        Assert.NotNull(defaultDiscovery);
+        Assert.Empty(defaultDiscovery.Memberships);
+
+        var runtimeDiscovery = await client.GetFromJsonAsync<ChannelMembershipDiscoveryPayload>(
+            "/api/channel-memberships?memberIdentity=den-mcp-runner&includeOrdinaryMemberships=true");
+        Assert.NotNull(runtimeDiscovery);
+        var runtimeMembership = Assert.Single(runtimeDiscovery.Memberships);
+        Assert.Equal(systemChannel.Id, runtimeMembership.ChannelId);
+        Assert.Equal("runtime-control-test", runtimeMembership.ChannelSlug);
+        Assert.Equal("system", runtimeMembership.ChannelKind);
+        Assert.Null(runtimeMembership.MembershipPurpose);
+        Assert.Equal("active", runtimeMembership.MembershipStatus);
+        Assert.Equal("all_human_messages", runtimeMembership.WakePolicy);
+
+        var workerDiscovery = await client.GetFromJsonAsync<ChannelMembershipDiscoveryPayload>(
+            "/api/channel-memberships?memberIdentity=spawned-coder");
+        Assert.NotNull(workerDiscovery);
+        var workerMembership = Assert.Single(workerDiscovery.Memberships);
+        Assert.Equal(workerPool.Id, workerMembership.ChannelId);
+        Assert.Equal("worker_pool_control", workerMembership.MembershipPurpose);
+    }
+
+    [Fact]
     public async Task AgentCommons_IsVisibleAndAutoIncludesActiveAgentsWithMentionsOnlyWakePolicy()
     {
         using var client = _factory.CreateClient();

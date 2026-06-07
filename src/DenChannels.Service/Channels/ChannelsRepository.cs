@@ -1279,11 +1279,13 @@ public sealed partial class ChannelsRepository
 
     /// <summary>
     /// List channel memberships for one member identity across channels, including channel metadata.
-    /// Used by direct-event pollers to discover worker_pool_control and target_work channels.
+    /// Used by direct-event pollers to discover worker_pool_control and target_work channels by default.
+    /// Long-lived runtime agents can opt into ordinary null-purpose memberships with includeOrdinaryMemberships.
     /// </summary>
     public async Task<IReadOnlyList<ChannelMembershipDiscoveryRowDto>> ListMembershipsByMemberIdentityAsync(
         string memberIdentity, string? membershipPurpose = null, string? projectId = null, long? channelId = null,
-        bool includeLeft = false, int limit = 100, CancellationToken cancellationToken = default)
+        bool includeLeft = false, bool includeOrdinaryMemberships = false, int limit = 100,
+        CancellationToken cancellationToken = default)
     {
         var normalizedMemberIdentity = memberIdentity.Trim();
         var normalizedPurpose = string.IsNullOrWhiteSpace(membershipPurpose) ? null : membershipPurpose.Trim();
@@ -1303,6 +1305,7 @@ public sealed partial class ChannelsRepository
               AND (
                     $membershipPurpose IS NOT NULL
                     OR m.membership_purpose IN ('worker_pool_control', 'target_work')
+                    OR ($includeOrdinaryMemberships = 1 AND (m.membership_purpose IS NULL OR trim(m.membership_purpose) = ''))
                   )
               AND ($membershipPurpose IS NULL OR m.membership_purpose = $membershipPurpose)
               AND ($includeLeft = 1 OR m.membership_status != 'left')
@@ -1319,6 +1322,7 @@ public sealed partial class ChannelsRepository
         command.Parameters.AddWithValue("$projectId", (object?)projectId ?? DBNull.Value);
         command.Parameters.AddWithValue("$channelId", (object?)channelId ?? DBNull.Value);
         command.Parameters.AddWithValue("$includeLeft", includeLeft ? 1 : 0);
+        command.Parameters.AddWithValue("$includeOrdinaryMemberships", includeOrdinaryMemberships ? 1 : 0);
         command.Parameters.AddWithValue("$limit", clampedLimit);
 
         var rows = new List<ChannelMembershipDiscoveryRowDto>();

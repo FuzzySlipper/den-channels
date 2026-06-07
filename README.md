@@ -26,7 +26,7 @@ This repo currently contains the service skeleton for Den task #1320:
 - `/api/channels/{channelId}/activity-events` — append/query non-waking agent/tool-call breadcrumbs.
 - `/api/channel-activity-events` and `/api/channel-activity-events/status` — Channels-owned Gateway-shaped breadcrumb compatibility writer plus recent failure diagnostics; new callers should prefer the per-channel route.
 - `/api/gateway/memberships?channelId={id}|projectId={projectId}` — Gateway-facing participant/wake-policy snapshot for channel routing.
-- `/api/channel-memberships?memberIdentity={identity}` — member-identity channel membership discovery for spawned worker polling. See `docs/worker-pool-discovery.md`.
+- `/api/channel-memberships?memberIdentity={identity}` — member-identity channel membership discovery for spawned worker polling; `includeOrdinaryMemberships=true` lets long-lived runtime agents discover ordinary null-purpose memberships without widening the worker default. See `docs/worker-pool-discovery.md`.
 - `/api/gateway/test-wakes` — controlled synthetic wake-event recorder for an active agent membership; it records Channels-owned evidence only and returns Gateway message/events URLs for downstream delivery/claim/complete/fail follow-up.
 - `/api/gateway/direct-agent-messages` — active-member direct-agent wake/message recorder with optional bounded Gateway claim/ack wait (`waitFor`, `timeoutMs`) and explicit delivery status handles. See `docs/direct-agent-delivery-status.md`.
 
