@@ -121,7 +121,11 @@ public sealed class ChannelApiTests : IDisposable
             body = "Duplicate",
             dedupeKey = "task-message:5680"
         });
-        Assert.Equal(HttpStatusCode.Conflict, duplicateResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, duplicateResponse.StatusCode);
+        var duplicate = await duplicateResponse.Content.ReadFromJsonAsync<MessagePayload>();
+        Assert.NotNull(duplicate);
+        Assert.Equal(posted.Id, duplicate.Id);
+        Assert.Equal("Task #1320 completed. Open task for details.", duplicate.Body);
     }
 
     [Fact]

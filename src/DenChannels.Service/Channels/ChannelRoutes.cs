@@ -225,10 +225,29 @@ public static class ChannelRoutes
         api.MapPost("/channels/{channelId:long}/messages", async (ChannelsRepository repository, long channelId,
             PostChannelMessageRequest request, CancellationToken cancellationToken) =>
         {
+            // Dedupe keys are caller-provided idempotency keys, not validation failures.
+            // Gateway-facing system messages already return the existing row for duplicate
+            // dedupe keys; direct channel-message posts need the same behavior so retrying
+            // Hermes/Den Channels delivery cannot turn an already-persisted reply into a
+            // noisy 409 failure and fallback send loop.
+            if (!string.IsNullOrWhiteSpace(request.DedupeKey))
+            {
+                var existing = await repository.GetMessageByDedupeKeyAsync(channelId, request.DedupeKey, cancellationToken);
+                if (existing is not null)
+                    return Results.Ok(existing);
+            }
+
             try
             {
                 var message = await repository.PostMessageAsync(channelId, request, cancellationToken);
                 return Results.Created($"/api/channels/{channelId}/messages/{message.Id}", message);
+            }
+            catch (SqliteException ex) when (IsConstraintFailure(ex) && !string.IsNullOrWhiteSpace(request.DedupeKey))
+            {
+                var existing = await repository.GetMessageByDedupeKeyAsync(channelId, request.DedupeKey, cancellationToken);
+                if (existing is not null)
+                    return Results.Ok(existing);
+                return Results.Conflict(new ProblemDetailsDto("message_constraint_failed", ex.SqliteErrorCode, ex.Message));
             }
             catch (SqliteException ex) when (IsConstraintFailure(ex))
             {
