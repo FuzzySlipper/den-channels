@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using DenChannels.Service;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 
@@ -226,6 +227,10 @@ public static class ChannelRoutes
         api.MapPost("/channels/{channelId:long}/messages", async (ChannelRepository repository, long channelId,
             PostChannelMessageRequest request, CancellationToken cancellationToken) =>
         {
+            var validation = ValidatePostChannelMessageRequest(request);
+            if (validation is not null)
+                return validation;
+
             try
             {
                 var message = await repository.PostMessageAsync(channelId, request, cancellationToken);
@@ -653,6 +658,50 @@ public static class ChannelRoutes
         return api;
     }
 
+
+    private static IResult? ValidatePostChannelMessageRequest(PostChannelMessageRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.SenderType))
+            return Results.BadRequest(new ChannelMessageValidationErrorDto(
+                "missing_sender_type",
+                "senderType is required and must be one of: user, agent, system."));
+
+        if (!SenderType.All.Contains(request.SenderType, StringComparer.OrdinalIgnoreCase))
+            return Results.BadRequest(new ChannelMessageValidationErrorDto(
+                "invalid_sender_type",
+                $"senderType '{request.SenderType}' is not valid. Must be one of: {string.Join(", ", SenderType.All)}."));
+
+        if (string.IsNullOrWhiteSpace(request.SenderIdentity))
+            return Results.BadRequest(new ChannelMessageValidationErrorDto(
+                "missing_sender_identity",
+                "senderIdentity is required."));
+
+        if (string.IsNullOrWhiteSpace(request.Body))
+            return Results.BadRequest(new ChannelMessageValidationErrorDto(
+                "missing_body",
+                "body is required."));
+
+        var messageKind = request.MessageKind ?? (string.Equals(request.SenderType, SenderType.Agent, StringComparison.OrdinalIgnoreCase)
+            ? MessageKind.AgentText
+            : MessageKind.HumanText);
+        if (!MessageKind.All.Contains(messageKind, StringComparer.OrdinalIgnoreCase))
+            return Results.BadRequest(new ChannelMessageValidationErrorDto(
+                "invalid_message_kind",
+                $"messageKind '{messageKind}' is not valid. Must be one of: {string.Join(", ", MessageKind.All)}."));
+
+        if (!string.IsNullOrWhiteSpace(request.SourceKind)
+            && !SourceKind.All.Contains(request.SourceKind, StringComparer.OrdinalIgnoreCase)
+            && !HistoricalSourceKind.All.Contains(request.SourceKind, StringComparer.OrdinalIgnoreCase))
+        {
+            var allowed = SourceKind.All.Concat(HistoricalSourceKind.All).ToArray();
+            return Results.BadRequest(new ChannelMessageValidationErrorDto(
+                "invalid_source_kind",
+                $"sourceKind '{request.SourceKind}' is not valid. Must be one of: {string.Join(", ", allowed)}."));
+        }
+
+        return null;
+    }
+
     private static IResult ToActivityRouteHttpResult(ChannelActivityRouteResultDto result) =>
         result.Status == "rejected" ? Results.BadRequest(result) : Results.Ok(result);
 
@@ -715,4 +764,5 @@ public static class ChannelRoutes
     private static bool IsConstraintFailure(SqliteException ex) => ex.SqliteErrorCode == 19;
 
     private sealed record ProblemDetailsDto(string Code, int SqliteErrorCode, string Detail);
+    private sealed record ChannelMessageValidationErrorDto(string Code, string Detail);
 }

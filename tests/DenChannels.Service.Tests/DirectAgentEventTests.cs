@@ -604,6 +604,126 @@ public sealed class DirectAgentEventTests : IDisposable
         Assert.Equal("session-143", message.SessionId);
     }
 
+
+    // -------------------------------------------------------------------------
+    // #2126 gateway_delivery reply status projection
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task GetDirectAgentEvent_WithNoReply_RemainsPending()
+    {
+        var channel = await EnsureDefaultChannelAsync("dae-pending-no-reply");
+        var evt = await RecordDirectAgentEventAsync(channel.Id, "pending-agent");
+
+        var readback = await _client.GetFromJsonAsync<DirectAgentEventReadbackPayload>(
+            $"/api/direct-agent-events/{evt.EventId}");
+
+        Assert.NotNull(readback);
+        Assert.Equal("recorded_no_subscriber", readback.DeliveryStatus);
+        Assert.Equal("no_subscriber", readback.ClaimStatus);
+        Assert.Equal("pending", readback.CompletionStatus);
+        Assert.Null(readback.GatewayDeliveryEventId);
+        Assert.False(readback.GatewayDeliveryTerminal);
+    }
+
+    [Fact]
+    public async Task GetDirectAgentEvent_WithInterimGatewayDeliveryReply_IsClaimedButPending()
+    {
+        var channel = await EnsureDefaultChannelAsync("dae-interim-reply");
+        var evt = await RecordDirectAgentEventAsync(channel.Id, "interim-agent");
+
+        var reply = await PostMessageAsync(channel.Id, new
+        {
+            senderType = "agent",
+            senderIdentity = "interim-agent",
+            body = "Received; work starting.",
+            messageKind = "agent_text",
+            sourceKind = "gateway_delivery",
+            sourceId = evt.EventId.ToString(),
+            dedupeKey = $"gateway-delivery:{evt.EventId}:interim"
+        });
+
+        var readback = await _client.GetFromJsonAsync<DirectAgentEventReadbackPayload>(
+            $"/api/direct-agent-events/{evt.EventId}");
+
+        Assert.NotNull(readback);
+        Assert.Equal("received", readback.DeliveryStatus);
+        Assert.Equal("claimed", readback.ClaimStatus);
+        Assert.Equal("pending", readback.CompletionStatus);
+        Assert.Equal(reply.Id, readback.GatewayDeliveryEventId);
+        Assert.Equal(evt.EventId.ToString(), readback.GatewayDeliverySourceId);
+        Assert.Equal($"gateway-delivery:{evt.EventId}:interim", readback.GatewayDeliveryDedupeKey);
+        Assert.False(readback.GatewayDeliveryTerminal);
+    }
+
+    [Fact]
+    public async Task GetDirectAgentEvent_WithFinalGatewayDeliveryReply_IsCompleted()
+    {
+        var channel = await EnsureDefaultChannelAsync("dae-final-success");
+        var evt = await RecordDirectAgentEventAsync(channel.Id, "success-agent");
+
+        await PostMessageAsync(channel.Id, new
+        {
+            senderType = "agent",
+            senderIdentity = "success-agent",
+            body = "Received; work starting.",
+            messageKind = "agent_text",
+            sourceKind = "gateway_delivery",
+            sourceId = evt.EventId.ToString(),
+            dedupeKey = $"gateway-delivery:{evt.EventId}:interim"
+        });
+        var finalReply = await PostMessageAsync(channel.Id, new
+        {
+            senderType = "agent",
+            senderIdentity = "success-agent",
+            body = "Received.",
+            messageKind = "agent_text",
+            sourceKind = "gateway_delivery",
+            sourceId = evt.EventId.ToString(),
+            dedupeKey = $"gateway-delivery:{evt.EventId}:final"
+        });
+
+        var readback = await _client.GetFromJsonAsync<DirectAgentEventReadbackPayload>(
+            $"/api/direct-agent-events/{evt.EventId}");
+
+        Assert.NotNull(readback);
+        Assert.Equal("completed", readback.DeliveryStatus);
+        Assert.Equal("claimed", readback.ClaimStatus);
+        Assert.Equal("completed", readback.CompletionStatus);
+        Assert.Equal(finalReply.Id, readback.GatewayDeliveryEventId);
+        Assert.Equal(evt.EventId.ToString(), readback.GatewayDeliverySourceId);
+        Assert.Equal($"gateway-delivery:{evt.EventId}:final", readback.GatewayDeliveryDedupeKey);
+        Assert.True(readback.GatewayDeliveryTerminal);
+    }
+
+    [Fact]
+    public async Task GetDirectAgentEvent_WithFinalFailedGatewayDeliveryReply_IsFailed()
+    {
+        var channel = await EnsureDefaultChannelAsync("dae-final-failed");
+        var evt = await RecordDirectAgentEventAsync(channel.Id, "failure-agent");
+
+        var finalReply = await PostMessageAsync(channel.Id, new
+        {
+            senderType = "agent",
+            senderIdentity = "failure-agent",
+            body = "Failed: runtime exited.",
+            messageKind = "agent_text",
+            sourceKind = "gateway_delivery",
+            sourceId = evt.EventId.ToString(),
+            dedupeKey = $"gateway-delivery:{evt.EventId}:final"
+        });
+
+        var readback = await _client.GetFromJsonAsync<DirectAgentEventReadbackPayload>(
+            $"/api/direct-agent-events/{evt.EventId}");
+
+        Assert.NotNull(readback);
+        Assert.Equal("failed", readback.DeliveryStatus);
+        Assert.Equal("claimed", readback.ClaimStatus);
+        Assert.Equal("failed", readback.CompletionStatus);
+        Assert.Equal(finalReply.Id, readback.GatewayDeliveryEventId);
+        Assert.True(readback.GatewayDeliveryTerminal);
+    }
+
     // -------------------------------------------------------------------------
     // Gateway compatibility alias returns 410 Gone (retired task #2022)
     // -------------------------------------------------------------------------
@@ -648,6 +768,22 @@ public sealed class DirectAgentEventTests : IDisposable
         });
         response.EnsureSuccessStatusCode();
         var payload = await response.Content.ReadFromJsonAsync<ChannelStub>();
+        Assert.NotNull(payload);
+        return payload;
+    }
+
+
+    private async Task<DirectAgentEventPayload> RecordDirectAgentEventAsync(long channelId, string memberIdentity)
+    {
+        using var response = await _client.PostAsJsonAsync("/api/direct-agent-events", new
+        {
+            channelId,
+            memberIdentity,
+            senderIdentity = "operator",
+            body = "Run a direct-agent status projection smoke."
+        });
+        response.EnsureSuccessStatusCode();
+        var payload = await response.Content.ReadFromJsonAsync<DirectAgentEventPayload>();
         Assert.NotNull(payload);
         return payload;
     }
@@ -749,6 +885,10 @@ public sealed class DirectAgentEventTests : IDisposable
         string? CoordinationCallId,
         string? RequestKind,
         string? ResultDestinationJson,
+        long? GatewayDeliveryEventId,
+        string? GatewayDeliverySourceId,
+        string? GatewayDeliveryDedupeKey,
+        bool GatewayDeliveryTerminal,
         string CreatedAt);
 
     private sealed record GatewayDirectAgentMessagePayload(

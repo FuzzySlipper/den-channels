@@ -105,6 +105,10 @@ public sealed record DirectAgentEventReadbackDto(
     string? CoordinationCallId,
     string? RequestKind,
     string? ResultDestinationJson,
+    long? GatewayDeliveryEventId,
+    string? GatewayDeliverySourceId,
+    string? GatewayDeliveryDedupeKey,
+    bool GatewayDeliveryTerminal,
     string CreatedAt);
 
 // ── Events list (cursor-paged event subscription) ─────────────────────

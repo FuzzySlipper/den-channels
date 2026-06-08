@@ -281,6 +281,46 @@ public sealed class AgentWorkLifecycleContractTests : IDisposable
         Assert.Equal(4242, spawnedCoder.GetProperty("processId").GetInt32());
     }
 
+
+    [Fact]
+    public async Task CurrentWorkProjection_UsesProducerStalenessDeadline()
+    {
+        using var client = _factory.CreateClient();
+        var staleDeadline = DateTimeOffset.UtcNow.AddMinutes(-5).ToString("O");
+
+        var createChannelResp = await client.PostAsJsonAsync("/api/channels", new
+        {
+            slug = "deadline-proj",
+            displayName = "Deadline Projection",
+            kind = "ad_hoc",
+            createdBy = "test"
+        });
+        var channel = await createChannelResp.Content.ReadFromJsonAsync<ChannelPayload>();
+
+        using var lifecycleResp = await client.PostAsJsonAsync("/api/agent-work/lifecycle-events", new
+        {
+            channelId = channel!.Id,
+            agentIdentity = "deadline-runner",
+            eventType = "heartbeat",
+            workerRunId = "run-deadline",
+            stalenessDeadline = staleDeadline,
+            summary = "Heartbeat with producer deadline"
+        });
+        Assert.Equal(HttpStatusCode.Created, lifecycleResp.StatusCode);
+
+        using var response = await client.GetAsync($"/api/agent-work/current?channelId={channel.Id}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(body);
+        var item = doc.RootElement.GetProperty("items").EnumerateArray()
+            .Single(i => i.GetProperty("agentIdentity").GetString() == "deadline-runner");
+
+        Assert.Equal(staleDeadline, item.GetProperty("stalenessDeadline").GetString());
+        Assert.Contains("deadline passed", item.GetProperty("stalenessDiagnostic").GetString());
+        Assert.Equal(1, doc.RootElement.GetProperty("stalenessSummary").GetProperty("stale").GetInt32());
+    }
+
     [Fact]
     public async Task LifecycleEvent_IncludesRequiredCorrelationFields()
     {

@@ -232,6 +232,15 @@ public static class DirectAgentEventRoutes
             var deliveryStatus = subscriptionState?.DeliveryStatus ?? metadataDeliveryStatus;
             var claimStatus = subscriptionState?.ClaimStatus ?? metadataClaimStatus;
             var completionStatus = subscriptionState?.CompletionStatus ?? metadataCompletionStatus;
+            var gatewayObservation = DirectAgentEventShared.ResolveGatewayDeliveryObservation(
+                msg,
+                await repository.ListMessagesAsync(msg.ChannelId, afterId: msg.Id, assignmentId: null, limit: 500, cancellationToken));
+            if (gatewayObservation is not null)
+            {
+                deliveryStatus = gatewayObservation.DeliveryStatus;
+                claimStatus = gatewayObservation.ClaimStatus;
+                completionStatus = gatewayObservation.CompletionStatus;
+            }
             var (coordinationCallId, requestKind, resultDestinationJson) =
                 DirectAgentEventShared.ExtractCoordinationMetadata(msg.MetadataJson);
             var activeSubscriptionCount = subscriptionState?.ActiveSubscriptionCount ?? 0;
@@ -270,6 +279,10 @@ public static class DirectAgentEventRoutes
                 CoordinationCallId: coordinationCallId,
                 RequestKind: requestKind,
                 ResultDestinationJson: resultDestinationJson,
+                GatewayDeliveryEventId: gatewayObservation?.EventId,
+                GatewayDeliverySourceId: gatewayObservation?.SourceId,
+                GatewayDeliveryDedupeKey: gatewayObservation?.DedupeKey,
+                GatewayDeliveryTerminal: gatewayObservation?.Terminal ?? false,
                 CreatedAt: msg.CreatedAt));
         });
 

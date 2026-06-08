@@ -306,6 +306,104 @@ internal static class DirectAgentEventShared
         }
     }
 
+
+    internal sealed record GatewayDeliveryObservation(
+        long EventId,
+        string? SourceId,
+        string? DedupeKey,
+        string? Body,
+        string? MetadataJson,
+        bool Terminal,
+        string DeliveryStatus,
+        string ClaimStatus,
+        string CompletionStatus);
+
+    internal static GatewayDeliveryObservation? ResolveGatewayDeliveryObservation(
+        ChannelMessageDto wakeMessage,
+        IEnumerable<ChannelMessageDto> channelMessages)
+    {
+        var related = channelMessages
+            .Where(message => message.Id > wakeMessage.Id)
+            .Where(message => string.Equals(message.SourceKind, SourceKind.GatewayDelivery, StringComparison.OrdinalIgnoreCase))
+            .Where(message => IsRelatedGatewayDeliveryReply(wakeMessage, message))
+            .OrderByDescending(message => message.Id)
+            .ToList();
+
+        if (related.Count == 0)
+            return null;
+
+        var terminal = related.FirstOrDefault(IsTerminalGatewayDeliveryReply);
+        var selected = terminal ?? related[0];
+        var (deliveryStatus, completionStatus) = ClassifyGatewayDeliveryReply(selected, terminal is not null);
+        return new GatewayDeliveryObservation(
+            selected.Id,
+            selected.SourceId,
+            selected.DedupeKey,
+            selected.Body,
+            selected.MetadataJson,
+            terminal is not null,
+            deliveryStatus,
+            CS.Claimed,
+            completionStatus);
+    }
+
+    private static bool IsRelatedGatewayDeliveryReply(ChannelMessageDto wakeMessage, ChannelMessageDto reply)
+    {
+        var wakeEventId = wakeMessage.Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (string.Equals(reply.SourceId, wakeEventId, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(reply.DedupeKey)
+            && reply.DedupeKey.StartsWith($"gateway-delivery:{wakeEventId}:", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(wakeMessage.SourceId)
+            && string.Equals(reply.DeliveryRequestId, wakeMessage.SourceId, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(wakeMessage.DeliveryRequestId)
+            && string.Equals(reply.DeliveryRequestId, wakeMessage.DeliveryRequestId, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return false;
+    }
+
+    private static bool IsTerminalGatewayDeliveryReply(ChannelMessageDto reply)
+    {
+        if (!string.IsNullOrWhiteSpace(reply.DedupeKey)
+            && reply.DedupeKey.Contains(":final", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var combined = $"{reply.Body} {reply.Summary} {reply.MetadataJson}";
+        return combined.Contains("final", StringComparison.OrdinalIgnoreCase)
+               || combined.Contains("completed", StringComparison.OrdinalIgnoreCase)
+               || combined.Contains("failed", StringComparison.OrdinalIgnoreCase)
+               || combined.Contains("timeout", StringComparison.OrdinalIgnoreCase)
+               || combined.Contains("timed_out", StringComparison.OrdinalIgnoreCase)
+               || combined.Contains("expired", StringComparison.OrdinalIgnoreCase)
+               || combined.Contains("suppressed", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static (string deliveryStatus, string completionStatus) ClassifyGatewayDeliveryReply(
+        ChannelMessageDto reply,
+        bool terminal)
+    {
+        var combined = $"{reply.Body} {reply.Summary} {reply.MetadataJson}";
+        if (combined.Contains("suppressed", StringComparison.OrdinalIgnoreCase))
+            return (DenChannels.Service.DeliveryStatus.Suppressed, CompS.Suppressed);
+        if (combined.Contains("timeout", StringComparison.OrdinalIgnoreCase)
+            || combined.Contains("timed_out", StringComparison.OrdinalIgnoreCase)
+            || combined.Contains("expired", StringComparison.OrdinalIgnoreCase))
+            return (DenChannels.Service.DeliveryStatus.Expired, CompS.Expired);
+        if (combined.Contains("failed", StringComparison.OrdinalIgnoreCase)
+            || combined.Contains("error", StringComparison.OrdinalIgnoreCase))
+            return (DenChannels.Service.DeliveryStatus.Failed, CompS.Failed);
+
+        return terminal
+            ? (DenChannels.Service.DeliveryStatus.Completed, CompS.Completed)
+            : (DenChannels.Service.DeliveryStatus.Received, CompS.Pending);
+    }
+
     internal static string? ExtractMemberIdentity(string? sourceId)
     {
         if (string.IsNullOrWhiteSpace(sourceId) || !sourceId.StartsWith("direct-agent-message:", StringComparison.Ordinal))

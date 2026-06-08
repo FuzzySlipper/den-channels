@@ -193,6 +193,85 @@ public sealed class ChannelApiTests : IDisposable
         Assert.Contains(messages, message => message.DeliveryRequestId == "source-45");
     }
 
+
+    [Fact]
+    public async Task PostMessage_MissingSenderType_ReturnsStructuredBadRequest()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+
+        using var response = await client.PostAsJsonAsync($"/api/channels/{channel.Id}/messages", new
+        {
+            senderIdentity = "den-mcp-planner",
+            body = "Missing senderType should be rejected before SQLite.",
+            messageKind = "agent_text"
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var raw = await response.Content.ReadAsStringAsync();
+        Assert.Contains("missing_sender_type", raw);
+    }
+
+    [Fact]
+    public async Task PostMessage_InvalidSourceKind_ReturnsStructuredBadRequest()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+
+        using var response = await client.PostAsJsonAsync($"/api/channels/{channel.Id}/messages", new
+        {
+            senderType = "agent",
+            senderIdentity = "den-mcp-planner",
+            body = "Invalid sourceKind should be rejected before SQLite.",
+            messageKind = "agent_text",
+            sourceKind = "manual_smoke"
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var raw = await response.Content.ReadAsStringAsync();
+        Assert.Contains("invalid_source_kind", raw);
+        Assert.Contains("external_adapter_message", raw);
+    }
+
+    [Fact]
+    public async Task PostMessage_ExternalAdapterSourceRequiresExplicitDeliveryRequestId()
+    {
+        using var client = _factory.CreateClient();
+        var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
+        {
+            displayName = "Den Channels"
+        });
+
+        var withoutDeliveryRequestId = await PostJsonAsync<MessagePayload>(client, $"/api/channels/{channel.Id}/messages", new
+        {
+            senderType = "system",
+            senderIdentity = "den-channels-test",
+            body = "External adapter without explicit deliveryRequestId",
+            messageKind = "system_event",
+            sourceKind = "external_adapter_message",
+            sourceId = "external-implicit-2104"
+        });
+        Assert.Null(withoutDeliveryRequestId.DeliveryRequestId);
+
+        var withDeliveryRequestId = await PostJsonAsync<MessagePayload>(client, $"/api/channels/{channel.Id}/messages", new
+        {
+            senderType = "system",
+            senderIdentity = "den-channels-test",
+            body = "External adapter with explicit deliveryRequestId",
+            messageKind = "system_event",
+            sourceKind = "external_adapter_message",
+            sourceId = "external-explicit-2104",
+            deliveryRequestId = "delivery-explicit-2104"
+        });
+        Assert.Equal("delivery-explicit-2104", withDeliveryRequestId.DeliveryRequestId);
+    }
+
     [Fact]
     public async Task MembershipAndReactionEndpoints_Work()
     {
