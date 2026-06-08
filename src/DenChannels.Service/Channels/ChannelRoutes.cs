@@ -689,9 +689,10 @@ public static class ChannelRoutes
                 "invalid_message_kind",
                 $"messageKind '{messageKind}' is not valid. Must be one of: {string.Join(", ", MessageKind.All)}."));
 
-        if (!string.IsNullOrWhiteSpace(request.SourceKind)
-            && !SourceKind.All.Contains(request.SourceKind, StringComparer.OrdinalIgnoreCase)
-            && !HistoricalSourceKind.All.Contains(request.SourceKind, StringComparer.OrdinalIgnoreCase))
+        if (request.SourceKind is not null
+            && (string.IsNullOrWhiteSpace(request.SourceKind)
+                || !SourceKind.All.Contains(request.SourceKind, StringComparer.OrdinalIgnoreCase)
+                && !HistoricalSourceKind.All.Contains(request.SourceKind, StringComparer.OrdinalIgnoreCase)))
         {
             var allowed = SourceKind.All.Concat(HistoricalSourceKind.All).ToArray();
             return Results.BadRequest(new ChannelMessageValidationErrorDto(

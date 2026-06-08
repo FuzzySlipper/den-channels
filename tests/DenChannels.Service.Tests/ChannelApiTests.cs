@@ -215,8 +215,10 @@ public sealed class ChannelApiTests : IDisposable
         Assert.Contains("missing_sender_type", raw);
     }
 
-    [Fact]
-    public async Task PostMessage_InvalidSourceKind_ReturnsStructuredBadRequest()
+    [Theory]
+    [InlineData("manual_smoke")]
+    [InlineData("   ")]
+    public async Task PostMessage_InvalidSourceKind_ReturnsStructuredBadRequest(string sourceKind)
     {
         using var client = _factory.CreateClient();
         var channel = await PutJsonAsync<ChannelPayload>(client, "/api/projects/den-channels/default-channel", new
@@ -230,7 +232,7 @@ public sealed class ChannelApiTests : IDisposable
             senderIdentity = "den-mcp-planner",
             body = "Invalid sourceKind should be rejected before SQLite.",
             messageKind = "agent_text",
-            sourceKind = "manual_smoke"
+            sourceKind
         });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
