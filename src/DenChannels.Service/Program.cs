@@ -79,6 +79,7 @@ app.MapGet("/health/ready", (IOptions<DenChannelsOptions> options) =>
 });
 
 app.MapChannelRoutes();
+app.MapChannelEventStreamRoutes();
 app.MapProjectChannelSyncRoutes();
 app.MapMirrorSummaryRoutes();
 app.MapDenCoreApiProxy();

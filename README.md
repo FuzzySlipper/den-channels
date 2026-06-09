@@ -24,6 +24,7 @@ This repo currently contains the service skeleton for Den task #1320:
 - `/api/channels/{channelId}/memberships` — minimal membership upsert.
 - `/api/channel-messages/{messageId}/reactions` — idempotent reaction add.
 - `/api/channels/{channelId}/activity-events` — append/query non-waking agent/tool-call breadcrumbs.
+- `/api/channels/{channelId}/events/stream` — Server-Sent Events stream for Den Web live updates, currently emitting `channel_message` and `channel_activity_event` envelopes with composite `Last-Event-ID` cursor support. See `docs/channel-event-stream-sse-2146.md`.
 - `/api/channel-activity-events` and `/api/channel-activity-events/status` — Channels-owned Gateway-shaped breadcrumb compatibility writer plus recent failure diagnostics; new callers should prefer the per-channel route.
 - `/api/gateway/memberships?channelId={id}|projectId={projectId}` — participant/wake-policy snapshot for channel routing.
 - `/api/channel-memberships?memberIdentity={identity}` — member-identity channel membership discovery for spawned worker polling; `includeOrdinaryMemberships=true` lets long-lived runtime agents discover ordinary null-purpose memberships without widening the worker default. See `docs/worker-pool-discovery.md`.

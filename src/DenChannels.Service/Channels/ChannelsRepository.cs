@@ -838,6 +838,7 @@ public sealed partial class ChannelsRepository
                               || taskId is not null
                               || assignmentId is not null;
         var useLatestChannelWindow = !hasScopedFilter && afterId is null;
+        var filteredOrderBy = afterId is null ? "sequence ASC, id ASC" : "id ASC";
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         const string selectColumns = """
@@ -875,7 +876,7 @@ public sealed partial class ChannelsRepository
                 AND ($taskId IS NULL OR task_id = $taskId)
                 AND ($assignmentId IS NULL OR assignment_id = $assignmentId)
                 AND ($afterId IS NULL OR id > $afterId)
-              ORDER BY sequence ASC, id ASC
+              ORDER BY {filteredOrderBy}
               LIMIT $limit;
               """";
         command.Parameters.AddWithValue("$channelId", channelId);
@@ -888,6 +889,38 @@ public sealed partial class ChannelsRepository
         command.Parameters.AddWithValue("$taskId", (object?)taskId ?? DBNull.Value);
         command.Parameters.AddWithValue("$assignmentId", (object?)assignmentId ?? DBNull.Value);
         command.Parameters.AddWithValue("$afterId", (object?)afterId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$limit", limit);
+        var rows = new List<ChannelActivityEventDto>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            rows.Add(ReadActivityEvent(reader));
+        return rows;
+    }
+
+    public async Task<IReadOnlyList<ChannelActivityEventDto>> ListActivityEventsAfterIdAsync(long channelId,
+        long afterId = 0, int limit = 100, CancellationToken cancellationToken = default)
+    {
+        limit = Math.Clamp(limit, 1, 500);
+        afterId = Math.Max(0, afterId);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, channel_id, project_id, agent_identity, delivery_request_id, session_key,
+                display_block_id, parent_session_key, parent_agent_identity, worker_run_id, worker_role,
+                agent_instance_id, pool_member_id,
+                task_id, thread_id, anchor_message_id,
+                assignment_id, checkpoint_type, checkpoint_handle,
+                event_type, status, delivery_stage, terminal, sequence,
+                update_version, title, summary, preview_json, metadata_json, dedupe_key, final_channel_message_id,
+                created_at, updated_at
+            FROM channel_activity_events
+            WHERE channel_id = $channelId
+              AND id > $afterId
+            ORDER BY id ASC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$afterId", afterId);
         command.Parameters.AddWithValue("$limit", limit);
         var rows = new List<ChannelActivityEventDto>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
