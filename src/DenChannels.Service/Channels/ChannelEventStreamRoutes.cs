@@ -91,7 +91,7 @@ public static class ChannelEventStreamRoutes
                     explicitQuery = new[] { "afterMessageId", "afterActivityId" },
                 },
                 heartbeatSeconds = (int)options.HeartbeatInterval.TotalSeconds,
-                notes = "Delivery/wake progress is present only when already persisted as channel messages or channel activity events. Missing Gateway-owned progress requires a den-gateway follow-up."
+                notes = "Delivery/wake progress is present only when already persisted as channel messages or channel activity events. Runtime-only transport progress is not synthesized by this Channels stream."
             },
             cancellationToken);
 

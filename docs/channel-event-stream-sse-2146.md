@@ -7,7 +7,7 @@ GET /api/channels/{channelId}/events/stream
 Accept: text/event-stream
 ```
 
-This endpoint is a Channels-owned backend contract. It streams persisted channel data only; it does **not** create chat messages, wake agents, claim direct-agent delivery, advance read cursors, or make Gateway-owned delivery state authoritative inside Channels.
+This endpoint is a Channels-owned backend contract. It streams persisted channel data only; it does **not** create chat messages, wake agents, claim direct-agent delivery, advance read cursors, or make transport/runtime-only delivery state authoritative inside Channels.
 
 ## Event sources
 
@@ -18,7 +18,7 @@ The stream currently emits two event types:
 | `channel_message` | `/api/channels/{channelId}/messages` / `channel_messages` | `message` | New channel message rows, including wake/direct-agent breadcrumbs already represented as channel messages. |
 | `channel_activity_event` | `/api/channels/{channelId}/activity-events` / `channel_activity_events` | `activityEvent` | Non-waking activity/lifecycle breadcrumbs and operator-visible progress evidence. |
 
-Wake/direct-agent delivery progress appears in this stream when producers already persist it as channel messages or channel activity/lifecycle events. Gateway-only runtime progress that is not yet persisted in Channels is intentionally not synthesized here; add a `den-gateway` follow-up if Den Web needs that additional source.
+Wake/direct-agent delivery progress appears in this stream when producers already persist it as channel messages or channel activity/lifecycle events. Runtime-only transport progress that is not yet persisted in Channels is intentionally not synthesized here; route any additional source through the current runtime/host boundary as pass-through data rather than making Channels invent tracking state.
 
 ## Stream-open contract event
 
@@ -45,7 +45,7 @@ data: {
     "explicitQuery": ["afterMessageId", "afterActivityId"]
   },
   "heartbeatSeconds": 15,
-  "notes": "Delivery/wake progress is present only when already persisted as channel messages or channel activity events. Missing Gateway-owned progress requires a den-gateway follow-up."
+  "notes": "Delivery/wake progress is present only when already persisted as channel messages or channel activity events. Runtime-only transport progress is not synthesized by this Channels stream."
 }
 ```
 
