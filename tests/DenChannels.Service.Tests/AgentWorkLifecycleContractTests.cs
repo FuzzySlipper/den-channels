@@ -295,7 +295,13 @@ public sealed class AgentWorkLifecycleContractTests : IDisposable
         });
         var channel = await createChannelResp.Content.ReadFromJsonAsync<ChannelPayload>();
 
-        foreach (var metadataJson in new[] { "[1,2,3]", "{not-json", JsonSerializer.Serialize(new { source = new string('x', 9000) }) })
+        foreach (var metadataJson in new[]
+        {
+            "[1,2,3]",
+            "{not-json",
+            JsonSerializer.Serialize(new { source = new string('x', 2500) }),
+            JsonSerializer.Serialize(new { source = new { rawTranscript = "must not be exposed" } })
+        })
         {
             using var post = await client.PostAsJsonAsync("/api/agent-work/lifecycle-events", new
             {
@@ -312,7 +318,7 @@ public sealed class AgentWorkLifecycleContractTests : IDisposable
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var items = doc.RootElement.GetProperty("items");
-        Assert.Equal(3, items.GetArrayLength());
+        Assert.Equal(4, items.GetArrayLength());
         foreach (var item in items.EnumerateArray())
         {
             Assert.Equal("heartbeat", item.GetProperty("eventType").GetString());

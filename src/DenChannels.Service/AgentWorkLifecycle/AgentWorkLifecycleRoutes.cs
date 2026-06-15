@@ -23,7 +23,10 @@ namespace DenChannels.Service;
 /// </summary>
 public static class AgentWorkLifecycleRoutes
 {
-    private const int MaxCallerMetadataJsonBytes = 8192;
+    // channel_activity_events.metadata_json is bounded by repository storage
+    // normalization. Keep caller extension metadata well below that storage cap
+    // so canonical fields appended below cannot corrupt the JSON by truncation.
+    private const int MaxCallerMetadataJsonBytes = 2000;
 
     private static readonly IReadOnlySet<string> CallerMetadataAllowlist = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -973,7 +976,8 @@ public static class AgentWorkLifecycleRoutes
             {
                 if (!CallerMetadataAllowlist.Contains(property.Name)) continue;
                 if (CanonicalMetadataKeys.Contains(property.Name)) continue;
-                var value = JsonElementToObject(property.Value);
+                var value = CallerMetadataScalarToObject(property.Value);
+                if (value is null) continue;
                 if (value is string s && s.Length > 512)
                 {
                     value = s[..512];
@@ -986,6 +990,16 @@ public static class AgentWorkLifecycleRoutes
             // Invalid producer metadata is ignored; canonical lifecycle fields still persist.
         }
     }
+
+    private static object? CallerMetadataScalarToObject(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.String => value.GetString(),
+        JsonValueKind.Number when value.TryGetInt64(out var l) => l,
+        JsonValueKind.Number when value.TryGetDouble(out var d) => d,
+        JsonValueKind.True => true,
+        JsonValueKind.False => false,
+        _ => null,
+    };
 
     private static string? BuildLifecycleMetadata(AgentWorkLifecycleWriteRequest r)
     {
