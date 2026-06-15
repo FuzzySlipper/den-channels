@@ -303,7 +303,31 @@ public sealed record AgentWorkLifecycleEventDto(
 
     // ── Content ──
     [property: JsonPropertyName("title")] string? Title,
-    [property: JsonPropertyName("summary")] string? Summary);
+    [property: JsonPropertyName("summary")] string? Summary,
+
+    // ── Bounded producer metadata ──
+    [property: JsonPropertyName("metadata")] IReadOnlyDictionary<string, object?>? Metadata = null,
+    [property: JsonPropertyName("source")] string? Source = null,
+    [property: JsonPropertyName("eventFamily")] string? EventFamily = null,
+    [property: JsonPropertyName("piCrewEventType")] string? PiCrewEventType = null,
+    [property: JsonPropertyName("childSessionId")] string? ChildSessionId = null,
+    [property: JsonPropertyName("rootSessionId")] string? RootSessionId = null,
+    [property: JsonPropertyName("ownerSessionId")] string? OwnerSessionId = null,
+    [property: JsonPropertyName("toolName")] string? ToolName = null,
+    [property: JsonPropertyName("toolCallId")] string? ToolCallId = null,
+    [property: JsonPropertyName("phase")] string? Phase = null,
+    [property: JsonPropertyName("durationMs")] long? DurationMs = null,
+    [property: JsonPropertyName("isError")] bool? IsError = null,
+    [property: JsonPropertyName("resultClass")] string? ResultClass = null,
+    [property: JsonPropertyName("provider")] string? Provider = null,
+    [property: JsonPropertyName("model")] string? Model = null,
+    [property: JsonPropertyName("policyId")] string? PolicyId = null,
+    [property: JsonPropertyName("depth")] int? Depth = null,
+    [property: JsonPropertyName("outcome")] string? Outcome = null,
+    [property: JsonPropertyName("turnsUsed")] int? TurnsUsed = null,
+    [property: JsonPropertyName("tokensConsumed")] long? TokensConsumed = null,
+    [property: JsonPropertyName("evidenceChecked")] bool? EvidenceChecked = null,
+    [property: JsonPropertyName("artifactCount")] int? ArtifactCount = null);
 
 /// <summary>
 /// Query filter for lifecycle event readback.

@@ -207,6 +207,120 @@ public sealed class AgentWorkLifecycleContractTests : IDisposable
     }
 
     [Fact]
+    public async Task LifecycleEventMetadata_PreservesBoundedPiCrewFieldsOnReadback()
+    {
+        using var client = _factory.CreateClient();
+
+        var createChannelResp = await client.PostAsJsonAsync("/api/channels", new
+        {
+            slug = "pi-crew-metadata",
+            displayName = "Pi Crew Metadata",
+            kind = "ad_hoc",
+            createdBy = "test"
+        });
+        var channel = await createChannelResp.Content.ReadFromJsonAsync<ChannelPayload>();
+
+        var metadataJson = JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["source"] = "pi-crew",
+            ["eventFamily"] = "tool",
+            ["piCrewEventType"] = "tool.completed",
+            ["childSessionId"] = "delegated-session-1",
+            ["ownerSessionId"] = "sess-prime-coder",
+            ["toolName"] = "list_assignments",
+            ["toolCallId"] = "tool-1",
+            ["phase"] = "completed",
+            ["durationMs"] = 123L,
+            ["isError"] = false,
+            ["resultClass"] = "success",
+            ["provider"] = "openrouter",
+            ["model"] = "gpt-test",
+            ["policyId"] = "default",
+            ["depth"] = 1,
+            ["outcome"] = "completed",
+            ["turnsUsed"] = 3,
+            ["tokensConsumed"] = 456L,
+            ["evidenceChecked"] = true,
+            ["artifactCount"] = 2,
+            ["rawTranscript"] = "must not be exposed"
+        });
+
+        using var post = await client.PostAsJsonAsync("/api/agent-work/lifecycle-events", new
+        {
+            channelId = channel!.Id,
+            agentIdentity = "pi-crew-service",
+            eventType = "heartbeat",
+            projectId = "pi-crew",
+            sessionId = "sess-prime-coder",
+            metadataJson,
+            title = "Pi Crew tool event",
+            summary = "structured event"
+        });
+        Assert.Equal(HttpStatusCode.Created, post.StatusCode);
+
+        using var response = await client.GetAsync($"/api/agent-work/events?channelId={channel.Id}&projectId=pi-crew&limit=10");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var item = doc.RootElement.GetProperty("items")[0];
+
+        Assert.Equal("heartbeat", item.GetProperty("eventType").GetString());
+        Assert.Equal("pi-crew", item.GetProperty("source").GetString());
+        Assert.Equal("tool", item.GetProperty("eventFamily").GetString());
+        Assert.Equal("tool.completed", item.GetProperty("piCrewEventType").GetString());
+        Assert.Equal("delegated-session-1", item.GetProperty("childSessionId").GetString());
+        Assert.Equal("list_assignments", item.GetProperty("toolName").GetString());
+        Assert.Equal(123, item.GetProperty("durationMs").GetInt64());
+        Assert.False(item.GetProperty("isError").GetBoolean());
+        Assert.Equal(1, item.GetProperty("depth").GetInt32());
+        Assert.Equal(456, item.GetProperty("tokensConsumed").GetInt64());
+        Assert.True(item.GetProperty("evidenceChecked").GetBoolean());
+        Assert.Equal(2, item.GetProperty("artifactCount").GetInt32());
+
+        var metadata = item.GetProperty("metadata");
+        Assert.Equal("pi-crew", metadata.GetProperty("source").GetString());
+        Assert.False(metadata.TryGetProperty("rawTranscript", out _));
+    }
+
+    [Fact]
+    public async Task LifecycleEventMetadata_IgnoresInvalidNonObjectAndOversizedMetadata()
+    {
+        using var client = _factory.CreateClient();
+
+        var createChannelResp = await client.PostAsJsonAsync("/api/channels", new
+        {
+            slug = "bad-metadata",
+            displayName = "Bad Metadata",
+            kind = "ad_hoc",
+            createdBy = "test"
+        });
+        var channel = await createChannelResp.Content.ReadFromJsonAsync<ChannelPayload>();
+
+        foreach (var metadataJson in new[] { "[1,2,3]", "{not-json", JsonSerializer.Serialize(new { source = new string('x', 9000) }) })
+        {
+            using var post = await client.PostAsJsonAsync("/api/agent-work/lifecycle-events", new
+            {
+                channelId = channel!.Id,
+                agentIdentity = "test-runner",
+                eventType = "heartbeat",
+                workerRunId = $"run-{Guid.NewGuid():N}",
+                metadataJson
+            });
+            Assert.Equal(HttpStatusCode.Created, post.StatusCode);
+        }
+
+        using var response = await client.GetAsync($"/api/agent-work/events?channelId={channel!.Id}&limit=10");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var items = doc.RootElement.GetProperty("items");
+        Assert.Equal(3, items.GetArrayLength());
+        foreach (var item in items.EnumerateArray())
+        {
+            Assert.Equal("heartbeat", item.GetProperty("eventType").GetString());
+            Assert.False(item.TryGetProperty("source", out var source) && source.ValueKind != JsonValueKind.Null);
+        }
+    }
+
+    [Fact]
     public async Task CurrentWorkProjection_WhenEmpty_ReturnsEmptyItems()
     {
         using var client = _factory.CreateClient();

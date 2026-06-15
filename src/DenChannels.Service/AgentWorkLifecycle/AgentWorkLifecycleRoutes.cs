@@ -23,6 +23,56 @@ namespace DenChannels.Service;
 /// </summary>
 public static class AgentWorkLifecycleRoutes
 {
+    private const int MaxCallerMetadataJsonBytes = 8192;
+
+    private static readonly IReadOnlySet<string> CallerMetadataAllowlist = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "source",
+        "eventFamily",
+        "piCrewEventType",
+        "childSessionId",
+        "parentSessionId",
+        "rootSessionId",
+        "ownerSessionId",
+        "toolName",
+        "toolCallId",
+        "phase",
+        "durationMs",
+        "resultClass",
+        "isError",
+        "profileId",
+        "provider",
+        "model",
+        "policyId",
+        "depth",
+        "outcome",
+        "turnsUsed",
+        "tokensConsumed",
+        "evidenceChecked",
+        "artifactCount",
+    };
+
+    private static readonly IReadOnlySet<string> CanonicalMetadataKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "event_type",
+        "profile_identity",
+        "worker_identity",
+        "lease_id",
+        "parent_session_id",
+        "source_message_id",
+        "direct_agent_event_id",
+        "host_id",
+        "process_id",
+        "workdir",
+        "branch",
+        "commit",
+        "review_round_id",
+        "parent_agent_identity",
+        "last_activity_at",
+        "staleness_deadline",
+        "state_reason",
+    };
+
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -772,7 +822,29 @@ public static class AgentWorkLifecycleRoutes
             DisplayBlockId: e.DisplayBlockId,
             ParentAgentIdentity: e.ParentAgentIdentity,
             Title: e.Title,
-            Summary: MetadataString(metadata, "state_reason") ?? e.Summary);
+            Summary: MetadataString(metadata, "state_reason") ?? e.Summary,
+            Metadata: ToResponseMetadata(metadata),
+            Source: MetadataString(metadata, "source"),
+            EventFamily: MetadataString(metadata, "eventFamily"),
+            PiCrewEventType: MetadataString(metadata, "piCrewEventType"),
+            ChildSessionId: MetadataString(metadata, "childSessionId"),
+            RootSessionId: MetadataString(metadata, "rootSessionId"),
+            OwnerSessionId: MetadataString(metadata, "ownerSessionId"),
+            ToolName: MetadataString(metadata, "toolName"),
+            ToolCallId: MetadataString(metadata, "toolCallId"),
+            Phase: MetadataString(metadata, "phase"),
+            DurationMs: MetadataLong(metadata, "durationMs"),
+            IsError: MetadataBool(metadata, "isError"),
+            ResultClass: MetadataString(metadata, "resultClass"),
+            Provider: MetadataString(metadata, "provider"),
+            Model: MetadataString(metadata, "model"),
+            PolicyId: MetadataString(metadata, "policyId"),
+            Depth: MetadataInt(metadata, "depth"),
+            Outcome: MetadataString(metadata, "outcome"),
+            TurnsUsed: MetadataInt(metadata, "turnsUsed"),
+            TokensConsumed: MetadataLong(metadata, "tokensConsumed"),
+            EvidenceChecked: MetadataBool(metadata, "evidenceChecked"),
+            ArtifactCount: MetadataInt(metadata, "artifactCount"));
     }
 
     private static Dictionary<string, JsonElement> ParseMetadata(string? metadataJson)
@@ -819,6 +891,40 @@ public static class AgentWorkLifecycleRoutes
         return value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), out var parsed) ? parsed : null;
     }
 
+    private static bool? MetadataBool(Dictionary<string, JsonElement> metadata, string key)
+    {
+        if (!metadata.TryGetValue(key, out var value)) return null;
+        return value.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String when bool.TryParse(value.GetString(), out var parsed) => parsed,
+            _ => null,
+        };
+    }
+
+    private static IReadOnlyDictionary<string, object?>? ToResponseMetadata(Dictionary<string, JsonElement> metadata)
+    {
+        if (metadata.Count == 0) return null;
+        var response = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var (key, value) in metadata)
+        {
+            response[key] = JsonElementToObject(value);
+        }
+        return response;
+    }
+
+    private static object? JsonElementToObject(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.String => value.GetString(),
+        JsonValueKind.Number when value.TryGetInt64(out var l) => l,
+        JsonValueKind.Number when value.TryGetDouble(out var d) => d,
+        JsonValueKind.True => true,
+        JsonValueKind.False => false,
+        JsonValueKind.Null => null,
+        _ => value.GetRawText(),
+    };
+
     private static string DetermineLifecycleStatus(string eventType) => eventType switch
     {
         LifecycleEventType.RequestRecorded => "started",
@@ -853,6 +959,34 @@ public static class AgentWorkLifecycleRoutes
         _ => false,
     };
 
+    private static void MergeCallerMetadata(string? metadataJson, IDictionary<string, object?> target)
+    {
+        if (string.IsNullOrWhiteSpace(metadataJson)) return;
+        if (System.Text.Encoding.UTF8.GetByteCount(metadataJson) > MaxCallerMetadataJsonBytes) return;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(metadataJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return;
+
+            foreach (var property in doc.RootElement.EnumerateObject())
+            {
+                if (!CallerMetadataAllowlist.Contains(property.Name)) continue;
+                if (CanonicalMetadataKeys.Contains(property.Name)) continue;
+                var value = JsonElementToObject(property.Value);
+                if (value is string s && s.Length > 512)
+                {
+                    value = s[..512];
+                }
+                target[property.Name] = value;
+            }
+        }
+        catch (JsonException)
+        {
+            // Invalid producer metadata is ignored; canonical lifecycle fields still persist.
+        }
+    }
+
     private static string? BuildLifecycleMetadata(AgentWorkLifecycleWriteRequest r)
     {
         // Pack all correlation fields into metadata_json so they survive
@@ -860,6 +994,7 @@ public static class AgentWorkLifecycleRoutes
         // first-class columns). This is the durable record for
         // host/runtime correlation fields not in the core activity schema.
         var extensions = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        MergeCallerMetadata(r.MetadataJson, extensions);
 
         void AddIf(string key, object? value)
         {
