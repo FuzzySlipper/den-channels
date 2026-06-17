@@ -585,8 +585,10 @@ public sealed partial class ChannelsRepository
 
         // Auto-create an ordinary_channel subscription when an agent member is added/activated.
         // This is the key green path: GUI adds agent -> membership + subscription created atomically.
-        if (string.Equals(request.MemberType, "agent", StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(membership.MembershipStatus, "active", StringComparison.OrdinalIgnoreCase))
+        // When the membership is deactivated (left/muted/banned), the subscription is released.
+        var isAgent = string.Equals(request.MemberType, "agent", StringComparison.OrdinalIgnoreCase);
+        var status = membership.MembershipStatus;
+        if (isAgent && string.Equals(status, "active", StringComparison.OrdinalIgnoreCase))
         {
             var subIdentity = $"member:{membership.MemberIdentity}:ordinary_channel";
             await using var subCommand = connection.CreateCommand();
@@ -606,6 +608,26 @@ public sealed partial class ChannelsRepository
             subCommand.Parameters.AddWithValue("$memberIdentity", membership.MemberIdentity);
             subCommand.Parameters.AddWithValue("$subscriptionIdentity", subIdentity);
             await subCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+        else if (isAgent && (string.Equals(status, "left", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(status, "banned", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(status, "muted", StringComparison.OrdinalIgnoreCase)))
+        {
+            // Deactivate: release the ordinary subscription so runtime polling stops.
+            // 'muted' means the agent is in the roster but not actively listening —
+            // the subscription is released. Reactivating to 'active' will create a new one.
+            await using var relCommand = connection.CreateCommand();
+            relCommand.CommandText = """
+                UPDATE channel_subscriptions
+                SET subscription_status = 'left', updated_at = datetime('now')
+                WHERE channel_id = $channelId
+                  AND member_identity = $memberIdentity
+                  AND subscription_purpose = 'ordinary_channel'
+                  AND subscription_status IN ('active', 'released');
+                """;
+            relCommand.Parameters.AddWithValue("$channelId", channelId);
+            relCommand.Parameters.AddWithValue("$memberIdentity", membership.MemberIdentity);
+            await relCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
         return membership;
@@ -1379,6 +1401,30 @@ public sealed partial class ChannelsRepository
         while (await reader.ReadAsync(cancellationToken))
             results.Add(ReadSubscription(reader));
         return results;
+    }
+
+    /// <summary>
+    /// Check whether there is at least one active (non-left/non-released) subscription
+    /// for a given member and channel. Used by direct-agent event readback to distinguish
+    /// "recorded_pending_subscription" (no active subscription) from "recorded_pending_claim".
+    /// </summary>
+    public async Task<bool> HasActiveSubscriptionAsync(long channelId, string memberIdentity,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT 1
+            FROM channel_subscriptions
+            WHERE channel_id = $channelId
+              AND member_identity = $memberIdentity
+              AND subscription_status = 'active'
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$memberIdentity", memberIdentity.Trim());
+        var result = await command.ExecuteScalarAsync(cancellationToken);
+        return result is not null;
     }
 
     /// <summary>

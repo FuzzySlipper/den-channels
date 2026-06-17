@@ -71,6 +71,9 @@ internal static class DirectAgentEventShared
     /// <summary>
     /// Build the shared metadata dictionary for a direct-agent wake event,
     /// including target-work attribution and session-owner fields.
+    /// Sets deliveryStatus to 'recorded_pending_claim' when an active subscription
+    /// exists, or 'recorded_pending_subscription' when only membership is present
+    /// (deaf agent, no runtime listening).
     /// </summary>
     internal static Dictionary<string, object?> BuildWakeMetadata(
         string requestId,
@@ -87,7 +90,8 @@ internal static class DirectAgentEventShared
         string? agentInstanceId,
         string? sessionOwnerId,
         string? sessionId,
-        string gatewayEventsUrl)
+        string gatewayEventsUrl,
+        bool hasActiveSubscription)
     {
         var metadata = new Dictionary<string, object?>
         {
@@ -96,7 +100,7 @@ internal static class DirectAgentEventShared
             ["targetMemberType"] = member.MemberType,
             ["wakePolicy"] = member.WakePolicy,
             ["deliveryMode"] = "direct_agent_message",
-            ["deliveryStatus"] = "recorded_pending_claim",
+            ["deliveryStatus"] = hasActiveSubscription ? "recorded_pending_claim" : "recorded_pending_subscription",
             ["claimStatus"] = CS.Unclaimed,
             ["completionStatus"] = CompS.Pending,
             ["suppressionStatus"] = SupS.NotSuppressed,

@@ -139,6 +139,9 @@ public static class DirectConversationRoutes
                 return Results.NotFound(new DirectConversationErrorDto("member_not_active_agent",
                     $"Active agent member '{conversation.AgentIdentity}' is not joined to channel {channel.Id}."));
 
+            var hasActiveSubscription = await repository.HasActiveSubscriptionAsync(
+                channel.Id, member.MemberIdentity, cancellationToken);
+
             var requestId = $"direct-agent-message:{channel.Id}:{Uri.EscapeDataString(member.MemberIdentity)}:{Guid.NewGuid():N}";
             var gatewayEventsUrl = $"/api/direct-agent-events?channelId={channel.Id}&afterId=0&limit=50";
 
@@ -148,7 +151,8 @@ public static class DirectConversationRoutes
                 assignmentId: null, request.WorkerRunId, request.WorkerRole,
                 request.ProfileIdentity, request.PoolMemberId,
                 request.AgentInstanceId, request.SessionOwnerId, request.SessionId,
-                gatewayEventsUrl);
+                gatewayEventsUrl,
+                hasActiveSubscription: hasActiveSubscription);
 
             // Add DM transcript linking metadata
             metadataPayload["directConversationId"] = conversationId;

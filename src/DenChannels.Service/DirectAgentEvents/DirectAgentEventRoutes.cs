@@ -99,6 +99,9 @@ public static class DirectAgentEventRoutes
                 return Results.NotFound(new DirectAgentEventErrorDto("member_not_active_agent",
                     $"Active agent member '{request.MemberIdentity}' is not joined to channel {channel.Id}."));
 
+            var hasActiveSubscription = await repository.HasActiveSubscriptionAsync(
+                channel.Id, member.MemberIdentity, cancellationToken);
+
             var requestId = $"direct-agent-message:{channel.Id}:{Uri.EscapeDataString(member.MemberIdentity)}:{Guid.NewGuid():N}";
             var resolvedSourceProjectId = request.SourceProjectId ?? channel.ProjectId;
             var gatewayEventsUrl = $"/api/direct-agent-events?channelId={channel.Id}&afterId=0&limit=50";
@@ -109,7 +112,8 @@ public static class DirectAgentEventRoutes
                 request.AssignmentId, request.WorkerRunId, request.WorkerRole,
                 request.ProfileIdentity, request.PoolMemberId,
                 request.AgentInstanceId, request.SessionOwnerId, request.SessionId,
-                gatewayEventsUrl);
+                gatewayEventsUrl,
+                hasActiveSubscription: hasActiveSubscription);
 
             var metadataJson = JsonSerializer.Serialize(metadataPayload);
 
