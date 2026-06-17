@@ -111,6 +111,7 @@ public sealed class ChannelsDatabaseInitializer
         await EnsureDenSystemChannelSeedAsync(connection, cancellationToken);
         await EnsureWorkerPoolLobbyPresenceConcreteConstraintAsync(connection, logger, cancellationToken);
         await EnsureChannelMessagesFts5Async(connection, cancellationToken);
+        await EnsureChannelSubscriptionCursorsSchemaAsync(connection, logger, cancellationToken);
         await ExecuteNonQueryAsync(connection, PostCreateIndexesSql, cancellationToken);
     }
 
@@ -1297,6 +1298,10 @@ public sealed class ChannelsDatabaseInitializer
         CREATE INDEX IF NOT EXISTS idx_channel_subscriptions_profile
             ON channel_subscriptions(profile_identity, subscription_status);
 
+        -- channel_subscription_cursors may already exist with a stale CHECK constraint
+        -- from a prior schema version. Since SQLite cannot ALTER CHECK constraints,
+        -- we drop and recreate the table. Backfill below repopulates data.
+        DROP TABLE IF EXISTS channel_subscription_cursors;
         CREATE TABLE IF NOT EXISTS channel_subscription_cursors (
             id                  INTEGER PRIMARY KEY AUTOINCREMENT,
             subscription_id     INTEGER NOT NULL REFERENCES channel_subscriptions(id) ON DELETE CASCADE,
@@ -1348,6 +1353,34 @@ public sealed class ChannelsDatabaseInitializer
                 AND csc.stream_kind = 'direct_agent_events'
           );
         """";
+
+    private const string RebuildSubscriptionCursorsSql = """
+        CREATE TABLE IF NOT EXISTS channel_subscription_cursors__new (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            subscription_id     INTEGER NOT NULL REFERENCES channel_subscriptions(id) ON DELETE CASCADE,
+            stream_kind         TEXT NOT NULL DEFAULT 'direct_agent_events',
+            last_seen_id        INTEGER NOT NULL DEFAULT 0,
+            last_seen_at        TEXT,
+            cursor_json         TEXT,
+            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(subscription_id, stream_kind)
+        );
+
+        INSERT OR IGNORE INTO channel_subscription_cursors__new(
+            id, subscription_id, stream_kind, last_seen_id, last_seen_at, cursor_json, created_at, updated_at)
+            SELECT id, subscription_id, stream_kind, last_seen_id, last_seen_at, cursor_json, created_at, updated_at
+            FROM channel_subscription_cursors;
+
+        DROP TABLE IF EXISTS channel_subscription_cursors;
+        ALTER TABLE channel_subscription_cursors__new RENAME TO channel_subscription_cursors;
+
+        CREATE INDEX IF NOT EXISTS idx_channel_subscription_cursors_sub
+            ON channel_subscription_cursors(subscription_id);
+        CREATE INDEX IF NOT EXISTS idx_channel_subscription_cursors_stream
+            ON channel_subscription_cursors(subscription_id, stream_kind, last_seen_id DESC);
+        """;
+
     /// <summary>
     /// Ensures the den-system shared operations channel exists and is linked
     /// </summary>
@@ -1378,6 +1411,29 @@ public sealed class ChannelsDatabaseInitializer
         {
             await ExecuteNonQueryAsync(connection, MigrationV7Sql, cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// Ensures the channel_subscription_cursors table has the correct schema
+    /// without stale CHECK constraints. Rebuilds if needed (idempotent — v8+).
+    /// Task #2554: the initial v8 migration created the table, but a prior schema
+    /// version may have a CHECK constraint that limits stream_kind values. Since
+    /// SQLite cannot ALTER CHECK constraints, we rebuild the table.
+    /// </summary>
+    private static async Task EnsureChannelSubscriptionCursorsSchemaAsync(SqliteConnection connection,
+        ILogger? logger, CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "channel_subscription_cursors", cancellationToken))
+            return;
+
+        var createSql = await GetTableCreateSqlAsync(connection, "channel_subscription_cursors", cancellationToken);
+        if (createSql?.Contains("'direct_agent_events'", StringComparison.OrdinalIgnoreCase) == true)
+            return;
+
+        // Stale CHECK constraint detected — rebuild the table
+        logger?.LogInformation("channel_subscription_cursors has stale CHECK constraint — rebuilding schema");
+        await ExecuteNonQueryAsync(connection, RebuildSubscriptionCursorsSql, cancellationToken);
+        logger?.LogInformation("channel_subscription_cursors schema rebuilt successfully");
     }
 
     /// <summary>
