@@ -353,6 +353,97 @@ public sealed record UpsertWorkerPoolLobbyPresenceRequest(
     string? CurrentProjectId,
     string? LastActivityAt);
 
+// =========================================================================
+// Channel subscription DTOs (task #2554)
+// =========================================================================
+
+/// <summary>
+/// A concrete runtime subscription for an agent's channel listening/delivery ownership.
+/// Separate from logical membership — multiple subscriptions can share one membership
+/// (e.g., ordinary_channel + target_work for different agent_instance_ids).
+/// </summary>
+public sealed record ChannelSubscriptionDto(
+    long Id,
+    long ChannelId,
+    long? MembershipId,
+    string MemberType,
+    string MemberIdentity,
+    string SubscriptionIdentity,
+    string SubscriptionPurpose,
+    string SubscriptionStatus,
+    string? ProfileIdentity,
+    string? AgentInstanceId,
+    string? PoolMemberId,
+    string? SourceProjectId,
+    string? TargetProjectId,
+    long? TargetTaskId,
+    string? AssignmentId,
+    string? WorkerRunId,
+    string? WorkerRole,
+    string? SessionOwnerId,
+    string? SessionId,
+    string? WakePolicyOverride,
+    string? LastSeenAt,
+    string? LastClaimedAt,
+    string? DegradedReason,
+    string? SettingsJson,
+    string CreatedAt,
+    string UpdatedAt);
+
+/// <summary>
+/// Request to create or update a channel subscription.
+/// subscription_identity is deterministic: derived from agent_instance_id or pool_member_id or profile + purpose.
+/// </summary>
+public sealed record UpsertChannelSubscriptionRequest(
+    long ChannelId,
+    string MemberType,
+    string MemberIdentity,
+    string SubscriptionIdentity,
+    string? SubscriptionPurpose,
+    string? SubscriptionStatus,
+    string? ProfileIdentity,
+    string? AgentInstanceId,
+    string? PoolMemberId,
+    string? SourceProjectId,
+    string? TargetProjectId,
+    long? TargetTaskId,
+    string? AssignmentId,
+    string? WorkerRunId,
+    string? WorkerRole,
+    string? SessionOwnerId,
+    string? SessionId,
+    string? WakePolicyOverride,
+    string? SettingsJson);
+
+/// <summary>
+/// Response for subscription discovery — lists active subscriptions matching a member or profile.
+/// </summary>
+public sealed record SubscriptionDiscoveryResponse(
+    string? MemberIdentity,
+    string? ProfileIdentity,
+    IReadOnlyList<ChannelSubscriptionDto> Subscriptions);
+
+/// <summary>
+/// Request to upsert a subscription cursor (a runtime poll position for a subscription).
+/// </summary>
+public sealed record UpsertSubscriptionCursorRequest(
+    long SubscriptionId,
+    string? StreamKind,
+    long LastSeenId,
+    string? CursorJson);
+
+/// <summary>
+/// A subscription cursor DTO.
+/// </summary>
+public sealed record SubscriptionCursorDto(
+    long Id,
+    long SubscriptionId,
+    string StreamKind,
+    long LastSeenId,
+    string? LastSeenAt,
+    string? CursorJson,
+    string CreatedAt,
+    string UpdatedAt);
 /// <summary>
 /// Response payload for the worker-pool lobby overview.
 /// Groups available (idle) workers by role/profile for easy scheduling.

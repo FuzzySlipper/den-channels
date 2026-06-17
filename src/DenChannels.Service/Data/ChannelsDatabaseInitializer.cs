@@ -7,7 +7,7 @@ namespace DenChannels.Service.Data;
 
 public sealed class ChannelsDatabaseInitializer
 {
-    public const int CurrentSchemaVersion = 7;
+    public const int CurrentSchemaVersion = 8;
 
     private readonly IOptions<DenChannelsOptions> _options;
     private readonly ILogger<ChannelsDatabaseInitializer> _logger;
@@ -87,6 +87,13 @@ public sealed class ChannelsDatabaseInitializer
             logger?.LogInformation("Applying Den Channels database migration 7: FTS5 search index for channel messages");
             await ExecuteNonQueryAsync(connection, MigrationV7Sql, cancellationToken);
             await SetSchemaVersionAsync(connection, 7, "channel_messages_fts5", cancellationToken);
+        }
+
+        if (currentVersion < 8)
+        {
+            logger?.LogInformation("Applying Den Channels database migration 8: agent runtime subscriptions and subscription cursors");
+            await ExecuteNonQueryAsync(connection, MigrationV8Sql, cancellationToken);
+            await SetSchemaVersionAsync(connection, 8, "agent_subscriptions_and_cursors", cancellationToken);
         }
 
         await EnsureChannelsCompatibilityColumnsAsync(connection, cancellationToken);
@@ -1246,9 +1253,103 @@ public sealed class ChannelsDatabaseInitializer
         SELECT id, body FROM channel_messages WHERE deleted_at IS NULL;
         """;
 
+    private const string MigrationV8Sql = """"
+        CREATE TABLE IF NOT EXISTS channel_subscriptions (
+            id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id              INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+            membership_id           INTEGER REFERENCES channel_memberships(id) ON DELETE SET NULL,
+
+            member_type             TEXT NOT NULL,
+            member_identity         TEXT NOT NULL,
+
+            subscription_identity   TEXT NOT NULL,
+            subscription_purpose    TEXT NOT NULL DEFAULT 'ordinary_channel',
+            subscription_status     TEXT NOT NULL DEFAULT 'active',
+
+            profile_identity        TEXT,
+            agent_instance_id       TEXT,
+            pool_member_id          TEXT,
+
+            source_project_id       TEXT,
+            target_project_id       TEXT,
+            target_task_id          INTEGER,
+            assignment_id           TEXT,
+            worker_run_id           TEXT,
+            worker_role             TEXT,
+
+            session_owner_id        TEXT,
+            session_id              TEXT,
+
+            wake_policy_override    TEXT,
+            last_seen_at            TEXT,
+            last_claimed_at         TEXT,
+            degraded_reason         TEXT,
+            settings_json           TEXT,
+            created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
+
+            UNIQUE(channel_id, subscription_identity)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_channel_subscriptions_member
+            ON channel_subscriptions(member_type, member_identity, subscription_status);
+
+        CREATE INDEX IF NOT EXISTS idx_channel_subscriptions_profile
+            ON channel_subscriptions(profile_identity, subscription_status);
+
+        CREATE TABLE IF NOT EXISTS channel_subscription_cursors (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            subscription_id     INTEGER NOT NULL REFERENCES channel_subscriptions(id) ON DELETE CASCADE,
+            stream_kind         TEXT NOT NULL DEFAULT 'direct_agent_events',
+            last_seen_id        INTEGER NOT NULL DEFAULT 0,
+            last_seen_at        TEXT,
+            cursor_json         TEXT,
+            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(subscription_id, stream_kind)
+        );
+
+        -- Backfill subscriptions from active agent memberships
+        INSERT INTO channel_subscriptions(
+            channel_id, member_type, member_identity, subscription_identity, subscription_purpose, subscription_status
+        )
+        SELECT
+            cm.channel_id,
+            cm.member_type,
+            cm.member_identity,
+            'member:' || cm.member_identity || ':ordinary_channel',
+            'ordinary_channel',
+            CASE WHEN cm.membership_status = 'left' OR cm.membership_status = 'banned' THEN 'left' ELSE 'active' END
+        FROM channel_memberships cm
+        WHERE cm.member_type = 'agent'
+          AND NOT EXISTS (
+              SELECT 1 FROM channel_subscriptions cs
+              WHERE cs.channel_id = cm.channel_id
+                AND cs.subscription_identity = 'member:' || cm.member_identity || ':ordinary_channel'
+          );
+
+        -- Backfill subscription cursors from existing read cursors where instance_id is present
+        -- (these are runtime agent cursors, not human/UI read positions)
+        INSERT INTO channel_subscription_cursors(subscription_id, stream_kind, last_seen_id, last_seen_at)
+        SELECT
+            cs.id,
+            'direct_agent_events',
+            COALESCE(crc.last_read_channel_message_id, 0),
+            crc.last_read_at
+        FROM channel_read_cursors crc
+        JOIN channel_subscriptions cs ON cs.channel_id = crc.channel_id
+            AND cs.member_identity = crc.reader_identity
+        WHERE crc.reader_type = 'agent'
+          AND crc.instance_id IS NOT NULL
+          AND crc.instance_id != ''
+          AND NOT EXISTS (
+              SELECT 1 FROM channel_subscription_cursors csc
+              WHERE csc.subscription_id = cs.id
+                AND csc.stream_kind = 'direct_agent_events'
+          );
+        """";
     /// <summary>
     /// Ensures the den-system shared operations channel exists and is linked
-    /// to Den constellation projects. Idempotent — safe to run on every startup.
     /// </summary>
     private static async Task EnsureDenSystemChannelSeedAsync(SqliteConnection connection,
         CancellationToken cancellationToken)

@@ -582,6 +582,32 @@ public sealed partial class ChannelsRepository
         {
             await EnsureAgentCommonsMembershipAsync(membership.MemberIdentity, null, cancellationToken);
         }
+
+        // Auto-create an ordinary_channel subscription when an agent member is added/activated.
+        // This is the key green path: GUI adds agent -> membership + subscription created atomically.
+        if (string.Equals(request.MemberType, "agent", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(membership.MembershipStatus, "active", StringComparison.OrdinalIgnoreCase))
+        {
+            var subIdentity = $"member:{membership.MemberIdentity}:ordinary_channel";
+            await using var subCommand = connection.CreateCommand();
+            subCommand.CommandText = """
+                INSERT INTO channel_subscriptions(
+                    channel_id, member_type, member_identity, subscription_identity,
+                    subscription_purpose, subscription_status)
+                VALUES ($channelId, $memberType, $memberIdentity, $subscriptionIdentity,
+                    'ordinary_channel', 'active')
+                ON CONFLICT(channel_id, subscription_identity)
+                DO UPDATE SET
+                    subscription_status = 'active',
+                    updated_at = datetime('now');
+                """;
+            subCommand.Parameters.AddWithValue("$channelId", channelId);
+            subCommand.Parameters.AddWithValue("$memberType", membership.MemberType);
+            subCommand.Parameters.AddWithValue("$memberIdentity", membership.MemberIdentity);
+            subCommand.Parameters.AddWithValue("$subscriptionIdentity", subIdentity);
+            await subCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         return membership;
     }
 
@@ -1239,6 +1265,248 @@ public sealed partial class ChannelsRepository
         command.Parameters.AddWithValue("$projectId", projectId);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
+
+    // =========================================================================
+    // Channel subscription CRUD (task #2554)
+    // =========================================================================
+
+    /// <summary>
+    /// Upsert a channel subscription. subscription_identity is deterministic and unique per channel.
+    /// Follows the ADR from #2090: subscriptions are concrete runtime listening/delivery rows,
+    /// separate from logical channel_memberships (addressability/roster).
+    /// </summary>
+    public async Task<ChannelSubscriptionDto> UpsertSubscriptionAsync(long channelId,
+        UpsertChannelSubscriptionRequest request, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO channel_subscriptions(
+                channel_id, member_type, member_identity, subscription_identity,
+                subscription_purpose, subscription_status, profile_identity,
+                agent_instance_id, pool_member_id, source_project_id,
+                target_project_id, target_task_id, assignment_id, worker_run_id,
+                worker_role, session_owner_id, session_id,
+                wake_policy_override, settings_json)
+            VALUES ($channelId, $memberType, $memberIdentity, $subscriptionIdentity,
+                $subscriptionPurpose, $subscriptionStatus, $profileIdentity,
+                $agentInstanceId, $poolMemberId, $sourceProjectId,
+                $targetProjectId, $targetTaskId, $assignmentId, $workerRunId,
+                $workerRole, $sessionOwnerId, $sessionId,
+                $wakePolicyOverride, $settingsJson)
+            ON CONFLICT(channel_id, subscription_identity)
+            DO UPDATE SET
+                subscription_status = excluded.subscription_status,
+                subscription_purpose = excluded.subscription_purpose,
+                profile_identity = COALESCE(excluded.profile_identity, channel_subscriptions.profile_identity),
+                agent_instance_id = COALESCE(excluded.agent_instance_id, channel_subscriptions.agent_instance_id),
+                pool_member_id = COALESCE(excluded.pool_member_id, channel_subscriptions.pool_member_id),
+                last_seen_at = datetime('now'),
+                updated_at = datetime('now')
+            RETURNING id, channel_id, membership_id, member_type, member_identity,
+                subscription_identity, subscription_purpose, subscription_status,
+                profile_identity, agent_instance_id, pool_member_id,
+                source_project_id, target_project_id, target_task_id,
+                assignment_id, worker_run_id, worker_role,
+                session_owner_id, session_id,
+                wake_policy_override, last_seen_at, last_claimed_at, degraded_reason,
+                settings_json, created_at, updated_at;
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$memberType", request.MemberType);
+        command.Parameters.AddWithValue("$memberIdentity", request.MemberIdentity);
+        command.Parameters.AddWithValue("$subscriptionIdentity", request.SubscriptionIdentity);
+        command.Parameters.AddWithValue("$subscriptionPurpose", (object?)request.SubscriptionPurpose ?? "ordinary_channel");
+        command.Parameters.AddWithValue("$subscriptionStatus", (object?)request.SubscriptionStatus ?? "active");
+        command.Parameters.AddWithValue("$profileIdentity", (object?)request.ProfileIdentity ?? DBNull.Value);
+        command.Parameters.AddWithValue("$agentInstanceId", (object?)request.AgentInstanceId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$poolMemberId", (object?)request.PoolMemberId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sourceProjectId", (object?)request.SourceProjectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$targetProjectId", (object?)request.TargetProjectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$targetTaskId", (object?)request.TargetTaskId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$assignmentId", (object?)request.AssignmentId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workerRunId", (object?)request.WorkerRunId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workerRole", (object?)request.WorkerRole ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sessionOwnerId", (object?)request.SessionOwnerId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$sessionId", (object?)request.SessionId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$wakePolicyOverride", (object?)request.WakePolicyOverride ?? DBNull.Value);
+        command.Parameters.AddWithValue("$settingsJson", (object?)request.SettingsJson ?? DBNull.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        var subscription = ReadSubscription(reader);
+        await reader.CloseAsync();
+        return subscription;
+    }
+
+    /// <summary>
+    /// List subscriptions matching a member identity and/or profile identity and/or purpose.
+    /// Returns only non-left subscriptions by default; use includeInactive=true to see all.
+    /// </summary>
+    public async Task<IReadOnlyList<ChannelSubscriptionDto>> ListSubscriptionsAsync(
+        string? memberIdentity = null, string? profileIdentity = null, string? subscriptionPurpose = null,
+        long? channelId = null, bool includeInactive = false,
+        int limit = 200, CancellationToken cancellationToken = default)
+    {
+        limit = Math.Clamp(limit, 1, 500);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, channel_id, membership_id, member_type, member_identity,
+                subscription_identity, subscription_purpose, subscription_status,
+                profile_identity, agent_instance_id, pool_member_id,
+                source_project_id, target_project_id, target_task_id,
+                assignment_id, worker_run_id, worker_role,
+                session_owner_id, session_id,
+                wake_policy_override, last_seen_at, last_claimed_at, degraded_reason,
+                settings_json, created_at, updated_at
+            FROM channel_subscriptions
+            WHERE ($memberIdentity IS NULL OR member_identity = $memberIdentity)
+              AND ($profileIdentity IS NULL OR profile_identity = $profileIdentity)
+              AND ($subscriptionPurpose IS NULL OR subscription_purpose = $subscriptionPurpose)
+              AND ($channelId IS NULL OR channel_id = $channelId)
+              AND ($includeInactive = 1 OR subscription_status NOT IN ('left', 'released', 'quarantined'))
+            ORDER BY channel_id, subscription_identity
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$memberIdentity", (object?)memberIdentity ?? DBNull.Value);
+        command.Parameters.AddWithValue("$profileIdentity", (object?)profileIdentity ?? DBNull.Value);
+        command.Parameters.AddWithValue("$subscriptionPurpose", (object?)subscriptionPurpose ?? DBNull.Value);
+        command.Parameters.AddWithValue("$channelId", (object?)channelId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$includeInactive", includeInactive ? 1 : 0);
+        command.Parameters.AddWithValue("$limit", limit);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var results = new List<ChannelSubscriptionDto>();
+        while (await reader.ReadAsync(cancellationToken))
+            results.Add(ReadSubscription(reader));
+        return results;
+    }
+
+    /// <summary>
+    /// Release (deactivate) a channel subscription by setting status to 'released'.
+    /// </summary>
+    public async Task<bool> ReleaseSubscriptionAsync(long subscriptionId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE channel_subscriptions
+            SET subscription_status = 'released', updated_at = datetime('now')
+            WHERE id = $id AND subscription_status NOT IN ('released', 'left', 'quarantined');
+            """;
+        command.Parameters.AddWithValue("$id", subscriptionId);
+        var rows = await command.ExecuteNonQueryAsync(cancellationToken);
+        return rows > 0;
+    }
+
+    /// <summary>
+    /// Release subscriptions for a given member identity and channel. Called when a membership
+    /// is deactivated or the member leaves the channel.
+    /// </summary>
+    public async Task<int> ReleaseSubscriptionsForMemberAsync(long channelId, string memberIdentity,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE channel_subscriptions
+            SET subscription_status = 'released', updated_at = datetime('now')
+            WHERE channel_id = $channelId
+              AND member_identity = $memberIdentity
+              AND subscription_status NOT IN ('released', 'left', 'quarantined');
+            """;
+        command.Parameters.AddWithValue("$channelId", channelId);
+        command.Parameters.AddWithValue("$memberIdentity", memberIdentity);
+        return await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Upsert a subscription cursor (runtime poll position).
+    /// </summary>
+    public async Task<SubscriptionCursorDto> UpsertSubscriptionCursorAsync(long subscriptionId,
+        UpsertSubscriptionCursorRequest request, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO channel_subscription_cursors(subscription_id, stream_kind, last_seen_id, cursor_json)
+            VALUES ($subscriptionId, $streamKind, $lastSeenId, $cursorJson)
+            ON CONFLICT(subscription_id, stream_kind)
+            DO UPDATE SET
+                last_seen_id = excluded.last_seen_id,
+                cursor_json = COALESCE(excluded.cursor_json, channel_subscription_cursors.cursor_json),
+                updated_at = datetime('now')
+            RETURNING id, subscription_id, stream_kind, last_seen_id, last_seen_at, cursor_json, created_at, updated_at;
+            """;
+        command.Parameters.AddWithValue("$subscriptionId", subscriptionId);
+        command.Parameters.AddWithValue("$streamKind", (object?)request.StreamKind ?? "direct_agent_events");
+        command.Parameters.AddWithValue("$lastSeenId", request.LastSeenId);
+        command.Parameters.AddWithValue("$cursorJson", (object?)request.CursorJson ?? DBNull.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        var cursor = ReadSubscriptionCursor(reader);
+        await reader.CloseAsync();
+        return cursor;
+    }
+
+    /// <summary>
+    /// Get subscription cursors for a subscription.
+    /// </summary>
+    public async Task<IReadOnlyList<SubscriptionCursorDto>> ListSubscriptionCursorsAsync(long subscriptionId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, subscription_id, stream_kind, last_seen_id, last_seen_at, cursor_json, created_at, updated_at
+            FROM channel_subscription_cursors
+            WHERE subscription_id = $subscriptionId
+            ORDER BY stream_kind;
+            """;
+        command.Parameters.AddWithValue("$subscriptionId", subscriptionId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var results = new List<SubscriptionCursorDto>();
+        while (await reader.ReadAsync(cancellationToken))
+            results.Add(ReadSubscriptionCursor(reader));
+        return results;
+    }
+
+    private static ChannelSubscriptionDto ReadSubscription(SqliteDataReader reader) => new(
+        reader.GetInt64(0),     // id
+        reader.GetInt64(1),     // channel_id
+        GetNullableInt64(reader, 2), // membership_id
+        reader.GetString(3),    // member_type
+        reader.GetString(4),    // member_identity
+        reader.GetString(5),    // subscription_identity
+        reader.GetString(6),    // subscription_purpose
+        reader.GetString(7),    // subscription_status
+        GetNullableString(reader, 8),   // profile_identity
+        GetNullableString(reader, 9),   // agent_instance_id
+        GetNullableString(reader, 10),  // pool_member_id
+        GetNullableString(reader, 11),  // source_project_id
+        GetNullableString(reader, 12),  // target_project_id
+        GetNullableInt64(reader, 13),   // target_task_id
+        GetNullableString(reader, 14),  // assignment_id
+        GetNullableString(reader, 15),  // worker_run_id
+        GetNullableString(reader, 16),  // worker_role
+        GetNullableString(reader, 17),  // session_owner_id
+        GetNullableString(reader, 18),  // session_id
+        GetNullableString(reader, 19),  // wake_policy_override
+        GetNullableString(reader, 20),  // last_seen_at
+        GetNullableString(reader, 21),  // last_claimed_at
+        GetNullableString(reader, 22),  // degraded_reason
+        GetNullableString(reader, 23),  // settings_json
+        reader.GetString(24),   // created_at
+        reader.GetString(25));  // updated_at
+
+    private static SubscriptionCursorDto ReadSubscriptionCursor(SqliteDataReader reader) => new(
+        reader.GetInt64(0),     // id
+        reader.GetInt64(1),     // subscription_id
+        reader.GetString(2),    // stream_kind
+        reader.GetInt64(3),     // last_seen_id
+        GetNullableString(reader, 4),   // last_seen_at
+        GetNullableString(reader, 5),   // cursor_json
+        reader.GetString(6),    // created_at
+        reader.GetString(7));   // updated_at
 
     private static ChannelProjectLinkDto ReadProjectLink(SqliteDataReader reader) => new(
         reader.GetInt64(0),

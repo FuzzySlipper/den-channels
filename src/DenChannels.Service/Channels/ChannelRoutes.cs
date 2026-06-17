@@ -668,6 +668,62 @@ public static class ChannelRoutes
             return Results.NoContent();
         });
 
+        // =========================================================================
+        // Channel subscription routes (task #2554)
+        // =========================================================================
+
+        api.MapPut("/channels/{channelId:long}/subscriptions", async (ChannelsRepository repository,
+            long channelId, UpsertChannelSubscriptionRequest request, CancellationToken cancellationToken) =>
+        {
+            if (string.IsNullOrWhiteSpace(request.MemberIdentity))
+                return Results.BadRequest(new { code = "missing_member_identity",
+                    message = "Provide memberIdentity for the subscription." });
+            if (string.IsNullOrWhiteSpace(request.SubscriptionIdentity))
+                return Results.BadRequest(new { code = "missing_subscription_identity",
+                    message = "Provide subscriptionIdentity." });
+
+            var subscription = await repository.UpsertSubscriptionAsync(
+                channelId, request, cancellationToken);
+            return Results.Ok(subscription);
+        }).WithDescription("Upsert a runtime subscription for an agent on a channel. subscription_identity is deterministic (member:<identity>:ordinary_channel for normal cases).");
+
+        api.MapGet("/channel-subscriptions", async (ChannelsRepository repository,
+            string? memberIdentity, string? profileIdentity, string? subscriptionPurpose,
+            long? channelId, bool? includeInactive, int? limit,
+            CancellationToken cancellationToken) =>
+        {
+            var subscriptions = await repository.ListSubscriptionsAsync(
+                memberIdentity, profileIdentity, subscriptionPurpose, channelId,
+                includeInactive ?? false, limit ?? 200, cancellationToken);
+            return Results.Ok(new SubscriptionDiscoveryResponse(
+                memberIdentity, profileIdentity, subscriptions));
+        }).WithDescription("Discover active subscriptions matching member and/or profile identity.");
+
+        api.MapDelete("/channel-subscriptions/{subscriptionId:long}", async (ChannelsRepository repository,
+            long subscriptionId, CancellationToken cancellationToken) =>
+        {
+            var released = await repository.ReleaseSubscriptionAsync(subscriptionId, cancellationToken);
+            if (!released)
+                return Results.NotFound(new { code = "subscription_not_found_or_terminal",
+                    message = $"Subscription {subscriptionId} not found or already in terminal state." });
+            return Results.Ok(new { released = true, subscriptionId });
+        }).WithDescription("Release (deactivate) a channel subscription. Stops the runtime from polling this channel via this subscription.");
+
+        api.MapPut("/channel-subscription-cursors", async (ChannelsRepository repository,
+            UpsertSubscriptionCursorRequest request, CancellationToken cancellationToken) =>
+        {
+            var cursor = await repository.UpsertSubscriptionCursorAsync(
+                request.SubscriptionId, request, cancellationToken);
+            return Results.Ok(cursor);
+        }).WithDescription("Upsert a subscription cursor (runtime poll position). Run after processing events to persist the last-seen event ID on the server.");
+
+        api.MapGet("/channel-subscriptions/{subscriptionId:long}/cursors", async (ChannelsRepository repository,
+            long subscriptionId, CancellationToken cancellationToken) =>
+        {
+            var cursors = await repository.ListSubscriptionCursorsAsync(subscriptionId, cancellationToken);
+            return Results.Ok(cursors);
+        }).WithDescription("Get subscription cursors for a subscription. The runtime uses these to know where to resume polling.");
+
         return api;
     }
 
