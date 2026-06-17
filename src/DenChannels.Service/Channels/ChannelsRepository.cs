@@ -1656,6 +1656,34 @@ public sealed partial class ChannelsRepository
     }
 
     /// <summary>
+    /// Ensure the #service-work global service-activity channel exists.
+    /// Returns the channel DTO. Idempotent — uses ON CONFLICT on slug.
+    /// The channel has no project_id (global scope), uses kind='system' with
+    /// channelRole='service_work' in settings_json for UI identification.
+    /// </summary>
+    public async Task<ChannelDto> EnsureServiceWorkChannelAsync(CancellationToken cancellationToken = default)
+    {
+        const string settingsJson = "{\"systemManaged\":true,\"channelRole\":\"service_work\",\"channelScope\":\"global\",\"description\":\"Global service-work channel for background agent activity, service automation, watcher output, maintenance events, deployment/status pings, and non-project-specific operational messages.\"}";
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO channels(slug, display_name, kind, created_by, visibility, settings_json)
+            VALUES ('service-work', '#service-work', 'system', 'system', 'normal', $settingsJson)
+            ON CONFLICT(slug) DO UPDATE SET
+                display_name = '#service-work',
+                kind = 'system',
+                visibility = 'normal',
+                settings_json = COALESCE(channels.settings_json, excluded.settings_json),
+                updated_at = datetime('now')
+            RETURNING id, slug, display_name, kind, project_id, space_id, created_by, visibility, settings_json, created_at, updated_at, archived_at;
+            """;
+        command.Parameters.AddWithValue("$settingsJson", settingsJson);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        await reader.ReadAsync(cancellationToken);
+        return ReadChannel(reader);
+    }
+
+    /// <summary>
     /// Upsert a worker-pool member's presence record in the lobby.
     /// Uses ON CONFLICT(channel_id, member_identity) to create or update.
     /// The release_acknowledged flag gates the transition from 'released' to 'idle':

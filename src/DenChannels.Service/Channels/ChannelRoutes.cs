@@ -196,6 +196,12 @@ public static class ChannelRoutes
             return Results.Ok(channel);
         });
 
+        api.MapPut("/service-work", async (ChannelsRepository repository, CancellationToken cancellationToken) =>
+        {
+            var channel = await repository.EnsureServiceWorkChannelAsync(cancellationToken);
+            return Results.Ok(channel);
+        });
+
         api.MapPut("/agent-commons/memberships/{agentIdentity}", async (ChannelsRepository repository, string agentIdentity,
             CancellationToken cancellationToken) =>
         {

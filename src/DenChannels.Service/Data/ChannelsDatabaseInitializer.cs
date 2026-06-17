@@ -7,7 +7,7 @@ namespace DenChannels.Service.Data;
 
 public sealed class ChannelsDatabaseInitializer
 {
-    public const int CurrentSchemaVersion = 7;
+    public const int CurrentSchemaVersion = 9;
 
     private readonly IOptions<DenChannelsOptions> _options;
     private readonly ILogger<ChannelsDatabaseInitializer> _logger;
@@ -102,6 +102,7 @@ public sealed class ChannelsDatabaseInitializer
         await EnsureAgentCommonsSeedAsync(connection, cancellationToken);
         await EnsureWorkerPoolLobbySeedAsync(connection, cancellationToken);
         await EnsureDenSystemChannelSeedAsync(connection, cancellationToken);
+        await EnsureServiceWorkChannelSeedAsync(connection, cancellationToken);
         await EnsureWorkerPoolLobbyPresenceConcreteConstraintAsync(connection, logger, cancellationToken);
         await EnsureChannelMessagesFts5Async(connection, cancellationToken);
         await ExecuteNonQueryAsync(connection, PostCreateIndexesSql, cancellationToken);
@@ -1350,6 +1351,38 @@ public sealed class ChannelsDatabaseInitializer
         ON CONFLICT(channel_id, project_id) DO UPDATE SET
             relation_kind = excluded.relation_kind;
         """;
+
+    /// <summary>
+    /// Seed SQL to create the #service-work global service-activity channel.
+    /// Follows the same pattern as DenSystemChannelSeedSql: idempotent INSERT
+    /// with ON CONFLICT(slug) slug-based upsert for system channels.
+    /// The channel has no project_id, is visible in normal listings, and uses
+    /// channelScope:'global' in settings_json for UI identification.
+    /// </summary>
+    private const string ServiceWorkChannelSeedSql = """
+        INSERT INTO channels(slug, display_name, kind, created_by, visibility, settings_json)
+        VALUES ('service-work', '#service-work', 'system', 'system', 'normal',
+                '{"systemManaged":true,"channelRole":"service_work","channelScope":"global","description":"Global service-work channel for background agent activity, service automation, watcher output, maintenance events, deployment/status pings, and non-project-specific operational messages."}')
+        ON CONFLICT(slug) DO UPDATE SET
+            display_name = '#service-work',
+            kind = 'system',
+            visibility = 'normal',
+            settings_json = COALESCE(channels.settings_json, excluded.settings_json),
+            updated_at = datetime('now');
+        """;
+
+    /// <summary>
+    /// Ensures the #service-work global service-activity channel exists.
+    /// Idempotent — safe to call on every startup.
+    /// </summary>
+    private static async Task EnsureServiceWorkChannelSeedAsync(SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "channels", cancellationToken))
+            return;
+
+        await ExecuteNonQueryAsync(connection, ServiceWorkChannelSeedSql, cancellationToken);
+    }
 
     /// <summary>
     /// Rebuild worker_pool_lobby_presence with concrete-identity-scoped UNIQUE
