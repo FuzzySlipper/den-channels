@@ -12,6 +12,11 @@ using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Enforce loopback-only binding. The csproj comment documents the intent:
+// den-channels serves only backend APIs on 127.0.0.1:18081 behind the Den Web reverse proxy.
+// This explicitly overrides ASPNETCORE_URLS from env to prevent LAN binding.
+builder.Configuration["ASPNETCORE_URLS"] = "http://127.0.0.1:18081";
+
 builder.Services.AddOptions<DenChannelsOptions>()
     .Bind(builder.Configuration.GetSection(DenChannelsOptions.SectionName))
     .Validate(options => !string.IsNullOrWhiteSpace(options.Database.Path),
