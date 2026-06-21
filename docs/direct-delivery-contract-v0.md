@@ -209,7 +209,7 @@ The `AssignmentTraceResponse` now uses typed DTOs:
 | `POST /api/gateway/direct-agent-messages` | Channels (retired) | RETIRED (task #2022/#3025). Returns 410 Gone pointing to `POST /v1/delivery/intents`. |
 | `POST /api/gateway/test-wakes` | Channels (retired) | RETIRED (task #2022/#3025). Returns 410 Gone pointing to `POST /v1/delivery/intents`. |
 | `GET /api/gateway/events` | Channels (retired) | RETIRED (task #2022). Returns 410 Gone pointing to `GET /api/direct-agent-events`. |
-| `POST /api/gateway/system-messages` | Channels (compat) | Gateway-generated channel messages. |
+| `POST /api/gateway/system-messages` | Channels (retired) | RETIRED (task #3026). Returns 410 Gone pointing to `POST /v1/conversation/channels/{channel_id}/messages`. |
 | `POST /api/channel-activity-events` | Channels | Non-waking progress/activity writer with Channels-owned validation/defaulting/status diagnostics. Prefer `POST /api/channels/{channelId}/activity-events` for new callers. |
 | `POST /api/gateway/channel-activity-events` | Channels (retired) | RETIRED (task #2022). Returns 410 Gone pointing to `POST /api/channels/{channelId}/activity-events`. |
 | `GET /api/gateway/channel-activity-events/status` | Channels (retired) | RETIRED (task #2022). Returns 410 Gone pointing to `GET /api/channel-activity-events/status`. |

@@ -20,13 +20,14 @@ This repo currently contains the service skeleton for Den task #1320:
 - `/api/channels` — create/list channels.
 - `/api/channels/{id}` — get a channel.
 - `/api/projects/{projectId}/default-channel` — idempotently ensure the safe-slug default project channel.
-- `/api/channels/{channelId}/messages` — post/list channel messages with source pointers and cursor params.
+- `/api/channels/{channelId}/messages` — list historical channel messages with source pointers and cursor params. The legacy POST writer returns 410 Gone in production; new writes use the Conversation successor `POST /v1/conversation/channels/{channel_id}/messages`.
 - `/api/channels/{channelId}/memberships` — minimal membership upsert.
 - `/api/channel-messages/{messageId}/reactions` — idempotent reaction add.
 - `/api/channels/{channelId}/activity-events` — append/query non-waking agent/tool-call breadcrumbs.
 - `/api/channels/{channelId}/events/stream` — Server-Sent Events stream for Den Web live updates, currently emitting `channel_message` and `channel_activity_event` envelopes with composite `Last-Event-ID` cursor support. See `docs/channel-event-stream-sse-2146.md`.
 - `/api/channel-activity-events` and `/api/channel-activity-events/status` — Channels-owned Gateway-shaped breadcrumb compatibility writer plus recent failure diagnostics; new callers should prefer the per-channel route.
 - `/api/gateway/memberships?channelId={id}|projectId={projectId}` — participant/wake-policy snapshot for channel routing.
+- `POST /api/gateway/system-messages` — retired legacy system-message writer; returns 410 Gone pointing to the Conversation successor `POST /v1/conversation/channels/{channel_id}/messages` (task #3026).
 - `/api/channel-memberships?memberIdentity={identity}` — member-identity channel membership discovery for spawned worker polling; `includeOrdinaryMemberships=true` lets long-lived runtime agents discover ordinary null-purpose memberships without widening the worker default. See `docs/worker-pool-discovery.md`.
 - `POST /api/direct-agent-events` — retired legacy direct-agent wake writer; returns 410 Gone pointing to the Delivery successor `POST /v1/delivery/intents` (task #3025).
 - `GET /api/direct-agent-events` — cursor-paged legacy direct-agent event readback. The retired alias `GET /api/gateway/events` now returns 410 Gone (task #2022).

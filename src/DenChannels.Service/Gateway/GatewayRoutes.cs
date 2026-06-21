@@ -1,7 +1,9 @@
 using System.Text.Json;
 using DenChannels.Service.AgentsOverview;
 using DenChannels.Service.Channels;
+using DenChannels.Service.Configuration;
 using DenChannels.Service.DirectAgentEvents;
+using Microsoft.Extensions.Options;
 
 using static DenChannels.Service.MessageKind;
 using static DenChannels.Service.EventRecordingStatus;
@@ -26,17 +28,15 @@ public static class GatewayRoutes
         // Introspection endpoint showing currently supported routes.
         // Gateway compatibility aliases have been retired (task #2022).
         // -----------------------------------------------------------------------
-        gw.MapGet("/health", () => Results.Ok(new GatewayHealthDto(
-            Service: "den-channels",
-            Status: "ready",
-            Endpoints:
-            [
+        gw.MapGet("/health", (IOptions<DenChannelsOptions> options) =>
+        {
+            var endpoints = new List<string>
+            {
                 "GET /api/gateway/health",
                 "GET /api/gateway/memberships?channelId={id}",
                 "GET /api/gateway/memberships?projectId={projectId}",
                 "GET /api/gateway/messages/{messageId}",
                 "GET /api/gateway/sources/{sourceKind}/{sourceId}?sourceProjectId={projectId}",
-                "POST /api/gateway/system-messages",
                 "GET /api/gateway/assignments/{assignmentId}/trace",
                 "GET /api/direct-agent-events",
                 "GET /api/direct-agent-events/{eventId}",
@@ -48,7 +48,16 @@ public static class GatewayRoutes
                 "GET /api/projects/{projectId}/linked-channels",
                 "POST /api/channel-project-links",
                 "DELETE /api/channel-project-links"
-            ])));
+            };
+
+            if (!options.Value.LegacyWrites.TombstoneGatewaySystemMessages)
+                endpoints.Insert(5, "POST /api/gateway/system-messages");
+
+            return Results.Ok(new GatewayHealthDto(
+                Service: "den-channels",
+                Status: "ready",
+                Endpoints: endpoints.ToArray()));
+        });
 
         // -----------------------------------------------------------------------
         // GET /api/gateway/memberships
@@ -157,9 +166,13 @@ public static class GatewayRoutes
         // -----------------------------------------------------------------------
         gw.MapPost("/system-messages", async (
             ChannelsRepository repository,
+            IOptions<DenChannelsOptions> options,
             PostGatewaySystemMessageRequest request,
             CancellationToken cancellationToken) =>
         {
+            if (options.Value.LegacyWrites.TombstoneGatewaySystemMessages)
+                return GatewayTombstone("POST /v1/conversation/channels/{channel_id}/messages");
+
             // Validate that channelId or projectId is provided.
             if (request.ChannelId is null && string.IsNullOrWhiteSpace(request.ProjectId))
                 return Results.BadRequest(new GatewayErrorDto("missing_parameter",

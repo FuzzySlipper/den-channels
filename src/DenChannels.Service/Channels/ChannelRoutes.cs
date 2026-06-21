@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.Text.Json;
+using DenChannels.Service.Configuration;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Options;
 
 namespace DenChannels.Service.Channels;
 
@@ -222,9 +224,16 @@ public static class ChannelRoutes
             return Results.Ok(result);
         });
 
-        api.MapPost("/channels/{channelId:long}/messages", async (ChannelsRepository repository, long channelId,
-            PostChannelMessageRequest request, CancellationToken cancellationToken) =>
+        api.MapPost("/channels/{channelId:long}/messages", async (
+            ChannelsRepository repository,
+            IOptions<DenChannelsOptions> options,
+            long channelId,
+            PostChannelMessageRequest request,
+            CancellationToken cancellationToken) =>
         {
+            if (options.Value.LegacyWrites.TombstoneChannelMessages)
+                return LegacyWriteTombstone("POST /v1/conversation/channels/{channel_id}/messages");
+
             // Dedupe keys are caller-provided idempotency keys, not validation failures.
             // Gateway-facing system messages already return the existing row for duplicate
             // dedupe keys; direct channel-message posts need the same behavior so retrying
@@ -787,6 +796,16 @@ public static class ChannelRoutes
     }
 
     private static bool IsConstraintFailure(SqliteException ex) => ex.SqliteErrorCode == 19;
+
+    private static IResult LegacyWriteTombstone(string replacement)
+    {
+        return Results.Json(new
+        {
+            code = "route_gone",
+            message = "This legacy den-channels write route has been retired. Use the replacement route instead.",
+            replacement
+        }, statusCode: StatusCodes.Status410Gone);
+    }
 
     private sealed record ProblemDetailsDto(string Code, int SqliteErrorCode, string Detail);
 }

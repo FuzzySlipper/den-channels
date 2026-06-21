@@ -11,6 +11,8 @@ public sealed class DenChannelsOptions
     public WorkerPoolOptions WorkerPool { get; init; } = new();
 
     public ServiceAuthOptions ServiceAuth { get; init; } = new();
+
+    public LegacyWriteOptions LegacyWrites { get; init; } = new();
 }
 
 public sealed class DatabaseOptions
@@ -79,4 +81,19 @@ public sealed class WorkerPoolOptions
     /// Useful for offline/dev scenarios without a running Core worker-pool endpoint.
     /// </summary>
     public bool Disabled { get; init; } = true;
+}
+
+public sealed class LegacyWriteOptions
+{
+    /// <summary>
+    /// When true, public legacy channel-message writes return 410 Gone.
+    /// Conversation successor writes use the Gateway /v1/conversation surface.
+    /// </summary>
+    public bool TombstoneChannelMessages { get; init; } = false;
+
+    /// <summary>
+    /// When true, the Gateway system-message compatibility writer returns 410 Gone.
+    /// System/conversation messages should be posted through the Conversation successor.
+    /// </summary>
+    public bool TombstoneGatewaySystemMessages { get; init; } = false;
 }

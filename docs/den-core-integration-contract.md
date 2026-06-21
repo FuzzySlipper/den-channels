@@ -22,7 +22,7 @@ All coupling to Den core happens through explicit HTTP/event contracts. MCP tool
 
 This contract uses the task #1555 vocabulary from Core's `docs/communication-api-surface-naming.md` and Den document `den-core/den-communication-surfaces-concept-map`:
 
-- `channel_message` means a visible Den Channels transcript row written through `POST /api/channels/{channelId}/messages` or the Gateway compatibility seam.
+- `channel_message` means a visible conversation transcript row. Legacy Den Channels retains readback for historical rows, but new writes use the Conversation successor `POST /v1/conversation/channels/{channel_id}/messages`; legacy Den Channels write routes return 410 Gone in production after task #3026.
 - `direct_agent_message` / `direct_agent_event` means legacy Channels wake evidence whose backing transcript row has `sourceKind=wake_event`. New executable wake intents belong to Delivery (`POST /v1/delivery/intents`); `POST /api/direct-agent-events` and `POST /api/gateway/direct-agent-messages` now return 410 Gone.
 - `gateway_delivery_final_message` means the true terminal visible reply for a Gateway delivery; it is a `channel_message` with `sourceKind=gateway_delivery`, a `deliveryRequestId`, and a final dedupe key shaped `gateway-delivery:{delivery_request_id}:final`.
 - `channel_activity_event` / `delivery_activity_event` means non-waking progress/activity written primarily through `POST /api/channels/{channelId}/activity-events` or `POST /api/channel-activity-events`. The legacy alias `POST /api/gateway/channel-activity-events` was retired in task #2022 and now returns 410 Gone.
