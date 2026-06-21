@@ -13,6 +13,8 @@ public sealed class DenChannelsOptions
     public ServiceAuthOptions ServiceAuth { get; init; } = new();
 
     public LegacyWriteOptions LegacyWrites { get; init; } = new();
+
+    public LegacyObservationOptions LegacyObservation { get; init; } = new();
 }
 
 public sealed class DatabaseOptions
@@ -96,4 +98,14 @@ public sealed class LegacyWriteOptions
     /// System/conversation messages should be posted through the Conversation successor.
     /// </summary>
     public bool TombstoneGatewaySystemMessages { get; init; } = false;
+}
+
+public sealed class LegacyObservationOptions
+{
+    /// <summary>
+    /// When true, legacy den-channels observation/activity/lifecycle/trace/overview
+    /// routes return 410 Gone. Observation/Timeline successors own canonical reads
+    /// and writes; den-channels keeps historical rows intact.
+    /// </summary>
+    public bool TombstoneRoutes { get; init; } = false;
 }

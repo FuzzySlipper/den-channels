@@ -21,11 +21,15 @@ public static class ChannelRoutes
         api.MapGet("/assignments/{assignmentId}/trace", async (
             ChannelsRepository repository,
             AgentsOverview.IWorkerPoolStateClient workerPoolClient,
+            IOptions<DenChannelsOptions> options,
             string assignmentId,
             string? projectId,
             long? channelId,
             CancellationToken cancellationToken) =>
         {
+            if (options.Value.LegacyObservation.TombstoneRoutes)
+                return LegacyRouteTombstone.Gone("GET /v1/observation/assignments/{id}/trace");
+
             // Delegate to the same handler
             return await Gateway.GatewayRoutes.HandleAssignmentTraceAsync(
                 repository, workerPoolClient, assignmentId, projectId, channelId, cancellationToken);
@@ -272,9 +276,14 @@ public static class ChannelRoutes
             CancellationToken cancellationToken) => Results.Ok(
                 await repository.ListReactionSummariesAsync(channelId, cancellationToken)));
 
-        api.MapPost("/channels/{channelId:long}/activity-events", async (ChannelsRepository repository, long channelId,
+        api.MapPost("/channels/{channelId:long}/activity-events", async (ChannelsRepository repository,
+            IOptions<DenChannelsOptions> options,
+            long channelId,
             AppendChannelActivityEventRequest request, CancellationToken cancellationToken) =>
         {
+            if (options.Value.LegacyObservation.TombstoneRoutes)
+                return LegacyRouteTombstone.Gone("POST /v1/observation/activity-events");
+
             try
             {
                 var activityEvent = await repository.AppendActivityEventAsync(channelId, request, cancellationToken);
@@ -286,15 +295,27 @@ public static class ChannelRoutes
             }
         });
 
-        api.MapGet("/channels/{channelId:long}/activity-events", async (ChannelsRepository repository, long channelId,
+        api.MapGet("/channels/{channelId:long}/activity-events", async (ChannelsRepository repository,
+            IOptions<DenChannelsOptions> options,
+            long channelId,
             string? deliveryRequestId, string? sessionKey, string? displayBlockId, string? workerRunId,
-            string? agentInstanceId, long? anchorMessageId, long? taskId, string? assignmentId, long? afterId, int? limit, CancellationToken cancellationToken) => Results.Ok(
-                await repository.ListActivityEventsAsync(channelId, deliveryRequestId, sessionKey, displayBlockId,
-                    workerRunId, agentInstanceId, anchorMessageId, taskId, assignmentId, afterId, limit ?? 100, cancellationToken)));
+            string? agentInstanceId, long? anchorMessageId, long? taskId, string? assignmentId, long? afterId, int? limit, CancellationToken cancellationToken) =>
+        {
+            if (options.Value.LegacyObservation.TombstoneRoutes)
+                return LegacyRouteTombstone.Gone("GET /v1/observation/activity-events");
 
-        api.MapPatch("/channel-activity-events/{activityEventId:long}", async (ChannelsRepository repository, long activityEventId,
+            return Results.Ok(await repository.ListActivityEventsAsync(channelId, deliveryRequestId, sessionKey, displayBlockId,
+                workerRunId, agentInstanceId, anchorMessageId, taskId, assignmentId, afterId, limit ?? 100, cancellationToken));
+        });
+
+        api.MapPatch("/channel-activity-events/{activityEventId:long}", async (ChannelsRepository repository,
+            IOptions<DenChannelsOptions> options,
+            long activityEventId,
             UpdateChannelActivityEventRequest request, CancellationToken cancellationToken) =>
         {
+            if (options.Value.LegacyObservation.TombstoneRoutes)
+                return LegacyRouteTombstone.Gone("POST /v1/observation/activity-events");
+
             try
             {
                 var activityEvent = await repository.UpdateActivityEventAsync(activityEventId, request, cancellationToken);
@@ -315,14 +336,25 @@ public static class ChannelRoutes
         // retired in task #2022 and returns 410 Gone.
         // -----------------------------------------------------------------------
         api.MapPost("/channel-activity-events", async Task<IResult> (ChannelActivityEventRoutingService activityRouter,
+            IOptions<DenChannelsOptions> options,
             string? channelId, ChannelActivityRouteRequest request, CancellationToken cancellationToken) =>
         {
+            if (options.Value.LegacyObservation.TombstoneRoutes)
+                return LegacyRouteTombstone.Gone("POST /v1/observation/activity-events");
+
             var result = await activityRouter.RouteAsync(request, channelId, cancellationToken);
             return ToActivityRouteHttpResult(result);
         });
 
-        api.MapGet("/channel-activity-events/status", (ChannelActivityEventRoutingService activityRouter) =>
-            Results.Ok(activityRouter.GetStatus()));
+        api.MapGet("/channel-activity-events/status", (
+            ChannelActivityEventRoutingService activityRouter,
+            IOptions<DenChannelsOptions> options) =>
+        {
+            if (options.Value.LegacyObservation.TombstoneRoutes)
+                return LegacyRouteTombstone.Gone("GET /v1/observation/activity-events/status");
+
+            return Results.Ok(activityRouter.GetStatus());
+        });
 
         // -----------------------------------------------------------------------
         // Read cursor endpoints (task #1769 shared-profile instance support)
@@ -353,9 +385,13 @@ public static class ChannelRoutes
         // plus non-waking activity/checkpoint events with channel/message/delivery handles.
         // -----------------------------------------------------------------------
         api.MapGet("/assignments/{assignmentId}/transcript", async (ChannelsRepository repository,
+            IOptions<DenChannelsOptions> options,
             string assignmentId, long? channelId, string? projectId, int? messageLimit, int? activityLimit,
             CancellationToken cancellationToken) =>
         {
+            if (options.Value.LegacyObservation.TombstoneRoutes)
+                return LegacyRouteTombstone.Gone("GET /v1/observation/assignments/{id}/transcript");
+
             if (channelId is null && string.IsNullOrWhiteSpace(projectId))
                 return Results.BadRequest(new { code = "missing_parameter", message = "Provide channelId or projectId." });
 
@@ -685,11 +721,17 @@ public static class ChannelRoutes
             long channelId, UpsertChannelSubscriptionRequest request, CancellationToken cancellationToken) =>
         {
             if (string.IsNullOrWhiteSpace(request.MemberIdentity))
-                return Results.BadRequest(new { code = "missing_member_identity",
-                    message = "Provide memberIdentity for the subscription." });
+                return Results.BadRequest(new
+                {
+                    code = "missing_member_identity",
+                    message = "Provide memberIdentity for the subscription."
+                });
             if (string.IsNullOrWhiteSpace(request.SubscriptionIdentity))
-                return Results.BadRequest(new { code = "missing_subscription_identity",
-                    message = "Provide subscriptionIdentity." });
+                return Results.BadRequest(new
+                {
+                    code = "missing_subscription_identity",
+                    message = "Provide subscriptionIdentity."
+                });
 
             var subscription = await repository.UpsertSubscriptionAsync(
                 channelId, request, cancellationToken);
@@ -713,8 +755,11 @@ public static class ChannelRoutes
         {
             var released = await repository.ReleaseSubscriptionAsync(subscriptionId, cancellationToken);
             if (!released)
-                return Results.NotFound(new { code = "subscription_not_found_or_terminal",
-                    message = $"Subscription {subscriptionId} not found or already in terminal state." });
+                return Results.NotFound(new
+                {
+                    code = "subscription_not_found_or_terminal",
+                    message = $"Subscription {subscriptionId} not found or already in terminal state."
+                });
             return Results.Ok(new { released = true, subscriptionId });
         }).WithDescription("Release (deactivate) a channel subscription. Stops the runtime from polling this channel via this subscription.");
 

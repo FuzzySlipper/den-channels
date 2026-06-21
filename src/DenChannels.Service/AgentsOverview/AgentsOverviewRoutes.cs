@@ -1,3 +1,6 @@
+using DenChannels.Service.Configuration;
+using Microsoft.Extensions.Options;
+
 namespace DenChannels.Service.AgentsOverview;
 
 public static class AgentsOverviewRoutes
@@ -13,6 +16,7 @@ public static class AgentsOverviewRoutes
         // =========================================================================
         api.MapGet("/agents/overview", async (
             AgentsOverviewService service,
+            IOptions<DenChannelsOptions> options,
             string? projectId,
             string? channelId,
             string? scope,
@@ -21,6 +25,9 @@ public static class AgentsOverviewRoutes
             bool? includeLeft,
             CancellationToken cancellationToken) =>
         {
+            if (options.Value.LegacyObservation.TombstoneRoutes)
+                return LegacyRouteTombstone.Gone("GET /v1/observation/agents/overview");
+
             long? parsedChannelId = null;
             if (long.TryParse(channelId, out var cid))
                 parsedChannelId = cid;
@@ -40,6 +47,7 @@ public static class AgentsOverviewRoutes
         // =========================================================================
         api.MapGet("/agents/{agentIdentity}/overview", async (
             AgentsOverviewService service,
+            IOptions<DenChannelsOptions> options,
             string agentIdentity,
             string? projectId,
             string? channelId,
@@ -47,6 +55,9 @@ public static class AgentsOverviewRoutes
             int? deliveryLimit,
             CancellationToken cancellationToken) =>
         {
+            if (options.Value.LegacyObservation.TombstoneRoutes)
+                return LegacyRouteTombstone.Gone("GET /v1/observation/agents/{id}/overview");
+
             // URL-decode the identity in case it contains encoded characters
             var decodedIdentity = Uri.UnescapeDataString(agentIdentity);
 

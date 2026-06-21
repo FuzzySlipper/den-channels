@@ -22,7 +22,8 @@ public sealed class LegacyWriteTombstoneTests : IDisposable
                     ["DenChannels:Database:Path"] = _databasePath,
                     ["DenChannels:Database:ApplyMigrationsOnStartup"] = "true",
                     ["DenChannels:LegacyWrites:TombstoneChannelMessages"] = "true",
-                    ["DenChannels:LegacyWrites:TombstoneGatewaySystemMessages"] = "true"
+                    ["DenChannels:LegacyWrites:TombstoneGatewaySystemMessages"] = "true",
+                    ["DenChannels:LegacyObservation:TombstoneRoutes"] = "true"
                 });
             }));
         _client = _factory.CreateClient();
@@ -68,6 +69,58 @@ public sealed class LegacyWriteTombstoneTests : IDisposable
         Assert.NotNull(payload);
         Assert.DoesNotContain(payload.Endpoints, endpoint => endpoint.Contains("/api/gateway/system-messages"));
         Assert.Contains(payload.Endpoints, endpoint => endpoint.Contains("/api/gateway/messages"));
+    }
+
+    [Theory]
+    [InlineData("POST", "/api/channels/42/activity-events", "POST /v1/observation/activity-events")]
+    [InlineData("GET", "/api/channels/42/activity-events?limit=1", "GET /v1/observation/activity-events")]
+    [InlineData("PATCH", "/api/channel-activity-events/123", "POST /v1/observation/activity-events")]
+    [InlineData("POST", "/api/channel-activity-events", "POST /v1/observation/activity-events")]
+    [InlineData("GET", "/api/channel-activity-events/status", "GET /v1/observation/activity-events/status")]
+    [InlineData("POST", "/api/agent-work/lifecycle-events", "POST /v1/observation/lifecycle-events")]
+    [InlineData("GET", "/api/agent-work/events?channelId=42", "GET /v1/observation/activity-events")]
+    [InlineData("GET", "/api/agent-work/current?channelId=42", "GET /v1/observation/active-work")]
+    [InlineData("GET", "/api/agents/overview", "GET /v1/observation/agents/overview")]
+    [InlineData("GET", "/api/agents/den-mcp-runner/overview", "GET /v1/observation/agents/{id}/overview")]
+    [InlineData("GET", "/api/assignments/asn-1/trace?projectId=den-services", "GET /v1/observation/assignments/{id}/trace")]
+    [InlineData("GET", "/api/gateway/assignments/asn-1/trace?projectId=den-services", "GET /v1/observation/assignments/{id}/trace")]
+    [InlineData("GET", "/api/assignments/asn-1/transcript?channelId=42", "GET /v1/observation/assignments/{id}/transcript")]
+    public async Task LegacyObservationRoutes_Return410Gone_WhenTombstoned(string method, string path, string replacement)
+    {
+        using var response = await SendAsync(method, path);
+
+        Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+        await AssertTombstone(response, replacement);
+    }
+
+    [Fact]
+    public async Task GatewayHealth_DoesNotAdvertiseObservationRoutes_WhenTombstoned()
+    {
+        var payload = await _client.GetFromJsonAsync<GatewayHealthPayload>("/api/gateway/health");
+
+        Assert.NotNull(payload);
+        Assert.DoesNotContain(payload.Endpoints, endpoint => endpoint.Contains("/api/gateway/assignments"));
+        Assert.DoesNotContain(payload.Endpoints, endpoint => endpoint.Contains("/api/channel-activity-events"));
+        Assert.DoesNotContain(payload.Endpoints, endpoint => endpoint.Contains("/activity-events"));
+    }
+
+    private async Task<HttpResponseMessage> SendAsync(string method, string path)
+    {
+        var request = new HttpRequestMessage(new HttpMethod(method), path);
+        if (method is "POST" or "PATCH")
+        {
+            request.Content = JsonContent.Create(new
+            {
+                channelId = 42,
+                agentIdentity = "legacy-observation-test",
+                eventType = "heartbeat",
+                status = "interim",
+                title = "retired legacy observation route",
+                summary = "should not write"
+            });
+        }
+
+        return await _client.SendAsync(request);
     }
 
     private static async Task AssertTombstone(HttpResponseMessage response, string expectedReplacement)

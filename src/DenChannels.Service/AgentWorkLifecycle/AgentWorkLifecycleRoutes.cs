@@ -2,7 +2,9 @@ using System.Globalization;
 using System.Text.Json;
 using DenChannels.Service.AgentWorkLifecycle;
 using DenChannels.Service.Channels;
+using DenChannels.Service.Configuration;
 using DenChannels.Service.DirectAgentEvents;
+using Microsoft.Extensions.Options;
 
 namespace DenChannels.Service;
 
@@ -115,9 +117,13 @@ public static class AgentWorkLifecycleRoutes
     private static async Task<IResult> WriteLifecycleEventAsync(
         AgentWorkLifecycleWriteRequest request,
         ChannelsRepository repository,
+        IOptions<DenChannelsOptions> options,
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
+        if (options.Value.LegacyObservation.TombstoneRoutes)
+            return LegacyRouteTombstone.Gone("POST /v1/observation/lifecycle-events");
+
         // Validate event type
         if (string.IsNullOrWhiteSpace(request.EventType)
             || !LifecycleEventType.All.Contains(request.EventType))
@@ -194,6 +200,7 @@ public static class AgentWorkLifecycleRoutes
     /// </summary>
     private static async Task<IResult> QueryLifecycleEventsAsync(
         ChannelsRepository repository,
+        IOptions<DenChannelsOptions> options,
         long? channelId,
         string? projectId,
         long? taskId,
@@ -206,6 +213,9 @@ public static class AgentWorkLifecycleRoutes
         int limit = 50,
         CancellationToken cancellationToken = default)
     {
+        if (options.Value.LegacyObservation.TombstoneRoutes)
+            return LegacyRouteTombstone.Gone("GET /v1/observation/activity-events");
+
         if (limit < 1 || limit > 200) limit = 50;
 
         try
@@ -286,9 +296,13 @@ public static class AgentWorkLifecycleRoutes
     /// </summary>
     private static async Task<IResult> GetCurrentWorkProjectionAsync(
         ChannelsRepository repository,
+        IOptions<DenChannelsOptions> options,
         long? channelId,
         CancellationToken cancellationToken)
     {
+        if (options.Value.LegacyObservation.TombstoneRoutes)
+            return LegacyRouteTombstone.Gone("GET /v1/observation/active-work");
+
         if (channelId is not long cid)
         {
             return Results.BadRequest(new { error = "missing_channel_id", message = "channelId query parameter is required." });

@@ -37,13 +37,8 @@ public static class GatewayRoutes
                 "GET /api/gateway/memberships?projectId={projectId}",
                 "GET /api/gateway/messages/{messageId}",
                 "GET /api/gateway/sources/{sourceKind}/{sourceId}?sourceProjectId={projectId}",
-                "GET /api/gateway/assignments/{assignmentId}/trace",
                 "GET /api/direct-agent-events",
                 "GET /api/direct-agent-events/{eventId}",
-                "POST /api/channels/{channelId}/activity-events",
-                "GET /api/channels/{channelId}/activity-events",
-                "POST /api/channel-activity-events",
-                "GET /api/channel-activity-events/status",
                 "GET /api/channels/{channelId}/linked-projects",
                 "GET /api/projects/{projectId}/linked-channels",
                 "POST /api/channel-project-links",
@@ -52,6 +47,14 @@ public static class GatewayRoutes
 
             if (!options.Value.LegacyWrites.TombstoneGatewaySystemMessages)
                 endpoints.Insert(5, "POST /api/gateway/system-messages");
+            if (!options.Value.LegacyObservation.TombstoneRoutes)
+            {
+                endpoints.Add("GET /api/gateway/assignments/{assignmentId}/trace");
+                endpoints.Add("POST /api/channels/{channelId}/activity-events");
+                endpoints.Add("GET /api/channels/{channelId}/activity-events");
+                endpoints.Add("POST /api/channel-activity-events");
+                endpoints.Add("GET /api/channel-activity-events/status");
+            }
 
             return Results.Ok(new GatewayHealthDto(
                 Service: "den-channels",
@@ -259,15 +262,19 @@ public static class GatewayRoutes
         // Assignment trace aggregate: composes Core worker-pool state, Channels
         // messages/activity, and Gateway delivery evidence for Den Web #1729/#1737.
         // -----------------------------------------------------------------------
-        gw.MapGet("/assignments/{assignmentId}/trace", (
+        gw.MapGet("/assignments/{assignmentId}/trace", async (
             ChannelsRepository repository,
             IWorkerPoolStateClient workerPoolClient,
+            IOptions<DenChannelsOptions> options,
             string assignmentId,
             string? projectId,
             long? channelId,
             CancellationToken cancellationToken) =>
         {
-            return HandleAssignmentTraceAsync(
+            if (options.Value.LegacyObservation.TombstoneRoutes)
+                return LegacyRouteTombstone.Gone("GET /v1/observation/assignments/{id}/trace");
+
+            return await HandleAssignmentTraceAsync(
                 repository, workerPoolClient, assignmentId, projectId, channelId, cancellationToken);
         });
 
