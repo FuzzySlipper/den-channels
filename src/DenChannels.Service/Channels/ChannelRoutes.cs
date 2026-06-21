@@ -202,16 +202,22 @@ public static class ChannelRoutes
             return Results.Ok(channel);
         });
 
-        api.MapPut("/agent-commons/memberships/{agentIdentity}", async (ChannelsRepository repository, string agentIdentity,
-            CancellationToken cancellationToken) =>
+        api.MapPut("/agent-commons/memberships/{agentIdentity}", async (ChannelsRepository repository,
+            IOptions<DenChannelsOptions> options, string agentIdentity, CancellationToken cancellationToken) =>
         {
+            if (options.Value.LegacyRuntimeControl.TombstoneUnusedRoutes)
+                return LegacyRouteTombstone.Gone("PUT /api/channels/{channelId}/memberships");
+
             var membership = await repository.EnsureAgentCommonsMembershipAsync(agentIdentity, null, cancellationToken);
             return Results.Ok(membership);
         });
 
-        api.MapPost("/agent-commons/brake", async (ChannelsRepository repository, AgentCommonsBrakeRequest request,
-            CancellationToken cancellationToken) =>
+        api.MapPost("/agent-commons/brake", async (ChannelsRepository repository, IOptions<DenChannelsOptions> options,
+            AgentCommonsBrakeRequest request, CancellationToken cancellationToken) =>
         {
+            if (options.Value.LegacyRuntimeControl.TombstoneUnusedRoutes)
+                return LegacyRouteTombstone.Gone("Den Core/Runtime agent-control policy");
+
             var membershipStatus = string.IsNullOrWhiteSpace(request.MembershipStatus) ? "muted" : request.MembershipStatus.Trim();
             var wakePolicy = string.IsNullOrWhiteSpace(request.WakePolicy) ? "never" : request.WakePolicy.Trim();
             if (membershipStatus is not ("active" or "muted" or "left" or "banned"))
@@ -465,26 +471,36 @@ public static class ChannelRoutes
         // Worker-pool lobby endpoints (task #1771)
         // -----------------------------------------------------------------------
 
-        api.MapPut("/worker-pool/lobby", async (ChannelsRepository repository,
+        api.MapPut("/worker-pool/lobby", async (ChannelsRepository repository, IOptions<DenChannelsOptions> options,
             CancellationToken cancellationToken) =>
         {
+            if (options.Value.LegacyRuntimeControl.TombstoneUnusedRoutes)
+                return LegacyRouteTombstone.Gone("Den Core/Runtime worker-pool member registration");
+
             var channel = await repository.EnsureWorkerPoolLobbyChannelAsync(cancellationToken);
             return Results.Ok(channel);
         });
 
         api.MapPut("/worker-pool/lobby/presence", async (ChannelsRepository repository,
-            UpsertWorkerPoolLobbyPresenceRequest request, CancellationToken cancellationToken) =>
+            IOptions<DenChannelsOptions> options, UpsertWorkerPoolLobbyPresenceRequest request,
+            CancellationToken cancellationToken) =>
         {
+            if (options.Value.LegacyRuntimeControl.TombstoneUnusedRoutes)
+                return LegacyRouteTombstone.Gone("Den Core/Runtime worker-pool member heartbeat");
+
             var lobby = await repository.EnsureWorkerPoolLobbyChannelAsync(cancellationToken);
             var presence = await repository.UpsertWorkerPoolLobbyPresenceAsync(lobby.Id, request, cancellationToken);
             return Results.Ok(presence);
         });
 
         api.MapPost("/worker-pool/lobby/presence/{memberIdentity}/acknowledge-release", async (
-            ChannelsRepository repository, string memberIdentity,
+            ChannelsRepository repository, IOptions<DenChannelsOptions> options, string memberIdentity,
             string? agentInstanceId, string? poolMemberId,
             CancellationToken cancellationToken) =>
         {
+            if (options.Value.LegacyRuntimeControl.TombstoneUnusedRoutes)
+                return LegacyRouteTombstone.Gone("Den Core/Runtime worker-pool assignment release");
+
             var lobby = await repository.EnsureWorkerPoolLobbyChannelAsync(cancellationToken);
             var presence = await repository.AcknowledgeWorkerPoolReleaseAsync(
                 lobby.Id, memberIdentity, agentInstanceId, poolMemberId, cancellationToken);
@@ -543,9 +559,13 @@ public static class ChannelRoutes
         /// </summary>
         api.MapGet("/worker-pool/lobby/presence/by-instance", async (
             ChannelsRepository repository,
+            IOptions<DenChannelsOptions> options,
             string? agentInstanceId,
             CancellationToken cancellationToken) =>
         {
+            if (options.Value.LegacyRuntimeControl.TombstoneUnusedRoutes)
+                return LegacyRouteTombstone.Gone("Den Core/Runtime child-run projection");
+
             var lobby = await repository.EnsureWorkerPoolLobbyChannelAsync(cancellationToken);
             var allPresences = await repository.ListWorkerPoolLobbyPresenceAsync(lobby.Id, cancellationToken);
 
@@ -563,11 +583,15 @@ public static class ChannelRoutes
         /// </summary>
         api.MapPost("/worker-pool/lobby/presence/release-child-run", async (
             ChannelsRepository repository,
+            IOptions<DenChannelsOptions> options,
             string memberIdentity,
             string? agentInstanceId,
             string? poolMemberId,
             CancellationToken cancellationToken) =>
         {
+            if (options.Value.LegacyRuntimeControl.TombstoneUnusedRoutes)
+                return LegacyRouteTombstone.Gone("Den Core/Runtime worker-pool assignment release");
+
             if (string.IsNullOrWhiteSpace(memberIdentity))
                 return Results.BadRequest(new { error = "memberIdentity is required" });
 
@@ -586,9 +610,13 @@ public static class ChannelRoutes
         /// </summary>
         api.MapGet("/agents/{agentIdentity}/child-runs", async (
             ChannelsRepository repository,
+            IOptions<DenChannelsOptions> options,
             string agentIdentity,
             CancellationToken cancellationToken) =>
         {
+            if (options.Value.LegacyRuntimeControl.TombstoneUnusedRoutes)
+                return LegacyRouteTombstone.Gone("Den Core/Runtime child-run projection");
+
             var lobby = await repository.EnsureWorkerPoolLobbyChannelAsync(cancellationToken);
             var allPresences = await repository.ListWorkerPoolLobbyPresenceAsync(lobby.Id, cancellationToken);
 

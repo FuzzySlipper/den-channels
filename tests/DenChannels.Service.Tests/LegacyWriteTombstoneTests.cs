@@ -23,7 +23,8 @@ public sealed class LegacyWriteTombstoneTests : IDisposable
                     ["DenChannels:Database:ApplyMigrationsOnStartup"] = "true",
                     ["DenChannels:LegacyWrites:TombstoneChannelMessages"] = "true",
                     ["DenChannels:LegacyWrites:TombstoneGatewaySystemMessages"] = "true",
-                    ["DenChannels:LegacyObservation:TombstoneRoutes"] = "true"
+                    ["DenChannels:LegacyObservation:TombstoneRoutes"] = "true",
+                    ["DenChannels:LegacyRuntimeControl:TombstoneUnusedRoutes"] = "true"
                 });
             }));
         _client = _factory.CreateClient();
@@ -93,6 +94,41 @@ public sealed class LegacyWriteTombstoneTests : IDisposable
         await AssertTombstone(response, replacement);
     }
 
+    [Theory]
+    [InlineData("PUT", "/api/agent-commons/memberships/legacy-worker", "PUT /api/channels/{channelId}/memberships")]
+    [InlineData("POST", "/api/agent-commons/brake", "Den Core/Runtime agent-control policy")]
+    [InlineData("PUT", "/api/worker-pool/lobby", "Den Core/Runtime worker-pool member registration")]
+    [InlineData("PUT", "/api/worker-pool/lobby/presence", "Den Core/Runtime worker-pool member heartbeat")]
+    [InlineData("POST", "/api/worker-pool/lobby/presence/legacy-worker/acknowledge-release", "Den Core/Runtime worker-pool assignment release")]
+    [InlineData("GET", "/api/worker-pool/lobby/presence/by-instance?agentInstanceId=inst-1", "Den Core/Runtime child-run projection")]
+    [InlineData("POST", "/api/worker-pool/lobby/presence/release-child-run?memberIdentity=legacy-worker", "Den Core/Runtime worker-pool assignment release")]
+    [InlineData("GET", "/api/agents/legacy-worker/child-runs", "Den Core/Runtime child-run projection")]
+    public async Task UnusedRuntimeControlRoutes_Return410Gone_WhenTombstoned(
+        string method,
+        string path,
+        string replacement)
+    {
+        using var response = await SendAsync(method, path);
+
+        Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+        await AssertTombstone(response, replacement);
+    }
+
+    [Theory]
+    [InlineData("PUT", "/api/agent-commons")]
+    [InlineData("GET", "/api/worker-pool/lobby/presence")]
+    [InlineData("PUT", "/api/worker-pool/control/membership?agentIdentity=legacy-worker")]
+    [InlineData("GET", "/api/channel-subscriptions?memberIdentity=legacy-worker")]
+    [InlineData("GET", "/api/active-work/routes?targetProjectId=den-channels")]
+    public async Task LiveRuntimeCompatibilityRoutes_RemainAvailable_WhenUnusedRuntimeControlIsTombstoned(
+        string method,
+        string path)
+    {
+        using var response = await SendAsync(method, path);
+
+        Assert.NotEqual(HttpStatusCode.Gone, response.StatusCode);
+    }
+
     [Fact]
     public async Task GatewayHealth_DoesNotAdvertiseObservationRoutes_WhenTombstoned()
     {
@@ -107,7 +143,7 @@ public sealed class LegacyWriteTombstoneTests : IDisposable
     private async Task<HttpResponseMessage> SendAsync(string method, string path)
     {
         var request = new HttpRequestMessage(new HttpMethod(method), path);
-        if (method is "POST" or "PATCH")
+        if (method is "POST" or "PATCH" or "PUT")
         {
             request.Content = JsonContent.Create(new
             {
@@ -116,7 +152,9 @@ public sealed class LegacyWriteTombstoneTests : IDisposable
                 eventType = "heartbeat",
                 status = "interim",
                 title = "retired legacy observation route",
-                summary = "should not write"
+                summary = "should not write",
+                memberIdentity = "legacy-worker",
+                subscriptionIdentity = "member:legacy-worker:ordinary_channel"
             });
         }
 

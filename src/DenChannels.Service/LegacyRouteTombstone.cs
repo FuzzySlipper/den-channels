@@ -7,7 +7,7 @@ internal static class LegacyRouteTombstone
         return Results.Json(new
         {
             code = "route_gone",
-            message = "This legacy den-channels observation route has been retired. Use the successor route instead.",
+            message = "This legacy den-channels route has been retired. Use the successor route instead.",
             replacement
         }, statusCode: StatusCodes.Status410Gone);
     }

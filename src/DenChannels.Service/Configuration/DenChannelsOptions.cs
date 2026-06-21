@@ -15,6 +15,8 @@ public sealed class DenChannelsOptions
     public LegacyWriteOptions LegacyWrites { get; init; } = new();
 
     public LegacyObservationOptions LegacyObservation { get; init; } = new();
+
+    public LegacyRuntimeControlOptions LegacyRuntimeControl { get; init; } = new();
 }
 
 public sealed class DatabaseOptions
@@ -108,4 +110,14 @@ public sealed class LegacyObservationOptions
     /// and writes; den-channels keeps historical rows intact.
     /// </summary>
     public bool TombstoneRoutes { get; init; } = false;
+}
+
+public sealed class LegacyRuntimeControlOptions
+{
+    /// <summary>
+    /// When true, legacy den-channels runtime-control helper routes with no
+    /// remaining production callers return 410 Gone. Runtime/Core successors
+    /// own worker-pool and direct-agent control authority.
+    /// </summary>
+    public bool TombstoneUnusedRoutes { get; init; } = false;
 }
