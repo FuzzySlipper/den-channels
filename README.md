@@ -21,6 +21,7 @@ This repo currently contains the service skeleton for Den task #1320:
 - `/api/channels/{id}` — get a channel.
 - `/api/projects/{projectId}/default-channel` — idempotently ensure the safe-slug default project channel.
 - `/api/channels/{channelId}/messages` — list historical channel messages with source pointers and cursor params. The legacy POST writer returns 410 Gone in production; new writes use the Conversation successor `POST /v1/conversation/channels/{channel_id}/messages`.
+- `/api/channels/search` — retired cold cross-channel search surface in production when `DenChannels:LegacyDisplayHistory:TombstoneArchivedRoutes=true`; historical rows and FTS tables remain preserved for readback/export.
 - `/api/channels/{channelId}/memberships` — minimal membership upsert.
 - `/api/channel-messages/{messageId}/reactions` — idempotent reaction add.
 - `/api/channels/{channelId}/activity-events` — retired legacy observation read/write route in production; returns 410 Gone pointing to the Observation successor `GET/POST /v1/observation/activity-events` when `DenChannels:LegacyObservation:TombstoneRoutes=true`.
@@ -39,11 +40,11 @@ and records low-risk test wakes through the Gateway API. Channels stores the mes
 rows; Gateway/bridge consumers remain responsible for real transport, delivery state, claims,
 completions, failures, and suppression decisions.
 
-- `/api/project-channel-sync/projects/{projectId}` — ensure one project default channel from Den core/stub metadata.
-- `/api/project-channel-sync` — backfill default channels from Den core/stub project list or explicit project payload.
-- `/api/mirror-summaries/ingest` — ingest explicit Den event payloads into idempotent channel mirror summaries.
+- `/api/project-channel-sync/projects/{projectId}` — retired cold project sync helper in production when `DenChannels:LegacyDisplayHistory:TombstoneArchivedRoutes=true`; Conversation successor owns project/default-channel parity.
+- `/api/project-channel-sync` — retired cold backfill helper in production under the same display-history tombstone switch.
+- `/api/mirror-summaries/ingest` — retired legacy mirror summary ingestion in production under the display-history tombstone switch; future ingestion should be Timeline/Observation successor-owned.
 
-Den core outbox polling still depends on den-mcp task #1341; until then mirror ingestion accepts explicit event payloads and keeps source pointers/deep links instead of copying canonical Den records.
+Den core outbox polling still depends on den-mcp task #1341; until then preserved mirror summary rows remain historical readback/export data rather than a green-path ingestion surface.
 
 ## Configuration
 
@@ -66,6 +67,12 @@ Configuration lives under the `DenChannels` section.
     },
     "LegacyObservation": {
       "TombstoneRoutes": true
+    },
+    "LegacyRuntimeControl": {
+      "TombstoneUnusedRoutes": true
+    },
+    "LegacyDisplayHistory": {
+      "TombstoneArchivedRoutes": true
     }
   }
 }
@@ -80,6 +87,8 @@ DenChannels__DenCore__BaseUrl=http://127.0.0.1:5199
 DenChannels__DenCore__UseStubProjectMetadata=true
 DenChannels__ServiceAuth__ServiceToken=...
 DenChannels__LegacyObservation__TombstoneRoutes=true
+DenChannels__LegacyRuntimeControl__TombstoneUnusedRoutes=true
+DenChannels__LegacyDisplayHistory__TombstoneArchivedRoutes=true
 ```
 
 `UseStubProjectMetadata=true` is intentional for the first standalone slices while Den core/den-mcp integration contracts are requested and implemented separately. The initial Den core integration request is tracked in den-mcp task #1341.

@@ -5,11 +5,11 @@
 
 ## Core invariant (read this first)
 
-A direct-agent DM transcript is a **read model** over canonical `channel_messages`. It is NOT delivery truth.
+A direct-agent DM transcript is a **read model** over canonical channel/conversation message history. It is NOT delivery truth.
 
 - Do **NOT** derive Hermes session keys, worker/session bindings, or delivery claims from `direct_conversation_id`.
 - New sending goes through the Conversation and Delivery successors. Legacy `source_kind = wake_event` rows remain readable as transcript evidence.
-- Agent responses are linked into transcripts **only** via the explicit `link-message` endpoint — broad identity-pair heuristic capture is **rejected**.
+- Agent responses are linked into transcripts through successor conversation evidence; the legacy `link-message` write route is archived in production under task #3029.
 
 ## Endpoints
 
@@ -41,12 +41,9 @@ Retired as of task #3025. Returns 410 Gone pointing to `POST /v1/delivery/intent
 
 ### `POST /api/direct-conversations/{id}/link-message`
 
-**Trust boundary** for agent response linking. Called by `den-hermes-bridge`/`den-host` after posting an agent response.
+Retired in production as of task #3029 when `DenChannels:LegacyDisplayHistory:TombstoneArchivedRoutes=true`. New agent-response transcript evidence should come through the Conversation successor; legacy direct-conversation rows remain available for readback/export.
 
-- Links an existing `channel_messages` row into the DM transcript
-- Source badges (`sourceChannelId`, `sourceProjectId`, `sourceTaskId`, `sourceWorkerRunId`, `sourceSessionOwnerId`) are populated from the canonical message — not from the request body
-- Direction: `agent_to_human`, `human_to_agent`, or `system_note`
-- No session identity is derived from `direct_conversation_id`
+Historical behavior: this was the explicit trust boundary between DM transcript and agent response linking. It did not derive session identity from `direct_conversation_id` and did not validate metadata field names on the linked message.
 
 ### `PUT /api/direct-conversations/{id}/read-cursor` / `GET .../read-cursor`
 
@@ -54,7 +51,7 @@ Manage per-reader unread state for the DM sidebar.
 
 ## Trust boundary
 
-The `link-message` endpoint is the **explicit trust boundary** between DM transcript and agent response. It does NOT validate that the linked message carries `directConversationId`/`inReplyToChannelMessageId` metadata — the caller (`den-hermes-bridge`/`den-host`) is responsible for providing a correct `channelMessageId`. This avoids coupling the Channels read-model to specific metadata field names and keeps the endpoint useful for manual linking, system notes, and other link-back scenarios.
+The legacy `link-message` endpoint used to be the explicit trust boundary between DM transcript and agent response. In production it is now a retired write surface under the display/history tombstone switch; keep the old semantics only as historical context for preserved transcript rows and dev/offline tests. Successor Conversation evidence owns new transcript linkage.
 
 ## Schema
 
