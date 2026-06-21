@@ -1,4 +1,6 @@
 using DenChannels.Service.Channels;
+using DenChannels.Service.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace DenChannels.Service.DirectAgentEvents;
 
@@ -157,10 +159,14 @@ public static class DirectConversationRoutes
         // ---------------------------------------------------------------
         group.MapPost("/{conversationId:long}/link-message", async (
             ChannelsRepository repository,
+            IOptions<DenChannelsOptions> options,
             long conversationId,
             LinkDirectMessageRequest request,
             CancellationToken cancellationToken) =>
         {
+            if (options.Value.LegacyDisplayHistory.TombstoneArchivedRoutes)
+                return LegacyRouteTombstone.Gone("Conversation/Delivery successors; direct-conversation history is preserved for readback");
+
             var conversation = await repository.GetConversationAsync(conversationId, cancellationToken);
             if (conversation is null)
                 return Results.NotFound(new DirectConversationErrorDto("conversation_not_found",

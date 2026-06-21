@@ -52,6 +52,7 @@ public static class ChannelRoutes
         // -----------------------------------------------------------------------
         api.MapGet("/channels/search", async (
             ChannelsRepository repository,
+            IOptions<DenChannelsOptions> options,
             HttpContext httpContext,
             string? q,
             long? channelId = null,
@@ -74,6 +75,9 @@ public static class ChannelRoutes
             int limit = 20,
             CancellationToken cancellationToken = default) =>
         {
+            if (options.Value.LegacyDisplayHistory.TombstoneArchivedRoutes)
+                return LegacyRouteTombstone.Gone("Conversation successor history/export; no live legacy search caller remains");
+
             // Merge camelCase + snake_case aliases (snake_case wins if both set)
             channelId ??= channelIdSnake;
             senderIdentity ??= senderIdentitySnake;

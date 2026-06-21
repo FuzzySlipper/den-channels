@@ -17,6 +17,8 @@ public sealed class DenChannelsOptions
     public LegacyObservationOptions LegacyObservation { get; init; } = new();
 
     public LegacyRuntimeControlOptions LegacyRuntimeControl { get; init; } = new();
+
+    public LegacyDisplayHistoryOptions LegacyDisplayHistory { get; init; } = new();
 }
 
 public sealed class DatabaseOptions
@@ -120,4 +122,14 @@ public sealed class LegacyRuntimeControlOptions
     /// own worker-pool and direct-agent control authority.
     /// </summary>
     public bool TombstoneUnusedRoutes { get; init; } = false;
+}
+
+public sealed class LegacyDisplayHistoryOptions
+{
+    /// <summary>
+    /// When true, cold legacy display/history helpers with no production callers
+    /// return 410 Gone. Human chat rows and direct-conversation history remain
+    /// preserved in the channels database for readback/export.
+    /// </summary>
+    public bool TombstoneArchivedRoutes { get; init; } = false;
 }

@@ -24,7 +24,8 @@ public sealed class LegacyWriteTombstoneTests : IDisposable
                     ["DenChannels:LegacyWrites:TombstoneChannelMessages"] = "true",
                     ["DenChannels:LegacyWrites:TombstoneGatewaySystemMessages"] = "true",
                     ["DenChannels:LegacyObservation:TombstoneRoutes"] = "true",
-                    ["DenChannels:LegacyRuntimeControl:TombstoneUnusedRoutes"] = "true"
+                    ["DenChannels:LegacyRuntimeControl:TombstoneUnusedRoutes"] = "true",
+                    ["DenChannels:LegacyDisplayHistory:TombstoneArchivedRoutes"] = "true"
                 });
             }));
         _client = _factory.CreateClient();
@@ -121,6 +122,39 @@ public sealed class LegacyWriteTombstoneTests : IDisposable
     [InlineData("GET", "/api/channel-subscriptions?memberIdentity=legacy-worker")]
     [InlineData("GET", "/api/active-work/routes?targetProjectId=den-channels")]
     public async Task LiveRuntimeCompatibilityRoutes_RemainAvailable_WhenUnusedRuntimeControlIsTombstoned(
+        string method,
+        string path)
+    {
+        using var response = await SendAsync(method, path);
+
+        Assert.NotEqual(HttpStatusCode.Gone, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("GET", "/api/channels/search?q=legacy", "Conversation successor history/export; no live legacy search caller remains")]
+    [InlineData("POST", "/api/project-channel-sync", "PUT /v1/conversation/projects/{project_id}/default-channel")]
+    [InlineData("PUT", "/api/project-channel-sync/projects/den-channels", "PUT /v1/conversation/projects/{project_id}/default-channel")]
+    [InlineData("POST", "/api/mirror-summaries/ingest", "Timeline/Observation successor ingestion; legacy mirror summaries are archived")]
+    [InlineData("POST", "/api/direct-conversations/42/link-message", "Conversation/Delivery successors; direct-conversation history is preserved for readback")]
+    public async Task ArchivedDisplayHistoryRoutes_Return410Gone_WhenTombstoned(
+        string method,
+        string path,
+        string replacement)
+    {
+        using var response = await SendAsync(method, path);
+
+        Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+        await AssertTombstone(response, replacement);
+    }
+
+    [Theory]
+    [InlineData("PUT", "/api/projects/den-channels/default-channel")]
+    [InlineData("GET", "/api/projects/den-channels/linked-channels")]
+    [InlineData("GET", "/api/direct-conversations?humanIdentity=patch")]
+    [InlineData("GET", "/api/direct-conversations/42")]
+    [InlineData("GET", "/api/direct-conversations/42/entries")]
+    [InlineData("GET", "/api/channels/42/reactions")]
+    public async Task LiveDisplayHistoryRoutes_RemainAvailable_WhenArchivedRoutesAreTombstoned(
         string method,
         string path)
     {
