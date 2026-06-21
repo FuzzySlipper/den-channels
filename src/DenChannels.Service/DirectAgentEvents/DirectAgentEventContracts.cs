@@ -1,8 +1,8 @@
 namespace DenChannels.Service.DirectAgentEvents;
 
 /// <summary>
-/// Channels-owned request to record a durable direct-agent event.
-/// This is the primary public API for direct-agent wake/recording.
+/// Historical Channels-owned request to record a durable direct-agent event.
+/// The write route is retired; Delivery now owns new executable wake intents.
 /// SourceProjectId/ChannelId are the source/control context (where the interaction happened).
 /// Target-work fields (TargetProjectId, TargetTaskId, AssignmentId, WorkerRunId, WorkerRole,
 /// ProfileIdentity, PoolMemberId) are workflow attribution for the target work.
@@ -31,8 +31,8 @@ public sealed record RecordDirectAgentEventRequest(
     string? CheckpointHandle = null);
 
 /// <summary>
-/// Result of a Channels-owned direct-agent event recording.
-/// Returns immediately with durable evidence; no Gateway spin-wait required.
+/// Historical result of a Channels-owned direct-agent event recording.
+/// Retained for compatibility with archived payloads and schema tests.
 /// The EventId is the channel_message.id and can be used for readback via
 /// GET /api/direct-agent-events/{eventId}.
 /// </summary>

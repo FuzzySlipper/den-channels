@@ -1,8 +1,5 @@
 using DenChannels.Service.Channels;
 
-using static DenChannels.Service.SourceKind;
-using static DenChannels.Service.MessageKind;
-
 namespace DenChannels.Service.DirectAgentEvents;
 
 public static class DirectConversationRoutes
@@ -100,100 +97,12 @@ public static class DirectConversationRoutes
         });
 
         // ---------------------------------------------------------------
-        // POST /api/direct-conversations/{conversationId}/send
-        // Send a DM through the existing direct-agent wake-event path
+        // POST /api/direct-conversations/{conversationId}/send — RETIRED (task #3025)
+        // DM-shaped executable wake production now goes through the Conversation
+        // and Delivery successors; this API remains for legacy readback only.
         // ---------------------------------------------------------------
-        group.MapPost("/{conversationId:long}/send", async (
-            ChannelsRepository repository,
-            long conversationId,
-            SendDirectMessageRequest request,
-            CancellationToken cancellationToken) =>
-        {
-            var conversation = await repository.GetConversationAsync(conversationId, cancellationToken);
-            if (conversation is null)
-                return Results.NotFound(new DirectConversationErrorDto("conversation_not_found",
-                    $"Conversation {conversationId} not found."));
-
-            if (string.IsNullOrWhiteSpace(request.SenderIdentity))
-                return Results.BadRequest(new DirectConversationErrorDto("missing_sender_identity",
-                    "Provide senderIdentity."));
-            if (string.IsNullOrWhiteSpace(request.Body))
-                return Results.BadRequest(new DirectConversationErrorDto("missing_body",
-                    "Provide body for the direct message."));
-
-            // Resolve the default channel for the scope project (or use project_id from conversation)
-            var projectId = request.SourceProjectId ?? conversation.ScopeProjectId;
-            if (string.IsNullOrWhiteSpace(projectId))
-                return Results.BadRequest(new DirectConversationErrorDto("missing_project",
-                    "Provide sourceProjectId or ensure conversation has scope_project_id."));
-
-            var channel = await DirectAgentEventShared.ResolveChannelAsync(
-                repository, channelId: null, projectId, cancellationToken);
-            if (channel is null)
-                return Results.NotFound(new DirectConversationErrorDto("channel_not_found",
-                    $"No default channel found for project '{projectId}'."));
-
-            var member = await DirectAgentEventShared.FindActiveAgentMemberAsync(
-                repository, channel.Id, conversation.AgentIdentity, cancellationToken);
-            if (member is null)
-                return Results.NotFound(new DirectConversationErrorDto("member_not_active_agent",
-                    $"Active agent member '{conversation.AgentIdentity}' is not joined to channel {channel.Id}."));
-
-            var hasActiveSubscription = await repository.HasActiveSubscriptionAsync(
-                channel.Id, member.MemberIdentity, cancellationToken);
-
-            var requestId = $"direct-agent-message:{channel.Id}:{Uri.EscapeDataString(member.MemberIdentity)}:{Guid.NewGuid():N}";
-            var gatewayEventsUrl = $"/api/direct-agent-events?channelId={channel.Id}&afterId=0&limit=50";
-
-            var metadataPayload = DirectAgentEventShared.BuildWakeMetadata(
-                requestId, member, projectId,
-                request.SourceProjectId, projectId, request.TargetTaskId,
-                assignmentId: null, request.WorkerRunId, request.WorkerRole,
-                request.ProfileIdentity, request.PoolMemberId,
-                request.AgentInstanceId, request.SessionOwnerId, request.SessionId,
-                gatewayEventsUrl,
-                hasActiveSubscription: hasActiveSubscription);
-
-            // Add DM transcript linking metadata
-            metadataPayload["directConversationId"] = conversationId;
-            metadataPayload["inReplyToChannelMessageId"] = null; // populated by responses
-
-            var metadataJson = System.Text.Json.JsonSerializer.Serialize(metadataPayload);
-
-            var msg = await DirectAgentEventShared.PostWakeMessageAsync(
-                repository, channel.Id,
-                request.SenderIdentity, request.Body, requestId,
-                projectId, projectId, request.TargetTaskId,
-                request.WorkerRunId, request.WorkerRole,
-                request.ProfileIdentity, request.PoolMemberId,
-                request.AgentInstanceId, request.SessionOwnerId, request.SessionId,
-                assignmentId: null, checkpointType: null, checkpointHandle: null,
-                member.MemberIdentity, metadataJson, cancellationToken);
-
-            // Link the canonical channel message into the DM conversation
-            var bodyPreview = request.Body.Length <= 200 ? request.Body : request.Body[..197] + "...";
-            var entry = await repository.AddConversationEntryAsync(
-                conversationId, msg.Id,
-                direction: "human_to_agent",
-                senderIdentity: request.SenderIdentity,
-                recipientIdentity: conversation.AgentIdentity,
-                sourceChannelId: channel.Id,
-                sourceProjectId: projectId,
-                sourceTaskId: request.TargetTaskId,
-                sourceWorkerRunId: request.WorkerRunId,
-                bodyPreview: bodyPreview,
-                cancellationToken: cancellationToken);
-
-            var eventUrl = $"/api/direct-agent-events/{msg.Id}";
-            return Results.Created(eventUrl, new DirectMessageResponse(
-                Status: "recorded",
-                EventId: msg.Id,
-                ChannelId: channel.Id,
-                ConversationId: conversationId,
-                EntryId: entry.Id,
-                RequestId: requestId,
-                MemberIdentity: member.MemberIdentity));
-        });
+        group.MapPost("/{conversationId:long}/send", () =>
+            DirectAgentEventShared.RetiredWakeWriteTombstone("POST /api/direct-conversations/{conversationId}/send"));
 
         // ---------------------------------------------------------------
         // PUT /api/direct-conversations/{conversationId}/read-cursor

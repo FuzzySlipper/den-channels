@@ -233,11 +233,11 @@ public sealed class SubscriptionLifecycleTests : IDisposable
     }
 
     // -------------------------------------------------------------------------
-    // Direct-agent event with active subscription stamps recorded_pending_claim
+    // Retired direct-agent event writer remains gone even with an active subscription
     // -------------------------------------------------------------------------
 
     [Fact]
-    public async Task DirectAgentEvent_WithActiveSubscription_StampsPendingClaim()
+    public async Task DirectAgentEvent_WithActiveSubscription_ReturnsGone()
     {
         var channel = await EnsureDefaultChannelAsync("sub-lifecycle-6");
         var memberIdentity = "sub-agent-6";
@@ -250,7 +250,6 @@ public sealed class SubscriptionLifecycleTests : IDisposable
             wakePolicy = "direct_questions_only"
         });
 
-        // Post direct agent event
         using var postResponse = await _client.PostAsJsonAsync("/api/direct-agent-events", new
         {
             channelId = channel.Id,
@@ -258,23 +257,17 @@ public sealed class SubscriptionLifecycleTests : IDisposable
             senderIdentity = "test-operator",
             body = "Test message with active subscription"
         });
-        Assert.Equal(HttpStatusCode.Created, postResponse.StatusCode);
-        var postPayload = await postResponse.Content.ReadFromJsonAsync<DirectAgentEventPayload>();
-        Assert.NotNull(postPayload);
-
-        // Readback should show recorded_pending_claim
-        var readback = await _client.GetFromJsonAsync<DirectAgentEventReadbackPayload>(
-            $"/api/direct-agent-events/{postPayload.EventId}");
-        Assert.NotNull(readback);
-        Assert.Equal("recorded_pending_claim", readback.DeliveryStatus);
+        Assert.Equal(HttpStatusCode.Gone, postResponse.StatusCode);
+        var raw = await postResponse.Content.ReadAsStringAsync();
+        Assert.Contains("POST /v1/delivery/intents", raw);
     }
 
     // -------------------------------------------------------------------------
-    // Direct-agent event with membership but no active subscription stamps recorded_pending_subscription
+    // Retired direct-agent event writer remains gone without an active subscription
     // -------------------------------------------------------------------------
 
     [Fact]
-    public async Task DirectAgentEvent_WithoutActiveSubscription_StampsPendingSubscription()
+    public async Task DirectAgentEvent_WithoutActiveSubscription_ReturnsGone()
     {
         var channel = await EnsureDefaultChannelAsync("sub-lifecycle-7");
         var memberIdentity = "sub-agent-7";
@@ -297,8 +290,7 @@ public sealed class SubscriptionLifecycleTests : IDisposable
             deleteResponse.EnsureSuccessStatusCode();
         }
 
-        // Membership still exists but subscription is released
-        // Post direct agent event
+        // Membership still exists but subscription is released.
         using var postResponse = await _client.PostAsJsonAsync("/api/direct-agent-events", new
         {
             channelId = channel.Id,
@@ -306,15 +298,9 @@ public sealed class SubscriptionLifecycleTests : IDisposable
             senderIdentity = "test-operator",
             body = "Test message without active subscription"
         });
-        Assert.Equal(HttpStatusCode.Created, postResponse.StatusCode);
-        var postPayload = await postResponse.Content.ReadFromJsonAsync<DirectAgentEventPayload>();
-        Assert.NotNull(postPayload);
-
-        // Readback should show recorded_pending_subscription
-        var readback = await _client.GetFromJsonAsync<DirectAgentEventReadbackPayload>(
-            $"/api/direct-agent-events/{postPayload.EventId}");
-        Assert.NotNull(readback);
-        Assert.Equal("recorded_pending_subscription", readback.DeliveryStatus);
+        Assert.Equal(HttpStatusCode.Gone, postResponse.StatusCode);
+        var raw = await postResponse.Content.ReadAsStringAsync();
+        Assert.Contains("POST /v1/delivery/intents", raw);
     }
 
     // =========================================================================
@@ -351,56 +337,6 @@ public sealed class SubscriptionLifecycleTests : IDisposable
     // ---- Local payload records ----
 
     private sealed record ChannelStub(long Id, string Slug, string Kind, string? ProjectId);
-
-    private sealed record DirectAgentEventPayload(
-        string Status,
-        long EventId,
-        long ChannelId,
-        string RequestId,
-        string MemberIdentity,
-        string WakePolicy,
-        string? SourceProjectId,
-        string? TargetProjectId,
-        int? TargetTaskId,
-        int? AssignmentId,
-        string? WorkerRunId,
-        string? WorkerRole,
-        string? ProfileIdentity,
-        string? PoolMemberId,
-        string? AgentInstanceId,
-        string? SessionOwnerId,
-        string? SessionId,
-        string EventUrl,
-        string EventsUrl,
-        string EvidenceSummary);
-
-    private sealed record DirectAgentEventReadbackPayload(
-        long EventId,
-        long ChannelId,
-        string RequestId,
-        string MessageKind,
-        string SenderType,
-        string SenderIdentity,
-        string MemberIdentity,
-        string WakePolicy,
-        string? SourceKind,
-        string? SourceProjectId,
-        string? TargetProjectId,
-        long? TargetTaskId,
-        string? AssignmentId,
-        string? WorkerRunId,
-        string? WorkerRole,
-        string? ProfileIdentity,
-        string? PoolMemberId,
-        string? AgentInstanceId,
-        string? SessionOwnerId,
-        string? SessionId,
-        string? Summary,
-        string Body,
-        string? DeliveryStatus,
-        string? ClaimStatus,
-        string? CompletionStatus,
-        string CreatedAt);
 
     private sealed record SubscriptionChannelDto(
         long Id,

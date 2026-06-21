@@ -28,8 +28,8 @@ This repo currently contains the service skeleton for Den task #1320:
 - `/api/channel-activity-events` and `/api/channel-activity-events/status` — Channels-owned Gateway-shaped breadcrumb compatibility writer plus recent failure diagnostics; new callers should prefer the per-channel route.
 - `/api/gateway/memberships?channelId={id}|projectId={projectId}` — participant/wake-policy snapshot for channel routing.
 - `/api/channel-memberships?memberIdentity={identity}` — member-identity channel membership discovery for spawned worker polling; `includeOrdinaryMemberships=true` lets long-lived runtime agents discover ordinary null-purpose memberships without widening the worker default. See `docs/worker-pool-discovery.md`.
-- `POST /api/direct-agent-events` — canonical direct-agent wake event creation with target metadata. The retired Gateway alias `POST /api/gateway/direct-agent-messages` now returns 410 Gone pointing here (task #2022).
-- `GET /api/direct-agent-events` — cursor-paged direct-agent event listing. The retired alias `GET /api/gateway/events` now returns 410 Gone (task #2022).
+- `POST /api/direct-agent-events` — retired legacy direct-agent wake writer; returns 410 Gone pointing to the Delivery successor `POST /v1/delivery/intents` (task #3025).
+- `GET /api/direct-agent-events` — cursor-paged legacy direct-agent event readback. The retired alias `GET /api/gateway/events` now returns 410 Gone (task #2022).
 
 The Den Web channel chat panel (in the `den-web` repo) exposes the same boundary:
 it lists project/space channels, shows channel participants/active agent bindings, lets a tester

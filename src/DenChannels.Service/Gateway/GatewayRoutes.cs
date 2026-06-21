@@ -38,7 +38,6 @@ public static class GatewayRoutes
                 "GET /api/gateway/sources/{sourceKind}/{sourceId}?sourceProjectId={projectId}",
                 "POST /api/gateway/system-messages",
                 "GET /api/gateway/assignments/{assignmentId}/trace",
-                "POST /api/direct-agent-events",
                 "GET /api/direct-agent-events",
                 "GET /api/direct-agent-events/{eventId}",
                 "POST /api/channels/{channelId}/activity-events",
@@ -232,15 +231,15 @@ public static class GatewayRoutes
 
         // -----------------------------------------------------------------------
         // POST /api/gateway/direct-agent-messages — RETIRED (task #2022)
-        // Replaced by POST /api/direct-agent-events.
+        // Replaced by Delivery successor direct-agent intents.
         // -----------------------------------------------------------------------
-        gw.MapPost("/direct-agent-messages", () => GatewayTombstone("POST /api/direct-agent-events"));
+        gw.MapPost("/direct-agent-messages", () => GatewayTombstone(DirectAgentEventShared.DeliveryIntentReplacement));
 
         // -----------------------------------------------------------------------
         // POST /api/gateway/test-wakes — RETIRED (task #2022)
-        // Replaced by POST /api/direct-agent-events with test-wake metadata.
+        // Replaced by Delivery successor direct-agent intents.
         // -----------------------------------------------------------------------
-        gw.MapPost("/test-wakes", () => GatewayTombstone("POST /api/direct-agent-events"));
+        gw.MapPost("/test-wakes", () => GatewayTombstone(DirectAgentEventShared.DeliveryIntentReplacement));
 
         // -----------------------------------------------------------------------
         // GET /api/gateway/assignments/{assignmentId}/trace
@@ -530,7 +529,7 @@ public static class GatewayRoutes
         return Results.Json(new
         {
             code = "route_gone",
-            message = $"This Gateway compatibility route has been retired. Use the canonical Channels route instead.",
+            message = "This Gateway compatibility route has been retired. Use the replacement route instead.",
             replacement
         }, statusCode: 410);
     }

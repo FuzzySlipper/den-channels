@@ -1,9 +1,6 @@
-using System.Text.Json;
 using DenChannels.Service.Channels;
 
-using static DenChannels.Service.EventRecordingStatus;
 using static DenChannels.Service.SourceKind;
-using static DenChannels.Service.MessageKind;
 
 namespace DenChannels.Service.DirectAgentEvents;
 
@@ -60,98 +57,11 @@ public static class DirectAgentEventRoutes
         });
 
         // -----------------------------------------------------------------------
-        // POST /api/direct-agent-events
-        // Channels-owned, fully async direct-agent event creation.
-        // Returns immediately with durable evidence. No Gateway dependency.
+        // POST /api/direct-agent-events — RETIRED (task #3025)
+        // Executable wake intents now belong to the Delivery successor. This
+        // readback service keeps historical wake_event evidence only.
         // -----------------------------------------------------------------------
-        group.MapPost("/", async (
-            ChannelsRepository repository,
-            RecordDirectAgentEventRequest request,
-            CancellationToken cancellationToken) =>
-        {
-            if (request.ChannelId is null && string.IsNullOrWhiteSpace(request.ProjectId))
-                return Results.BadRequest(new DirectAgentEventErrorDto("missing_parameter",
-                    "Provide channelId or projectId."));
-
-            if (string.IsNullOrWhiteSpace(request.MemberIdentity))
-                return Results.BadRequest(new DirectAgentEventErrorDto("missing_member_identity",
-                    "Provide memberIdentity for the target agent binding."));
-
-            if (string.IsNullOrWhiteSpace(request.SenderIdentity))
-                return Results.BadRequest(new DirectAgentEventErrorDto("missing_sender_identity",
-                    "Provide senderIdentity for the direct message request."));
-
-            if (string.IsNullOrWhiteSpace(request.Body))
-                return Results.BadRequest(new DirectAgentEventErrorDto("missing_body",
-                    "Provide body for the direct message request."));
-
-            var channel = await DirectAgentEventShared.ResolveChannelAsync(
-                repository, request.ChannelId, request.ProjectId, cancellationToken);
-            if (channel is null)
-                return Results.NotFound(new DirectAgentEventErrorDto("channel_not_found",
-                    request.ChannelId is not null
-                        ? $"Channel {request.ChannelId} not found."
-                        : $"No default channel found for project '{request.ProjectId}'."));
-
-            var member = await DirectAgentEventShared.FindActiveAgentMemberAsync(
-                repository, channel.Id, request.MemberIdentity, cancellationToken);
-            if (member is null)
-                return Results.NotFound(new DirectAgentEventErrorDto("member_not_active_agent",
-                    $"Active agent member '{request.MemberIdentity}' is not joined to channel {channel.Id}."));
-
-            var hasActiveSubscription = await repository.HasActiveSubscriptionAsync(
-                channel.Id, member.MemberIdentity, cancellationToken);
-
-            var requestId = $"direct-agent-message:{channel.Id}:{Uri.EscapeDataString(member.MemberIdentity)}:{Guid.NewGuid():N}";
-            var resolvedSourceProjectId = request.SourceProjectId ?? channel.ProjectId;
-            var gatewayEventsUrl = $"/api/direct-agent-events?channelId={channel.Id}&afterId=0&limit=50";
-
-            var metadataPayload = DirectAgentEventShared.BuildWakeMetadata(
-                requestId, member, resolvedSourceProjectId,
-                request.SourceProjectId, request.TargetProjectId, request.TargetTaskId,
-                request.AssignmentId, request.WorkerRunId, request.WorkerRole,
-                request.ProfileIdentity, request.PoolMemberId,
-                request.AgentInstanceId, request.SessionOwnerId, request.SessionId,
-                gatewayEventsUrl,
-                hasActiveSubscription: hasActiveSubscription);
-
-            var metadataJson = JsonSerializer.Serialize(metadataPayload);
-
-            var msg = await DirectAgentEventShared.PostWakeMessageAsync(
-                repository, channel.Id,
-                request.SenderIdentity, request.Body, requestId,
-                resolvedSourceProjectId, request.TargetProjectId, request.TargetTaskId,
-                request.WorkerRunId, request.WorkerRole,
-                request.ProfileIdentity, request.PoolMemberId,
-                request.AgentInstanceId, request.SessionOwnerId, request.SessionId,
-                request.AssignmentId, request.CheckpointType, request.CheckpointHandle,
-                member.MemberIdentity, metadataJson, cancellationToken);
-
-            var eventUrl = $"/api/direct-agent-events/{msg.Id}";
-            var eventsUrl = $"/api/direct-agent-events?channelId={channel.Id}&afterId={Math.Max(0, msg.Id - 1)}&limit=10";
-
-            return Results.Created(eventUrl, new DirectAgentEventDto(
-                Status: Recorded,
-                EventId: msg.Id,
-                ChannelId: channel.Id,
-                RequestId: requestId,
-                MemberIdentity: member.MemberIdentity,
-                WakePolicy: member.WakePolicy,
-                SourceProjectId: resolvedSourceProjectId,
-                TargetProjectId: request.TargetProjectId,
-                TargetTaskId: request.TargetTaskId,
-                AssignmentId: request.AssignmentId,
-                WorkerRunId: request.WorkerRunId,
-                WorkerRole: request.WorkerRole,
-                ProfileIdentity: request.ProfileIdentity,
-                PoolMemberId: request.PoolMemberId,
-                AgentInstanceId: request.AgentInstanceId,
-                SessionOwnerId: request.SessionOwnerId,
-                SessionId: request.SessionId,
-                EventUrl: eventUrl,
-                EventsUrl: eventsUrl,
-                EvidenceSummary: $"Direct agent wake_event recorded as event {msg.Id}. Gateway/den-host consumers may claim this event. Readback: GET {eventUrl}"));
-        });
+        group.MapPost("/", () => DirectAgentEventShared.RetiredWakeWriteTombstone("POST /api/direct-agent-events"));
 
         // -----------------------------------------------------------------------
         // GET /api/direct-agent-events/{eventId}

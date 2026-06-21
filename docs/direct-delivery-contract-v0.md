@@ -52,7 +52,7 @@ All status/kind/policy fields are pinned as named constants in `DirectDeliveryCo
 
 ### Wait-for target (`waitFor`)
 
-Retired as of task #2022. The Gateway compatibility route `POST /api/gateway/direct-agent-messages` now returns 410 Gone. The `waitFor` vocabulary is preserved here for historical reference only; new callers must use `POST /api/direct-agent-events` which has no `waitFor` control.
+Retired as of task #2022, then superseded by the Delivery successor in task #3025. The Gateway compatibility route `POST /api/gateway/direct-agent-messages` now returns 410 Gone pointing to `POST /v1/delivery/intents`. The `waitFor` vocabulary is preserved here for historical reference only.
 
 | Constant | Value |
 | --- | --- |
@@ -203,11 +203,11 @@ The `AssignmentTraceResponse` now uses typed DTOs:
 
 | Route | Owner | Description |
 | --- | --- | --- |
-| `POST /api/direct-agent-events` | Channels | Primary direct-agent event creation. No Gateway dependency. |
-| `GET /api/direct-agent-events` | Channels | Cursor-paged direct-agent event subscription. |
-| `GET /api/direct-agent-events/{eventId}` | Channels | Readback for a single direct-agent event. |
-| `POST /api/gateway/direct-agent-messages` | Channels (retired) | RETIRED (task #2022). Returns 410 Gone pointing to `POST /api/direct-agent-events`. |
-| `POST /api/gateway/test-wakes` | Channels (retired) | RETIRED (task #2022). Returns 410 Gone pointing to `POST /api/direct-agent-events`. |
+| `POST /api/direct-agent-events` | Channels (retired) | RETIRED (task #3025). Returns 410 Gone pointing to `POST /v1/delivery/intents`. |
+| `GET /api/direct-agent-events` | Channels | Cursor-paged legacy direct-agent event readback. |
+| `GET /api/direct-agent-events/{eventId}` | Channels | Readback for a single legacy direct-agent event. |
+| `POST /api/gateway/direct-agent-messages` | Channels (retired) | RETIRED (task #2022/#3025). Returns 410 Gone pointing to `POST /v1/delivery/intents`. |
+| `POST /api/gateway/test-wakes` | Channels (retired) | RETIRED (task #2022/#3025). Returns 410 Gone pointing to `POST /v1/delivery/intents`. |
 | `GET /api/gateway/events` | Channels (retired) | RETIRED (task #2022). Returns 410 Gone pointing to `GET /api/direct-agent-events`. |
 | `POST /api/gateway/system-messages` | Channels (compat) | Gateway-generated channel messages. |
 | `POST /api/channel-activity-events` | Channels | Non-waking progress/activity writer with Channels-owned validation/defaulting/status diagnostics. Prefer `POST /api/channels/{channelId}/activity-events` for new callers. |

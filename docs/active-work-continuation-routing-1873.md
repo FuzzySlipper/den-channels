@@ -157,9 +157,9 @@ these fields.
   specific continuation target by work identity.
 - **Assignment Trace** (`/api/gateway/assignments/{id}/trace`): Provides full
   assignment evidence. Active-work routing links to trace via handles.
-- **Direct Agent Events** (`POST /api/direct-agent-events`): Records wake
-  events with target-work fields. These messages are consumed by the routing
-  service.
+- **Direct Agent Events** (`GET /api/direct-agent-events`): Legacy wake-event
+  readback with target-work fields. New executable wake creation belongs to
+  Delivery; the old Channels POST route is retired.
 
 ## Follow-up recommendations
 

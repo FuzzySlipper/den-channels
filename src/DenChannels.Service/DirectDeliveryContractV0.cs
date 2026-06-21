@@ -98,10 +98,10 @@ public static class SuppressionStatus
 // -------------------------------------------------------------------------
 
 /// <summary>
-/// Wait target vocabulary — historical only (task #2022).
-/// The Channels-owned <c>/api/direct-agent-events</c> route never uses waitFor.
+/// Wait target vocabulary — historical only (tasks #2022/#3025).
+/// The retired Channels-owned <c>/api/direct-agent-events</c> route never used waitFor.
 /// The <c>/api/gateway/direct-agent-messages</c> compatibility alias that used this
-/// vocabulary was retired in task #2022 and returns 410 Gone.
+/// vocabulary returns 410 Gone pointing to the Delivery successor.
 /// </summary>
 public static class WaitForTarget
 {

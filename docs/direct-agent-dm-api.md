@@ -8,7 +8,7 @@
 A direct-agent DM transcript is a **read model** over canonical `channel_messages`. It is NOT delivery truth.
 
 - Do **NOT** derive Hermes session keys, worker/session bindings, or delivery claims from `direct_conversation_id`.
-- Sending goes through the normal direct-agent wake-event path (`source_kind = wake_event`).
+- New sending goes through the Conversation and Delivery successors. Legacy `source_kind = wake_event` rows remain readable as transcript evidence.
 - Agent responses are linked into transcripts **only** via the explicit `link-message` endpoint — broad identity-pair heuristic capture is **rejected**.
 
 ## Endpoints
@@ -37,7 +37,7 @@ Paginated transcript entries. Each entry carries **source badges**:
 
 ### `POST /api/direct-conversations/{id}/send`
 
-Send a human DM. Records `channel_messages` with `source_kind = wake_event`, links entry into transcript, sets `directConversationId` metadata.
+Retired as of task #3025. Returns 410 Gone pointing to `POST /v1/delivery/intents`. New callers should write human-facing transcript evidence through the Conversation successor and create executable wake intents through Delivery.
 
 ### `POST /api/direct-conversations/{id}/link-message`
 

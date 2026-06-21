@@ -537,7 +537,7 @@ public sealed class GatewayContractTests : IDisposable
 
     // =========================================================================
     // TOMBSTONED: POST /api/gateway/test-wakes
-    // Replaced by POST /api/direct-agent-events (with memberIdentity + test-wake metadata)
+    // Replaced by Delivery successor direct-agent intents.
     // =========================================================================
 
     [Fact]
@@ -550,12 +550,12 @@ public sealed class GatewayContractTests : IDisposable
             requestedBy = "tester"
         });
         Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
-        var body = await AssertGatewayTombstone(response, "POST /api/direct-agent-events");
+        var body = await AssertGatewayTombstone(response, "POST /v1/delivery/intents");
     }
 
     // =========================================================================
     // TOMBSTONED: POST /api/gateway/direct-agent-messages
-    // Replaced by POST /api/direct-agent-events
+    // Replaced by Delivery successor direct-agent intents.
     // =========================================================================
 
     [Fact]
@@ -569,7 +569,7 @@ public sealed class GatewayContractTests : IDisposable
             body = "Please review the fix."
         });
         Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
-        var body = await AssertGatewayTombstone(response, "POST /api/direct-agent-events");
+        var body = await AssertGatewayTombstone(response, "POST /v1/delivery/intents");
     }
 
     [Fact]
@@ -594,7 +594,7 @@ public sealed class GatewayContractTests : IDisposable
             sessionId = "session-abc"
         });
         Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
-        var body = await AssertGatewayTombstone(response, "POST /api/direct-agent-events");
+        var body = await AssertGatewayTombstone(response, "POST /v1/delivery/intents");
     }
 
     // =========================================================================

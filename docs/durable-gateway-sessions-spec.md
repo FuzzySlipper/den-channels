@@ -20,10 +20,10 @@ automatically a runtime session lane and must not be treated as the agent sessio
   message was sent, a wake was triggered, or activity was recorded). It is for reply routing,
   activity display, authorization, and audit.
 - `agent_instance_id` / `session_owner_id` / `session_id` identify the target durable agent
-  instance and its runtime session. These fields are carried in Channels-owned direct-agent
-  event payloads through the canonical `POST /api/direct-agent-events`. The legacy
-  compatibility alias `POST /api/gateway/direct-agent-messages` was retired in task #2022
-  and returns 410 Gone.
+  instance and its runtime session. These fields are retained on legacy Channels
+  `wake_event` readback. New executable wake intents belong to Delivery; `POST
+  /api/direct-agent-events` and the legacy compatibility alias `POST
+  /api/gateway/direct-agent-messages` now return 410 Gone.
 - The same target agent instance receiving messages from two source channels carries the
   same `session_owner_id` and `session_id` regardless of which channel originated the
   request. See `GatewayDirectAgentMessages_SameInstanceOwner_TwoSourceChannels_PreservesConcreteIdentity` test.

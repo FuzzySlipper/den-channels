@@ -2,11 +2,11 @@
 
 **Note (task #1848):** The full Direct Delivery / Channels Operations Contract v0 is frozen at `docs/direct-delivery-contract-v0.md` with machine-readable schema at `docs/schemas/direct-delivery-contract-v0.json`. Vocabulary constants are in `DirectDeliveryContractV0.cs`. This document remains as a focused reference for delivery status semantics.
 
-Den Channels owns direct-agent event creation. The primary recording API is `POST /api/direct-agent-events`, which writes a durable `wake_event` channel message and returns immediately with `{ eventId, status: "recorded" }` plus readback handles. Den Gateway / den-host owns runtime claim, delivery, acknowledgement, and completion truth after that record exists. The older `POST /api/gateway/direct-agent-messages` compatibility alias was retired in task #2022 and now returns 410 Gone pointing to `POST /api/direct-agent-events`.
+Den Channels no longer owns new direct-agent executable wake creation. As of task #3025, `POST /api/direct-agent-events`, `POST /api/direct-conversations/{id}/send`, `POST /api/gateway/direct-agent-messages`, and `POST /api/gateway/test-wakes` return 410 Gone pointing to the Delivery successor `POST /v1/delivery/intents`. Den Channels retains legacy `wake_event` readback through `GET /api/direct-agent-events` and `GET /api/direct-agent-events/{eventId}` for historical evidence.
 
-## Request fields
+## Retired request fields
 
-Primary Channels-owned callers should send:
+Historical Channels-owned callers sent:
 
 ```json
 {
@@ -17,11 +17,11 @@ Primary Channels-owned callers should send:
 }
 ```
 
-The Channels-owned route has no `waitFor` control and never depends on Gateway availability. The retired compatibility alias `POST /api/gateway/direct-agent-messages` returned 410 Gone as of task #2022; callers must use `POST /api/direct-agent-events` instead.
+The Channels-owned write route is retired. New callers must create executable wakes through Delivery and write human-facing transcript evidence through the Conversation successor.
 
-## Response handles (canonical POST /api/direct-agent-events)
+## Historical response handles
 
-The response includes stable handles for follow-up diagnostics:
+Legacy write responses included stable handles for follow-up diagnostics:
 
 - `eventId` / `eventUrl`: the Channels wake-event message that was recorded and can be read via `GET /api/direct-agent-events/{eventId}`.
 - `requestId`: stable source id shaped `direct-agent-message:{channelId}:{memberIdentity}:{guid}`.

@@ -158,39 +158,13 @@ public sealed class DirectConversationApiTests : IDisposable
         Assert.Empty(entries.Entries);
     }
 
-    // ── DM send flow (requires channel + membership setup) ──────────────
+    // ── Retired DM send flow ───────────────────────────────────────────
 
     [Fact]
-    public async Task SendDirectMessage_RecordsCanonicalMessageAndEntry()
+    public async Task SendDirectMessage_Returns410Gone_Tombstone()
     {
         using var client = _factory.CreateClient();
 
-        // Setup: create channel and active agent membership
-        var channelSlug = $"ops-{Guid.NewGuid():N}"[..20];
-        using var channelResponse = await client.PostAsJsonAsync("/api/channels", new
-        {
-            slug = channelSlug,
-            displayName = "DM Test Channel",
-            kind = "project_default",
-            projectId = "den-core",
-            createdBy = "test"
-        });
-        Assert.True(channelResponse.IsSuccessStatusCode);
-        var channel = await channelResponse.Content.ReadFromJsonAsync<ChannelPayload>();
-        Assert.NotNull(channel);
-
-        // Upsert agent membership (PUT)
-        using var membershipResponse = await client.PutAsJsonAsync(
-            $"/api/channels/{channel.Id}/memberships", new
-            {
-                memberType = "agent",
-                memberIdentity = "target-agent",
-                membershipStatus = "active",
-                wakePolicy = "all_human_messages"
-            });
-        Assert.True(membershipResponse.IsSuccessStatusCode);
-
-        // Create conversation
         using var convResponse = await client.PostAsJsonAsync("/api/direct-conversations", new
         {
             humanIdentity = "patch",
@@ -200,7 +174,6 @@ public sealed class DirectConversationApiTests : IDisposable
         var conv = await convResponse.Content.ReadFromJsonAsync<DirectConversationDto>();
         Assert.NotNull(conv);
 
-        // Send DM
         using var sendResponse = await client.PostAsJsonAsync(
             $"/api/direct-conversations/{conv.Id}/send", new
             {
@@ -209,29 +182,11 @@ public sealed class DirectConversationApiTests : IDisposable
                 sourceProjectId = "den-core",
                 targetTaskId = 42
             });
-        Assert.Equal(HttpStatusCode.Created, sendResponse.StatusCode);
-        var dmResponse = await sendResponse.Content.ReadFromJsonAsync<DirectMessageResponse>();
-        Assert.NotNull(dmResponse);
-        Assert.Equal("recorded", dmResponse.Status);
-        Assert.Equal(conv.Id, dmResponse.ConversationId);
-        Assert.True(dmResponse.EventId > 0);
-        Assert.True(dmResponse.EntryId > 0);
 
-        // Verify entry exists in the conversation
-        var entries = await client.GetFromJsonAsync<DirectConversationEntryListResponse>(
-            $"/api/direct-conversations/{conv.Id}/entries");
-        Assert.NotNull(entries);
-        var entry = Assert.Single(entries.Entries);
-        Assert.Equal("human_to_agent", entry.Direction);
-        Assert.Equal("patch", entry.SenderIdentity);
-        Assert.Equal("target-agent", entry.RecipientIdentity);
-        Assert.True(entry.ChannelMessageId > 0);
-
-        // Verify the canonical channel message exists
-        var eventMessage = await client.GetFromJsonAsync<DirectAgentEventReadbackPayload>(
-            $"/api/direct-agent-events/{dmResponse.EventId}");
-        Assert.NotNull(eventMessage);
-        Assert.Equal("wake_event", eventMessage.SourceKind);
+        Assert.Equal(HttpStatusCode.Gone, sendResponse.StatusCode);
+        var raw = await sendResponse.Content.ReadAsStringAsync();
+        Assert.Contains("route_gone", raw);
+        Assert.Contains("POST /v1/delivery/intents", raw);
     }
 
     // ── Read cursor ─────────────────────────────────────────────────────
@@ -267,35 +222,12 @@ public sealed class DirectConversationApiTests : IDisposable
         Assert.False(fetched.HasUnread);
     }
 
-    // ── Body vs summary precedence ──────────────────────────────────────
+    // ── Retired send does not mutate transcript ─────────────────────────
 
     [Fact]
-    public async Task SendDirectMessage_BodyIsPrimary_SummaryIsSecondary()
+    public async Task SendDirectMessage_TombstoneDoesNotCreateConversationEntry()
     {
         using var client = _factory.CreateClient();
-
-        // Setup channel + membership like above
-        var channelSlug = $"ops-{Guid.NewGuid():N}"[..20];
-        using var channelResponse = await client.PostAsJsonAsync("/api/channels", new
-        {
-            slug = channelSlug,
-            displayName = "DM Body Test",
-            kind = "project_default",
-            projectId = "den-core",
-            createdBy = "test"
-        });
-        var channel = await channelResponse.Content.ReadFromJsonAsync<ChannelPayload>();
-        Assert.NotNull(channel);
-
-        using var membershipResponse = await client.PutAsJsonAsync(
-            $"/api/channels/{channel.Id}/memberships", new
-            {
-                memberType = "agent",
-                memberIdentity = "body-test-agent",
-                membershipStatus = "active",
-                wakePolicy = "all_human_messages"
-            });
-        Assert.True(membershipResponse.IsSuccessStatusCode);
 
         using var convResponse = await client.PostAsJsonAsync("/api/direct-conversations", new
         {
@@ -306,23 +238,19 @@ public sealed class DirectConversationApiTests : IDisposable
         var conv = await convResponse.Content.ReadFromJsonAsync<DirectConversationDto>();
         Assert.NotNull(conv);
 
-        var requestBody = "Process task #99 with priority high.";
         using var sendResponse = await client.PostAsJsonAsync(
             $"/api/direct-conversations/{conv.Id}/send", new
             {
                 senderIdentity = "patch",
-                body = requestBody,
+                body = "Process task #99 with priority high.",
                 sourceProjectId = "den-core"
             });
-        Assert.Equal(HttpStatusCode.Created, sendResponse.StatusCode);
-        var dmResponse = await sendResponse.Content.ReadFromJsonAsync<DirectMessageResponse>();
-        Assert.NotNull(dmResponse);
+        Assert.Equal(HttpStatusCode.Gone, sendResponse.StatusCode);
 
-        // The canonical wake_event message must have body=requestBody (not summary)
-        var eventMsg = await client.GetFromJsonAsync<DirectAgentEventReadbackPayload>(
-            $"/api/direct-agent-events/{dmResponse.EventId}");
-        Assert.NotNull(eventMsg);
-        Assert.Equal(requestBody, eventMsg.Body);
+        var entries = await client.GetFromJsonAsync<DirectConversationEntryListResponse>(
+            $"/api/direct-conversations/{conv.Id}/entries");
+        Assert.NotNull(entries);
+        Assert.Empty(entries.Entries);
     }
 
     // ── No session key derivation invariant ─────────────────────────────
@@ -386,23 +314,22 @@ public sealed class DirectConversationApiTests : IDisposable
         var conv = await convResponse.Content.ReadFromJsonAsync<DirectConversationDto>();
         Assert.NotNull(conv);
 
-        // Send a regular wake event through the direct-agent-events endpoint
-        // (simulating an agent response that carries directConversationId metadata)
-        using var eventResponse = await client.PostAsJsonAsync("/api/direct-agent-events", new
+        // Seed a historical wake_event channel message and explicitly link it
+        // into the transcript.
+        var eventMessage = await PostMessageAsync(client, channel.Id, new
         {
-            channelId = channel.Id,
-            memberIdentity = "link-test-agent",
+            senderType = "user",
             senderIdentity = "link-test-agent",
             body = "Task #42 processed successfully.",
+            messageKind = "human_text",
+            sourceKind = "wake_event",
+            sourceId = $"direct-agent-message:{channel.Id}:link-test-agent:{Guid.NewGuid():N}",
             sourceProjectId = "den-core",
             targetTaskId = (long?)42,
             agentInstanceId = (string?)null,
             sessionOwnerId = (string?)null,
             sessionId = (string?)null
         });
-        Assert.Equal(HttpStatusCode.Created, eventResponse.StatusCode);
-        var evt = await eventResponse.Content.ReadFromJsonAsync<DirectAgentEventDto>();
-        Assert.NotNull(evt);
 
         // Explicitly link the agent response into the DM transcript
         var bodyPreview = "Task #42 processed successfully.";
@@ -410,7 +337,7 @@ public sealed class DirectConversationApiTests : IDisposable
         using var linkResponse = await client.PostAsJsonAsync(
             $"/api/direct-conversations/{conv.Id}/link-message", new
         {
-            channelMessageId = evt.EventId,
+            channelMessageId = eventMessage.Id,
             direction = "agent_to_human",
             senderIdentity = "link-test-agent",
             recipientIdentity = "patch",
@@ -422,7 +349,7 @@ public sealed class DirectConversationApiTests : IDisposable
         Assert.Equal("agent_to_human", linkedEntry.Direction);
         Assert.Equal("link-test-agent", linkedEntry.SenderIdentity);
         Assert.Equal("patch", linkedEntry.RecipientIdentity);
-        Assert.Equal(evt.EventId, linkedEntry.ChannelMessageId);
+        Assert.Equal(eventMessage.Id, linkedEntry.ChannelMessageId);
 
         // Verify both entries appear in the transcript
         var entries = await client.GetFromJsonAsync<DirectConversationEntryListResponse>(
@@ -472,17 +399,18 @@ public sealed class DirectConversationApiTests : IDisposable
         var conv = await convResponse.Content.ReadFromJsonAsync<DirectConversationDto>();
         Assert.NotNull(conv);
 
-        // Send a regular wake event from capture-agent to patch
-        // (simulating a non-DM message that happens to match identities)
-        using var eventResponse = await client.PostAsJsonAsync("/api/direct-agent-events", new
+        // Seed a regular wake_event from capture-agent to patch. It should not
+        // auto-link just because identities match the conversation.
+        _ = await PostMessageAsync(client, channel.Id, new
         {
-            channelId = channel.Id,
-            memberIdentity = "capture-agent",
+            senderType = "user",
             senderIdentity = "capture-agent",
             body = "General channel update.",
+            messageKind = "human_text",
+            sourceKind = "wake_event",
+            sourceId = $"direct-agent-message:{channel.Id}:capture-agent:{Guid.NewGuid():N}",
             sourceProjectId = "den-core"
         });
-        Assert.Equal(HttpStatusCode.Created, eventResponse.StatusCode);
 
         // Verify the conversation entries are EMPTY — the message was NOT
         // auto-linked just because sender/recipient match the conversation
@@ -538,15 +466,28 @@ public sealed class DirectConversationApiTests : IDisposable
         var conv1 = Assert.Single(list1.Conversations);
         Assert.Equal(0, conv1.UnreadCount);
 
-        // Send a DM to create an entry
-        using var sendResponse = await client.PostAsJsonAsync(
-            $"/api/direct-conversations/{conv.Id}/send", new
+        // Explicitly link a canonical message into the transcript.
+        var inboundMessage = await PostMessageAsync(client, channel!.Id, new
         {
+            senderType = "user",
             senderIdentity = "patch",
             body = "Hello, agent!",
+            messageKind = "human_text",
+            sourceKind = "wake_event",
+            sourceId = $"direct-agent-message:{channel.Id}:unread-agent:{Guid.NewGuid():N}",
             sourceProjectId = "den-core"
         });
-        Assert.Equal(HttpStatusCode.Created, sendResponse.StatusCode);
+
+        using var linkResponse = await client.PostAsJsonAsync(
+            $"/api/direct-conversations/{conv.Id}/link-message", new
+        {
+            channelMessageId = inboundMessage.Id,
+            direction = "human_to_agent",
+            senderIdentity = "patch",
+            recipientIdentity = "unread-agent",
+            bodyPreview = "Hello, agent!"
+        });
+        Assert.Equal(HttpStatusCode.Created, linkResponse.StatusCode);
 
         // Now unread should be 1 (no read cursor set yet)
         var list2 = await client.GetFromJsonAsync<DirectConversationListResponse>(
@@ -639,18 +580,31 @@ public sealed class DirectConversationApiTests : IDisposable
         });
         var conv = await convResponse.Content.ReadFromJsonAsync<DirectConversationDto>();
 
-        // Send DM with full source badges
-        using var sendResponse = await client.PostAsJsonAsync(
-            $"/api/direct-conversations/{conv!.Id}/send", new
+        // Link a canonical message with full source badges.
+        var inboundMessage = await PostMessageAsync(client, channel!.Id, new
         {
+            senderType = "user",
             senderIdentity = "patch",
             body = "Process this.",
+            messageKind = "human_text",
+            sourceKind = "wake_event",
+            sourceId = $"direct-agent-message:{channel.Id}:badge-agent:{Guid.NewGuid():N}",
             sourceProjectId = "den-core",
             targetTaskId = (long?)77,
             workerRunId = "piw_test_123",
             workerRole = "coder"
         });
-        Assert.Equal(HttpStatusCode.Created, sendResponse.StatusCode);
+
+        using var linkResponse = await client.PostAsJsonAsync(
+            $"/api/direct-conversations/{conv!.Id}/link-message", new
+        {
+            channelMessageId = inboundMessage.Id,
+            direction = "human_to_agent",
+            senderIdentity = "patch",
+            recipientIdentity = "badge-agent",
+            bodyPreview = "Process this."
+        });
+        Assert.Equal(HttpStatusCode.Created, linkResponse.StatusCode);
 
         var entries = await client.GetFromJsonAsync<DirectConversationEntryListResponse>(
             $"/api/direct-conversations/{conv.Id}/entries");
@@ -703,13 +657,15 @@ public sealed class DirectConversationApiTests : IDisposable
         var conv = await convResponse.Content.ReadFromJsonAsync<DirectConversationDto>();
         Assert.NotNull(conv);
 
-        // Send a wake event with rich target-work/session attribution
-        using var eventResponse = await client.PostAsJsonAsync("/api/direct-agent-events", new
+        // Seed a wake_event with rich target-work/session attribution.
+        var eventMessage = await PostMessageAsync(client, channel!.Id, new
         {
-            channelId = channel.Id,
-            memberIdentity = "linkbadge-agent",
+            senderType = "user",
             senderIdentity = "linkbadge-agent",
             body = "Task #55 done.",
+            messageKind = "human_text",
+            sourceKind = "wake_event",
+            sourceId = $"direct-agent-message:{channel.Id}:linkbadge-agent:{Guid.NewGuid():N}",
             sourceProjectId = "den-core",
             targetProjectId = "den-core",
             targetTaskId = (long?)55,
@@ -718,14 +674,12 @@ public sealed class DirectConversationApiTests : IDisposable
             sessionOwnerId = "session-owner-1",
             sessionId = "sess-abc"
         });
-        Assert.Equal(HttpStatusCode.Created, eventResponse.StatusCode);
-        var evt = await eventResponse.Content.ReadFromJsonAsync<DirectAgentEventDto>();
 
         // Link the agent response; source badges should come from the canonical message
         using var linkResponse = await client.PostAsJsonAsync(
             $"/api/direct-conversations/{conv.Id}/link-message", new
         {
-            channelMessageId = evt!.EventId,
+            channelMessageId = eventMessage.Id,
             direction = "agent_to_human",
             senderIdentity = "linkbadge-agent",
             recipientIdentity = "patch",
@@ -743,19 +697,20 @@ public sealed class DirectConversationApiTests : IDisposable
         Assert.Equal("session-owner-1", linkedEntry.SourceSessionOwnerId);
     }
 
+    private static async Task<MessagePayload> PostMessageAsync(HttpClient client, long channelId, object request)
+    {
+        using var response = await client.PostAsJsonAsync($"/api/channels/{channelId}/messages", request);
+        response.EnsureSuccessStatusCode();
+        var payload = await response.Content.ReadFromJsonAsync<MessagePayload>();
+        Assert.NotNull(payload);
+        return payload;
+    }
+
     // ── JSON payload types for deserialization ──────────────────────────
 
     private sealed record ChannelPayload(long Id, string Slug, string DisplayName, string Kind,
         string? ProjectId, string CreatedBy, string Visibility);
-    private sealed record DirectAgentEventReadbackPayload(
-        long EventId, long ChannelId, string? SourceKind, string Body, string? Summary);
-    private sealed record DirectAgentEventDto(
-        string Status, long EventId, long ChannelId, string RequestId, string MemberIdentity,
-        string WakePolicy, string? SourceProjectId, string? TargetProjectId,
-        long? TargetTaskId, string? AssignmentId, string? WorkerRunId, string? WorkerRole,
-        string? ProfileIdentity, string? PoolMemberId, string? AgentInstanceId,
-        string? SessionOwnerId, string? SessionId, string EventUrl, string EventsUrl,
-        string EvidenceSummary);
+    private sealed record MessagePayload(long Id, long ChannelId, string Body);
     private sealed record ReadCursorPayload(
         long ConversationId, string ReaderIdentity, long? LastReadEntryId, long UnreadCount, bool HasUnread);
 }

@@ -47,7 +47,7 @@ The live Den Channels service on `http://192.168.1.10:18080` reports health and 
 - `GET /api/direct-agent-events?channelId={id}&afterId={id}&limit={n}` (replaces retired `GET /api/gateway/events`)
 - `GET /api/gateway/messages/{messageId}`
 - `GET /api/gateway/sources/{sourceKind}/{sourceId}?sourceProjectId={projectId}`
-- `POST /api/direct-agent-events` (replaces retired `POST /api/gateway/direct-agent-messages` and `POST /api/gateway/test-wakes`)
+- `POST /v1/delivery/intents` through Gateway for new direct-agent wake intents; legacy Channels wake writers now return 410 Gone
 - `POST /api/gateway/system-messages`
 
 Live readiness verified:
@@ -215,7 +215,7 @@ Do not add Den Channels DB writes to Den Core/den-mcp.
 1. Ask in Discord: `status den-channels-runner in den-channels`.
 2. Ambassador reads memberships and recent events, then replies with evidence.
 3. Ask in Discord: `message den-channels-runner: please reply with a short ack in Den Channels`.
-4. Ambassador posts `POST /api/direct-agent-events` and reports `eventId`, `requestId`, and `eventsUrl`.
+4. Ambassador creates a Delivery intent and reports the returned intent id and successor readback handles.
 5. Verify a later Den Channels event contains an `agent_text` reply with `sourceKind=gateway_delivery`.
 
 Passing this smoke proves the Discord bot can cross into Channels information and initiate a Den Channels wake without sharing the same Hermes conversation session.
